@@ -5,6 +5,7 @@
   "description": "Central reusable agent workflows — dogfooding itself as the first consuming repo.",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test \".sandcastle/agent-workflows/**/*.test.mts\"",
     "sandcastle:explore": "tsx .sandcastle/agent-workflows/explore/explore.mts",
     "sandcastle:explore-guards": "tsx .sandcastle/agent-workflows/explore/guards.mts",
     "sandcastle:explore-fetch-spec": "tsx .sandcastle/agent-workflows/explore/fetch-spec.mts",

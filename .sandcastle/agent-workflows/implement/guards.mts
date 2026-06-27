@@ -5,6 +5,7 @@
 // failure, so it never applies `agent:blocked`).
 import { required, capture } from "../shared/process.mts";
 import { refuse } from "../shared/github.mts";
+import { section } from "../shared/markdown.mts";
 
 const TRIGGER = "agent:implement";
 const number = required("ISSUE_NUMBER");
@@ -75,18 +76,7 @@ if (issue.parent) {
 
 // Blocked-by guard — refuse while any issue named under `## Blocked by` is open.
 const body = gh(["issue", "view", number, "--json", "body", "-q", ".body"]);
-const blockedSection = body
-  .split("\n")
-  .reduce<{ capture: boolean; lines: string[] }>(
-    (acc, line) => {
-      if (/^##\s+blocked by\s*$/i.test(line)) return { capture: true, lines: acc.lines };
-      if (/^##\s/.test(line)) return { capture: false, lines: acc.lines };
-      if (acc.capture) acc.lines.push(line);
-      return acc;
-    },
-    { capture: false, lines: [] },
-  )
-  .lines.join("\n");
+const blockedSection = section(body, "blocked by");
 const refs = [...new Set([...blockedSection.matchAll(/#(\d+)/g)].map((m) => m[1]))];
 const unmet = refs.filter((n) => {
   try {
