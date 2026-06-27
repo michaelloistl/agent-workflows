@@ -12,7 +12,7 @@ A human-applied `agent:<verb>` label on an issue or PR starts a workflow.
 | Label                | Applied to | Starts                                            |
 | -------------------- | ---------- | ------------------------------------------------- |
 | `agent:explore`      | issue      | a read-only `explore` run that investigates and reports back |
-| `agent:implement`    | issue / PR | an `implement` run that builds the change (issue) or revises the PR (open PR) |
+| `agent:implement`    | issue / PR | an `implement` run that builds the change (issue) or an `implement-pr` run that revises the PR (open PR) |
 | `agent:review-pr`    | open PR    | a `review-pr` run that reviews the pull request   |
 | `agent:update-branch`| open PR    | an `update-branch` run that brings the branch up to date |
 
