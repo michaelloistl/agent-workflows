@@ -29,6 +29,10 @@ _Avoid_: wrapper, stub
 **Verb**:
 One of the five agent actions: `explore`, `implement`, `implement-pr`, `review-pr`, `update-branch`.
 
+**Orchestrator**:
+A workflow that sequences a *verb* over a graph of issues but runs **no agent of its own** — pure tracker/graph work (`gh` reads, label and state changes, branch and PR creation). `implement-prd` is the first orchestrator: it drives `implement` across a PRD's tracer-bullets. It is **not** a sixth verb (it triggers no agent action) and does **not** follow the 5-hook contract. Like the verbs, its tracker I/O stays behind sandcastle hooks; the central YAML is a lightweight shell (node + `gh`, no postgres/redis/ruby).
+_Avoid_: meta-verb, super-verb, sixth verb
+
 **Sandcastle**:
 The `@ai-hero/sandcastle` package and the per-repo `.sandcastle/` code that frames an agent run as a single `run()` call. The home of all tracker-aware and domain-aware logic.
 
@@ -44,6 +48,30 @@ A preflight check run before the agent (PRD, shape, blocked-by, existing-PR for 
 **Refusal**:
 A guard declining to run. The guard posts its own explanation and clears the trigger label, then signals non-zero so the workflow skips the rest. A refusal is **not** a failure.
 _Avoid_: rejection, error, block
+
+### PRD orchestration
+
+**PRD branch**:
+A single long-lived `agent/prd-<n>-…` branch cut once from the default branch by the `implement-prd` orchestrator. It is the **base** every tracer-bullet of that PRD branches from and merges back into. When the last tracer-bullet lands, the PRD branch holds the whole feature and one PR `PRD branch → default` goes up for final human review.
+_Avoid_: feature branch, epic branch, integration branch
+
+**Tracer-bullet**:
+A thin, independently-buildable vertical slice of a PRD — a standalone issue carrying a textual `## Parent` reference to the PRD and a `## Blocked by` section. **Not** a GitHub sub-issue (the `implement` issue-shape guard refuses sub-issues and epics), so the PRD↔tracer-bullet link is textual, not native.
+
+**Stacked**:
+The topology where each tracer-bullet branches from the current PRD-branch HEAD and its PR targets the PRD branch (not the default branch) — so each slice sees the accumulated work of the ones before it.
+
+**Strictly sequential**:
+The orchestrator runs **one tracer-bullet at a time** in topological (dependency) order, never a parallel wave. Because nothing else touches the PRD branch while a slice is in flight, every merge back into the PRD branch is conflict-free by construction — the deliberate trade of wall-clock speed for zero agent-generated merge conflicts.
+
+**Kickoff**:
+The orchestrator entry point fired by labelling the PRD issue: create the PRD branch, then label the topologically-first tracer-bullet `agent:implement`.
+
+**Advance**:
+The orchestrator entry point fired when a tracer-bullet PR merges into a PRD branch: close that tracer-bullet issue (merging into a non-default base does **not** auto-close it), then label the next single tracer-bullet in topological order (ties broken deterministically) — and when the last one closes, open the final PRD→default PR. Posts a progress comment on the PRD issue so it reads as the dashboard.
+
+**Slice review loop**:
+The autonomous per-slice review a tracer-bullet PR runs in place of a human gate when it targets a PRD branch: `implement` (opens the PR) → `agent:review-pr` (agent reviews it) → `agent:implement-pr` (agent addresses the review) → auto-merge into the PRD branch. Self-propelling — each verb's `finalize` hook detects PRD context (`base.ref ~ agent/prd-*`) and applies the next label; no central conductor. Only the final PRD→default PR gets a human gate.
 
 ### Tracker
 
