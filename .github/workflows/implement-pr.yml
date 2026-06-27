@@ -99,6 +99,8 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_TITLE: ${{ github.event.pull_request.title }}
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      # Base ref so finalize can detect a PRD-branch PR and merge the slice (#7).
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Resolve output paths

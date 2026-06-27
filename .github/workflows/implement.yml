@@ -165,10 +165,14 @@ jobs:
         run: yarn sandcastle:implement-fetch-spec
 
       - name: Create agent branch
+        # `base` is the fetch-spec-derived base (a live PRD branch for a stacked
+        # tracer-bullet), falling back to the default branch for a standalone issue.
         env:
           BRANCH: ${{ steps.spec.outputs.branch }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: git checkout -B "$BRANCH" "origin/$DEFAULT_BRANCH"
+          BASE: ${{ steps.spec.outputs.base || github.event.repository.default_branch }}
+        run: |
+          git fetch origin "$BASE"
+          git checkout -B "$BRANCH" "origin/$BASE"
 
       - name: Prepare test database
         if: inputs.enable-ruby
@@ -191,12 +195,15 @@ jobs:
         if: success()
         env:
           BRANCH: ${{ steps.spec.outputs.branch }}
+          BASE: ${{ steps.spec.outputs.base || github.event.repository.default_branch }}
         run: |
           # Plain git push (Decision 7). PR *creation* is the finalize hook's job
-          # because the cross-reference (`Closes #N` vs a Linear ref) is tracker-aware.
+          # because the cross-reference (`Closes #N` vs a Linear ref) and the base
+          # (a PRD branch for a stacked tracer-bullet) are tracker-aware.
           git push -u origin "$BRANCH"
+          # finalize opens the PR AND applies the terminal label (`agent:review`
+          # standalone, `agent:review-pr` under a PRD), so it owns the state here.
           yarn sandcastle:implement-finalize
-          yarn sandcastle:implement-status review
 
       - name: Report blocked on failure
         if: failure()

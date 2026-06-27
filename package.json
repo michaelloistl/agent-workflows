@@ -5,6 +5,7 @@
   "description": "Central reusable agent workflows — dogfooding itself as the first consuming repo.",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test \".sandcastle/agent-workflows/**/*.test.mts\"",
     "sandcastle:explore": "tsx .sandcastle/agent-workflows/explore/explore.mts",
     "sandcastle:explore-guards": "tsx .sandcastle/agent-workflows/explore/guards.mts",
     "sandcastle:explore-fetch-spec": "tsx .sandcastle/agent-workflows/explore/fetch-spec.mts",
@@ -26,7 +27,10 @@
     "sandcastle:update-branch": "tsx .sandcastle/agent-workflows/update-branch/update-branch.mts",
     "sandcastle:update-branch-guards": "tsx .sandcastle/agent-workflows/update-branch/guards.mts",
     "sandcastle:update-branch-status": "tsx .sandcastle/agent-workflows/update-branch/status.mts",
-    "sandcastle:update-branch-finalize": "tsx .sandcastle/agent-workflows/update-branch/finalize.mts"
+    "sandcastle:update-branch-finalize": "tsx .sandcastle/agent-workflows/update-branch/finalize.mts",
+    "sandcastle:implement-prd-guards": "tsx .sandcastle/agent-workflows/implement-prd/guards.mts",
+    "sandcastle:implement-prd-kickoff": "tsx .sandcastle/agent-workflows/implement-prd/kickoff.mts",
+    "sandcastle:implement-prd-advance": "tsx .sandcastle/agent-workflows/implement-prd/advance.mts"
   },
   "devDependencies": {
     "@ai-hero/sandcastle": "^0.7.0",
