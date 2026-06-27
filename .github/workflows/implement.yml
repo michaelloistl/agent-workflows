@@ -201,8 +201,9 @@ jobs:
           # because the cross-reference (`Closes #N` vs a Linear ref) and the base
           # (a PRD branch for a stacked tracer-bullet) are tracker-aware.
           git push -u origin "$BRANCH"
+          # finalize opens the PR AND applies the terminal label (`agent:review`
+          # standalone, `agent:review-pr` under a PRD), so it owns the state here.
           yarn sandcastle:implement-finalize
-          yarn sandcastle:implement-status review
 
       - name: Report blocked on failure
         if: failure()

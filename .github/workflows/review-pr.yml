@@ -74,7 +74,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
-      contents: read
+      # write (not read) so the slice review loop can merge a clean PR into its PRD
+      # branch from finalize (#7). The agent run itself remains read-only — it only
+      # writes $REVIEW_FILE; the merge is an orchestration action gated to internal
+      # authors by the thin caller.
+      contents: write
       pull-requests: write
       issues: write
     services:
@@ -100,6 +104,8 @@ jobs:
       GH_REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_TITLE: ${{ github.event.pull_request.title }}
+      # Base ref so finalize can detect a PRD-branch PR (the slice review loop).
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Resolve output paths
