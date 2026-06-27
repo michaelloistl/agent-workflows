@@ -27,3 +27,10 @@ export function prdNumberFromBranch(ref: string): number | null {
 export function issueNumberFromBranch(ref: string): number | null {
   return numberFrom(ref, ISSUE_BRANCH);
 }
+
+// The live PRD branch for `prd` among `branchNames` (the repo's heads), or null
+// when none exists. Used by `implement`'s fetch-spec to derive a tracer-bullet's
+// base — the PRD branch when its parent PRD has one, else the default branch.
+export function pickPrdBranch(prd: number, branchNames: string[]): string | null {
+  return branchNames.find((name) => prdNumberFromBranch(name) === prd) ?? null;
+}
