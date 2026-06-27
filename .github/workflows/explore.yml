@@ -1,0 +1,198 @@
+name: Agent Explore (reusable)
+
+# Reusable, tracker-agnostic `explore` workflow. A consuming repo's thin caller
+# triggers on an issue labelled `agent:explore` and `uses:` this file. The agent
+# runs read-only over the codebase; the result is posted by the repo's own
+# sandcastle hooks. This file performs ZERO tracker I/O (ADR-0001, Decision 7):
+# every issue read/comment/label transition is behind a `sandcastle:explore-*`
+# hook the consuming repo implements.
+#
+# Hook sequence (consuming repo provides each as a `yarn` script):
+#   explore-guards      preflight; exit non-zero = refused (skip rest, not a failure)
+#   explore-status      report state to the tracker (in-progress / done / blocked)
+#   explore-fetch-spec  write the issue spec to $SPEC_FILE
+#   explore             the read-only agent run; writes $COMMENT_FILE
+#   explore-finalize    post the exploration comment to the tracker
+on:
+  workflow_call:
+    inputs:
+      system-packages:
+        description: Space-separated apt packages to install before the run.
+        type: string
+        default: ""
+      database-url:
+        description: DATABASE_URL the agent's feedback loop uses.
+        type: string
+        default: postgres://postgres:postgres@localhost:5432/test
+      git-author-email:
+        description: Email for the Sandcastle Agent git identity.
+        type: string
+        required: true
+      enable-ruby:
+        description: Install the Ruby toolchain and prepare the test DB (Rails repos).
+        type: boolean
+        default: true
+
+concurrency:
+  group: agent-explore-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  # Lightweight preflight. A refusal is NOT a failure: the hook posts its own
+  # explanation and clears the trigger label, then exits non-zero so the heavy
+  # `explore` job below is skipped without spinning up services.
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: read
+    outputs:
+      refused: ${{ steps.guards.outputs.refused }}
+    env:
+      GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: yarn
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+      - name: Run guards
+        id: guards
+        # Contract: exit 0 = proceed, non-zero = refused. The hook owns its own
+        # feedback + trigger-label clearing; we only translate the exit code into
+        # an output without failing the job.
+        run: |
+          if yarn --silent sandcastle:explore-guards; then
+            echo "refused=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  explore:
+    needs: guard
+    if: needs.guard.outputs.refused == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      issues: write
+      contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: --entrypoint redis-server
+    env:
+      GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      # Via env, never interpolated into a run script, to avoid shell injection.
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Resolve output paths
+        # runner.temp isn't available in job-level env, so resolve hook file paths
+        # here and share them via GITHUB_ENV so every later step sees them.
+        run: |
+          {
+            echo "SPEC_FILE=$RUNNER_TEMP/spec.md"
+            echo "COMMENT_FILE=$RUNNER_TEMP/comment.md"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Install system packages
+        if: inputs.system-packages != ''
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ${{ inputs.system-packages }}
+
+      - name: Set up Ruby
+        if: inputs.enable-ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: yarn
+
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Claude Code CLI
+        # sandcastle's noSandbox() runs the `claude` CLI directly on the runner.
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure Claude (bypass permissions, no attribution)
+        run: |
+          mkdir -p "$HOME/.claude"
+          cat > "$HOME/.claude/settings.json" <<'JSON'
+          {
+            "permissions": { "defaultMode": "bypassPermissions" },
+            "attribution": { "commit": "", "pr": "" }
+          }
+          JSON
+
+      - name: Report in progress
+        run: yarn sandcastle:explore-status in-progress
+
+      - name: Prepare test database
+        if: inputs.enable-ruby
+        env:
+          RAILS_ENV: test
+          DATABASE_URL: ${{ inputs.database-url }}
+          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+        run: bundle exec rails db:prepare
+
+      - name: Fetch spec
+        run: yarn sandcastle:explore-fetch-spec
+
+      - name: Run agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          RAILS_ENV: test
+          DATABASE_URL: ${{ inputs.database-url }}
+          REDIS_URL: redis://localhost:6379/0
+          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+        run: yarn sandcastle:explore
+
+      - name: Finalize (post exploration comment)
+        if: success()
+        run: |
+          yarn sandcastle:explore-finalize
+          yarn sandcastle:explore-status done
+
+      - name: Report blocked on failure
+        if: failure()
+        run: yarn sandcastle:explore-status blocked
+
+      - name: Report blocked on cancellation
+        if: cancelled()
+        run: yarn sandcastle:explore-status blocked || true

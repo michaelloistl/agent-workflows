@@ -1,0 +1,207 @@
+name: Agent Implement (reusable)
+
+# Reusable, tracker-agnostic `implement` workflow. A consuming repo's thin caller
+# triggers on an issue labelled `agent:implement` and `uses:` this file. The agent
+# builds the issue on a fresh `agent/…` branch; this workflow pushes the branch
+# (plain git — Decision 7) and the repo's `implement-finalize` hook opens the
+# draft PR with the right cross-reference. ZERO tracker I/O lives here.
+#
+# Hook sequence (consuming repo provides each as a `yarn` script):
+#   implement-guards      preflight (PRD / shape / blocked-by / existing-PR);
+#                         exit non-zero = refused (skip rest, not a failure)
+#   implement-status      report state to the tracker (in-progress / review / blocked)
+#   implement-fetch-spec  write the issue spec to $SPEC_FILE; output `branch`
+#   implement             the agent run; commits onto the branch
+#   implement-finalize    open the draft PR with the tracker cross-reference
+on:
+  workflow_call:
+    inputs:
+      system-packages:
+        type: string
+        default: ""
+      database-url:
+        type: string
+        default: postgres://postgres:postgres@localhost:5432/test
+      git-author-email:
+        type: string
+        required: true
+      enable-ruby:
+        type: boolean
+        default: true
+
+concurrency:
+  group: agent-implement-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  # Preflight guards. A refusal is NOT a failure: the hook removes the trigger
+  # label and comments why (never `agent:blocked`, reserved for stuck runs), then
+  # exits non-zero so the heavy `implement` job below is skipped.
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: read
+    outputs:
+      refused: ${{ steps.guards.outputs.refused }}
+    env:
+      GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: yarn
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+      - name: Run guards
+        id: guards
+        run: |
+          if yarn --silent sandcastle:implement-guards; then
+            echo "refused=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  implement:
+    needs: guard
+    if: needs.guard.outputs.refused == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: --entrypoint redis-server
+    env:
+      # PAT so the PR the finalize hook opens triggers downstream CI (GITHUB_TOKEN
+      # actions do not); falls back to GITHUB_TOKEN when unset.
+      GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Resolve output paths
+        run: echo "SPEC_FILE=$RUNNER_TEMP/spec.md" >> "$GITHUB_ENV"
+
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          # PAT so the later `git push` is authed to trigger downstream CI.
+          token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Install system packages
+        if: inputs.system-packages != ''
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ${{ inputs.system-packages }}
+
+      - name: Set up Ruby
+        if: inputs.enable-ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: yarn
+
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure Claude (bypass permissions, no attribution)
+        run: |
+          mkdir -p "$HOME/.claude"
+          cat > "$HOME/.claude/settings.json" <<'JSON'
+          {
+            "permissions": { "defaultMode": "bypassPermissions" },
+            "attribution": { "commit": "", "pr": "" }
+          }
+          JSON
+
+      - name: Configure git identity
+        run: |
+          git config user.name "Sandcastle Agent"
+          git config user.email "${{ inputs.git-author-email }}"
+
+      - name: Report in progress
+        run: yarn sandcastle:implement-status in-progress
+
+      - name: Fetch spec
+        id: spec
+        # The hook writes $SPEC_FILE and outputs `branch` (tracker-aware naming —
+        # issue number vs Linear id lives behind the hook, not here).
+        run: yarn sandcastle:implement-fetch-spec
+
+      - name: Create agent branch
+        env:
+          BRANCH: ${{ steps.spec.outputs.branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: git checkout -B "$BRANCH" "origin/$DEFAULT_BRANCH"
+
+      - name: Prepare test database
+        if: inputs.enable-ruby
+        env:
+          RAILS_ENV: test
+          DATABASE_URL: ${{ inputs.database-url }}
+          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+        run: bundle exec rails db:prepare
+
+      - name: Run agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          RAILS_ENV: test
+          DATABASE_URL: ${{ inputs.database-url }}
+          REDIS_URL: redis://localhost:6379/0
+          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+        run: yarn sandcastle:implement
+
+      - name: Push branch and finalize
+        if: success()
+        env:
+          BRANCH: ${{ steps.spec.outputs.branch }}
+        run: |
+          # Plain git push (Decision 7). PR *creation* is the finalize hook's job
+          # because the cross-reference (`Closes #N` vs a Linear ref) is tracker-aware.
+          git push -u origin "$BRANCH"
+          yarn sandcastle:implement-finalize
+          yarn sandcastle:implement-status review
+
+      - name: Report blocked on failure
+        if: failure()
+        run: yarn sandcastle:implement-status blocked
+
+      - name: Report blocked on cancellation
+        if: cancelled()
+        run: yarn sandcastle:implement-status blocked || true

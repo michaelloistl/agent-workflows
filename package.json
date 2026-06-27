@@ -1,0 +1,37 @@
+{
+  "name": "agent-workflows",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Central reusable agent workflows — dogfooding itself as the first consuming repo.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "sandcastle:explore": "tsx .sandcastle/agent-workflows/explore/explore.mts",
+    "sandcastle:explore-guards": "tsx .sandcastle/agent-workflows/explore/guards.mts",
+    "sandcastle:explore-fetch-spec": "tsx .sandcastle/agent-workflows/explore/fetch-spec.mts",
+    "sandcastle:explore-status": "tsx .sandcastle/agent-workflows/explore/status.mts",
+    "sandcastle:explore-finalize": "tsx .sandcastle/agent-workflows/explore/finalize.mts",
+    "sandcastle:implement": "tsx .sandcastle/agent-workflows/implement/implement.mts",
+    "sandcastle:implement-guards": "tsx .sandcastle/agent-workflows/implement/guards.mts",
+    "sandcastle:implement-fetch-spec": "tsx .sandcastle/agent-workflows/implement/fetch-spec.mts",
+    "sandcastle:implement-status": "tsx .sandcastle/agent-workflows/implement/status.mts",
+    "sandcastle:implement-finalize": "tsx .sandcastle/agent-workflows/implement/finalize.mts",
+    "sandcastle:review-pr": "tsx .sandcastle/agent-workflows/review/review.mts",
+    "sandcastle:review-pr-guards": "tsx .sandcastle/agent-workflows/review/guards.mts",
+    "sandcastle:review-pr-status": "tsx .sandcastle/agent-workflows/review/status.mts",
+    "sandcastle:review-pr-finalize": "tsx .sandcastle/agent-workflows/review/finalize.mts",
+    "sandcastle:implement-pr": "tsx .sandcastle/agent-workflows/implement-pr/implement-pr.mts",
+    "sandcastle:implement-pr-guards": "tsx .sandcastle/agent-workflows/implement-pr/guards.mts",
+    "sandcastle:implement-pr-status": "tsx .sandcastle/agent-workflows/implement-pr/status.mts",
+    "sandcastle:implement-pr-finalize": "tsx .sandcastle/agent-workflows/implement-pr/finalize.mts",
+    "sandcastle:update-branch": "tsx .sandcastle/agent-workflows/update-branch/update-branch.mts",
+    "sandcastle:update-branch-guards": "tsx .sandcastle/agent-workflows/update-branch/guards.mts",
+    "sandcastle:update-branch-status": "tsx .sandcastle/agent-workflows/update-branch/status.mts",
+    "sandcastle:update-branch-finalize": "tsx .sandcastle/agent-workflows/update-branch/finalize.mts"
+  },
+  "devDependencies": {
+    "@ai-hero/sandcastle": "^0.7.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,0 +1,217 @@
+name: Agent Update Branch (reusable)
+
+# Reusable, tracker-agnostic `update-branch` workflow. A consuming repo's thin
+# caller triggers on a PR labelled `agent:update-branch` and `uses:` this file.
+# The agent merges the PR's base branch into the PR branch, resolving conflicts;
+# this workflow pushes (plain git, never --force) and the repo's
+# `update-branch-finalize` hook posts the outcome. ZERO tracker I/O here.
+#
+# The agent run writes $STATUS_FILE = `up-to-date` (nothing to merge) or `merged`.
+# This workflow reads that file (a plain file read, not tracker I/O) to decide
+# whether to push; the finalize hook reads it to post the right comment.
+#
+# Hook sequence (consuming repo provides each as a `yarn` script):
+#   update-branch-guards    refuse on a closed PR; exit non-zero = refused
+#   update-branch-status    report state (in-progress / done / blocked [reason])
+#   update-branch           the agent run; merges base, writes $STATUS_FILE
+#   update-branch-finalize  post the outcome comment to the tracker
+on:
+  workflow_call:
+    inputs:
+      system-packages:
+        type: string
+        default: ""
+      database-url:
+        type: string
+        default: postgres://postgres:postgres@localhost:5432/test
+      git-author-email:
+        type: string
+        required: true
+      enable-ruby:
+        type: boolean
+        default: true
+
+concurrency:
+  group: agent-update-branch-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+    outputs:
+      refused: ${{ steps.guards.outputs.refused }}
+    env:
+      GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_STATE: ${{ github.event.pull_request.state }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: yarn
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+      - name: Run guards
+        id: guards
+        run: |
+          if yarn --silent sandcastle:update-branch-guards; then
+            echo "refused=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  update:
+    needs: guard
+    if: needs.guard.outputs.refused == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: --entrypoint redis-server
+    env:
+      # PAT so the push re-triggers downstream CI; falls back to GITHUB_TOKEN.
+      GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Resolve output paths
+        run: echo "STATUS_FILE=$RUNNER_TEMP/update-status.txt" >> "$GITHUB_ENV"
+
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          # pull_request_target checks out the base by default; check out the PR's
+          # branch by name so the merge commit can be pushed back to it.
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Fetch base branch
+        run: git fetch origin "$BASE_REF"
+
+      - name: Set up default-branch tooling worktree
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          echo "TOOLING_DIR=$RUNNER_TEMP/agent-tooling" >> "$GITHUB_ENV"
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git worktree add --detach "$RUNNER_TEMP/agent-tooling" FETCH_HEAD
+
+      - name: Install system packages
+        if: inputs.system-packages != ''
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ${{ inputs.system-packages }}
+
+      - name: Set up Ruby
+        if: inputs.enable-ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: yarn
+
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install tooling dependencies
+        run: yarn --cwd "$TOOLING_DIR" install --frozen-lockfile
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure Claude (bypass permissions, no attribution)
+        run: |
+          mkdir -p "$HOME/.claude"
+          cat > "$HOME/.claude/settings.json" <<'JSON'
+          {
+            "permissions": { "defaultMode": "bypassPermissions" },
+            "attribution": { "commit": "", "pr": "" }
+          }
+          JSON
+
+      - name: Configure git identity
+        run: |
+          git config user.name "Sandcastle Agent"
+          git config user.email "${{ inputs.git-author-email }}"
+
+      - name: Report in progress
+        run: yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-status in-progress
+
+      - name: Prepare test database
+        if: inputs.enable-ruby
+        env:
+          RAILS_ENV: test
+          DATABASE_URL: ${{ inputs.database-url }}
+          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+        run: bundle exec rails db:prepare
+
+      - name: Run agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          RAILS_ENV: test
+          DATABASE_URL: ${{ inputs.database-url }}
+          REDIS_URL: redis://localhost:6379/0
+          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+        # Tooling worktree's entrypoint, PR working tree as cwd, so the agent merges
+        # into and commits the PR's branch.
+        run: '"$TOOLING_DIR/node_modules/.bin/tsx" "$TOOLING_DIR/.sandcastle/agent-workflows/update-branch/update-branch.mts"'
+
+      - name: Push and finalize
+        if: success()
+        run: |
+          status=$(cat "$STATUS_FILE" 2>/dev/null || echo "")
+          if [ "$status" = "up-to-date" ]; then
+            # Nothing to merge: no push. Finalize posts the "already up to date" note.
+            yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-finalize
+            yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-status done
+            exit 0
+          fi
+          # status = merged. Plain push — never --force.
+          if git push origin "HEAD:$HEAD_REF"; then
+            yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-finalize
+            yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-status done
+          else
+            yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-status blocked "aborted — the branch could not be fast-forwarded onto its remote (it likely advanced during the run). Not force-pushing."
+          fi
+
+      - name: Report blocked on failure
+        if: failure()
+        run: yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-status blocked
+
+      - name: Report blocked on cancellation
+        if: cancelled()
+        run: yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-status blocked || true

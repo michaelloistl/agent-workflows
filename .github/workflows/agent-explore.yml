@@ -1,0 +1,27 @@
+name: Agent Explore
+
+# Thin caller (this repo dogfooding its own central workflow): label an issue
+# `agent:explore` → run the reusable `explore` workflow read-only → the sandcastle
+# hooks post the exploration comment. `enable-ruby: false` because this is a
+# YAML/TypeScript repo, not Rails (ADR-0002).
+#
+# Label events run the workflow on the DEFAULT branch, so this must be on `main`
+# to fire. `@main` (not `./`) exercises real cross-repo workflow resolution.
+on:
+  workflow_dispatch:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  explore:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:explore'
+    uses: michaelloistl/agent-workflows/.github/workflows/explore.yml@main
+    with:
+      enable-ruby: false
+      git-author-email: michael.loistl@gmail.com
+    secrets: inherit

@@ -1,0 +1,28 @@
+name: Agent Update Branch
+
+# Thin caller: label an open PR `agent:update-branch` → run the reusable
+# `update-branch` workflow → the agent merges the base branch in, the workflow
+# pushes, and the `update-branch-finalize` hook posts the outcome.
+on:
+  workflow_dispatch:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  update-branch:
+    # pull_request_target runs PR-head code with secrets; on this public repo,
+    # gate to internal authors so an external PR can never trigger the run.
+    if: >-
+      (github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:update-branch')
+      && (github.event_name == 'workflow_dispatch'
+          || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    uses: michaelloistl/agent-workflows/.github/workflows/update-branch.yml@main
+    with:
+      enable-ruby: false
+      git-author-email: michael.loistl@gmail.com
+    secrets: inherit

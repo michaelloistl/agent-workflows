@@ -1,0 +1,197 @@
+name: Agent Review PR (reusable)
+
+# Reusable, tracker-agnostic `review-pr` workflow. A consuming repo's thin caller
+# triggers on a PR labelled `agent:review-pr` and `uses:` this file. The agent
+# reviews the PR read-only; the repo's `review-pr-finalize` hook posts the review.
+# ZERO tracker I/O lives here.
+#
+# The PR branch may predate the agent tooling, so the `review-pr` run uses the
+# DEFAULT branch's tooling from a detached worktree, with the PR working tree as
+# cwd. Tracker-only hooks (guards/status/finalize) run from the tooling dir.
+#
+# Hook sequence (consuming repo provides each as a `yarn` script):
+#   review-pr-guards     refuse on a closed PR; exit non-zero = refused
+#   review-pr-status     report state to the tracker (in-progress / done / blocked)
+#   review-pr            the read-only agent run; writes $REVIEW_FILE
+#   review-pr-finalize   post the review (inline + summary) to the tracker
+on:
+  workflow_call:
+    inputs:
+      system-packages:
+        type: string
+        default: ""
+      database-url:
+        type: string
+        default: postgres://postgres:postgres@localhost:5432/test
+      git-author-email:
+        type: string
+        required: true
+      enable-ruby:
+        type: boolean
+        default: true
+
+concurrency:
+  group: agent-review-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+    outputs:
+      refused: ${{ steps.guards.outputs.refused }}
+    env:
+      GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_STATE: ${{ github.event.pull_request.state }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: yarn
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+      - name: Run guards
+        id: guards
+        run: |
+          if yarn --silent sandcastle:review-pr-guards; then
+            echo "refused=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  review:
+    needs: guard
+    if: needs.guard.outputs.refused == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: --entrypoint redis-server
+    env:
+      GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Resolve output paths
+        run: echo "REVIEW_FILE=$RUNNER_TEMP/review.json" >> "$GITHUB_ENV"
+
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          # pull_request_target checks out the base by default; review the PR's
+          # actual code by checking out its head.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Set up default-branch tooling worktree
+        # The PR branch may predate the agent tooling, so run the DEFAULT branch's
+        # CURRENT tooling from a detached worktree OUTSIDE the workspace. Review is
+        # read-only, so the PR working tree stays pristine either way.
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          echo "TOOLING_DIR=$RUNNER_TEMP/agent-tooling" >> "$GITHUB_ENV"
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git worktree add --detach "$RUNNER_TEMP/agent-tooling" FETCH_HEAD
+
+      - name: Install system packages
+        if: inputs.system-packages != ''
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ${{ inputs.system-packages }}
+
+      - name: Set up Ruby
+        if: inputs.enable-ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: yarn
+
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install tooling dependencies
+        run: yarn --cwd "$TOOLING_DIR" install --frozen-lockfile
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure Claude (bypass permissions, no attribution)
+        run: |
+          mkdir -p "$HOME/.claude"
+          cat > "$HOME/.claude/settings.json" <<'JSON'
+          {
+            "permissions": { "defaultMode": "bypassPermissions" },
+            "attribution": { "commit": "", "pr": "" }
+          }
+          JSON
+
+      - name: Report in progress
+        run: yarn --cwd "$TOOLING_DIR" sandcastle:review-pr-status in-progress
+
+      - name: Prepare test database
+        if: inputs.enable-ruby
+        env:
+          RAILS_ENV: test
+          DATABASE_URL: ${{ inputs.database-url }}
+          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+        run: bundle exec rails db:prepare
+
+      - name: Run agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          RAILS_ENV: test
+          DATABASE_URL: ${{ inputs.database-url }}
+          REDIS_URL: redis://localhost:6379/0
+          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+        # Run the tooling worktree's entrypoint with the PR working tree as cwd so
+        # the agent reviews the PR's code. The entrypoint resolves its prompt files
+        # relative to its own location, so it works from the worktree.
+        run: '"$TOOLING_DIR/node_modules/.bin/tsx" "$TOOLING_DIR/.sandcastle/agent-workflows/review/review.mts"'
+
+      - name: Finalize (post review)
+        if: success()
+        run: |
+          yarn --cwd "$TOOLING_DIR" sandcastle:review-pr-finalize
+          yarn --cwd "$TOOLING_DIR" sandcastle:review-pr-status done
+
+      - name: Report blocked on failure
+        if: failure()
+        run: yarn --cwd "$TOOLING_DIR" sandcastle:review-pr-status blocked
+
+      - name: Report blocked on cancellation
+        if: cancelled()
+        run: yarn --cwd "$TOOLING_DIR" sandcastle:review-pr-status blocked || true
