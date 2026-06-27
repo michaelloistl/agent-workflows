@@ -7,6 +7,8 @@ import { writeFileSync, appendFileSync } from "node:fs";
 import { required, capture } from "../shared/process.mts";
 import { parentRef } from "../shared/prd-graph.mts";
 import { pickPrdBranch } from "../shared/prd-context.mts";
+import { remoteBranches } from "../shared/prd-tracker.mts";
+import { slugify } from "../shared/text.mts";
 
 const number = required("ISSUE_NUMBER");
 const title = required("ISSUE_TITLE");
@@ -15,12 +17,7 @@ const specFile = required("SPEC_FILE");
 const body = capture("gh", ["issue", "view", number, "--json", "body", "-q", ".body"]);
 writeFileSync(specFile, body);
 
-const slug = title
-  .toLowerCase()
-  .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "")
-  .slice(0, 40);
-const branch = `agent/issue-${number}-${slug}`;
+const branch = `agent/issue-${number}-${slugify(title)}`;
 
 // Derive the base branch. When this issue is a tracer-bullet whose parent PRD has
 // a live PRD branch, build on top of it (the stacked topology); otherwise emit an
@@ -30,11 +27,7 @@ const branch = `agent/issue-${number}-${slug}`;
 let base = "";
 const prd = parentRef(body);
 if (prd !== null) {
-  const heads = capture("git", ["ls-remote", "--heads", "origin"])
-    .split("\n")
-    .map((line) => line.replace(/^.*\trefs\/heads\//, "").trim())
-    .filter(Boolean);
-  base = pickPrdBranch(prd, heads) ?? "";
+  base = pickPrdBranch(prd, remoteBranches()) ?? "";
 }
 
 const out = process.env.GITHUB_OUTPUT;

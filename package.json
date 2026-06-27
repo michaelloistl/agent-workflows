@@ -27,7 +27,9 @@
     "sandcastle:update-branch": "tsx .sandcastle/agent-workflows/update-branch/update-branch.mts",
     "sandcastle:update-branch-guards": "tsx .sandcastle/agent-workflows/update-branch/guards.mts",
     "sandcastle:update-branch-status": "tsx .sandcastle/agent-workflows/update-branch/status.mts",
-    "sandcastle:update-branch-finalize": "tsx .sandcastle/agent-workflows/update-branch/finalize.mts"
+    "sandcastle:update-branch-finalize": "tsx .sandcastle/agent-workflows/update-branch/finalize.mts",
+    "sandcastle:implement-prd-guards": "tsx .sandcastle/agent-workflows/implement-prd/guards.mts",
+    "sandcastle:implement-prd-kickoff": "tsx .sandcastle/agent-workflows/implement-prd/kickoff.mts"
   },
   "devDependencies": {
     "@ai-hero/sandcastle": "^0.7.0",

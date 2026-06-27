@@ -1,0 +1,114 @@
+name: Agent Implement PRD (reusable)
+
+# Reusable, tracker-agnostic PRD *orchestrator* (CONTEXT.md). It runs NO agent —
+# it sequences the `implement` verb across a PRD's tracer-bullets on a shared PRD
+# branch, strictly sequentially (ADR-0003). A consuming repo wires two thin
+# callers: one on the PRD-issue label (`mode: kickoff`), one on PR-merge
+# (`mode: advance`). ZERO tracker I/O lives here — all graph/`gh` logic is behind
+# the `implement-prd-<mode>` hooks. Lightweight: node + `gh` only, no
+# postgres/redis/ruby (nothing to build).
+#
+#   kickoff  cut the PRD branch, dispatch the topologically-first tracer-bullet
+#   advance  (added in #8) on a slice PR merge: close it, dispatch the next, or
+#            open the final PRD→default PR
+on:
+  workflow_call:
+    inputs:
+      mode:
+        type: string
+        required: true
+      git-author-email:
+        type: string
+        required: true
+
+concurrency:
+  # Serialise the events that can actually race for one PRD: two advances (both
+  # keyed on the merged PR's base PRD branch) and a double-kickoff (both keyed on
+  # the PRD issue number). Kickoff and advance use different keys, but they never
+  # overlap in time — kickoff finishes in seconds; the first slice it dispatches
+  # only merges (→ advance) much later.
+  group: implement-prd-${{ github.event.issue.number || github.event.pull_request.base.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Preflight, kickoff only (advance has no guard — it reacts to a merge). A
+  # refusal retires the trigger label + comments, then exits non-zero so the run
+  # job is skipped — NOT a failure, never `agent:blocked`.
+  guard:
+    if: inputs.mode == 'kickoff'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      refused: ${{ steps.guards.outputs.refused }}
+    env:
+      GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: yarn
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+      - name: Run guards
+        id: guards
+        run: |
+          if yarn --silent sandcastle:implement-prd-guards; then
+            echo "refused=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  run:
+    needs: [guard]
+    # Run for advance (no guard), or for a kickoff that wasn't refused. `always()`
+    # lets the job proceed when the guard job is skipped (advance mode).
+    if: always() && (inputs.mode != 'kickoff' || needs.guard.outputs.refused == 'false')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      # PAT so a branch/PR the orchestrator pushes triggers downstream CI; falls
+      # back to GITHUB_TOKEN when unset.
+      GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          # PAT so the orchestrator's `git push` is authed (and triggers CI).
+          token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: yarn
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+      - name: Configure git identity
+        run: |
+          git config user.name "Sandcastle Agent"
+          git config user.email "${{ inputs.git-author-email }}"
+      - name: Orchestrate
+        run: yarn sandcastle:implement-prd-${{ inputs.mode }}
