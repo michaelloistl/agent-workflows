@@ -65,7 +65,7 @@ The topology where each tracer-bullet branches from the current PRD-branch HEAD 
 The orchestrator runs **one tracer-bullet at a time** in topological (dependency) order, never a parallel wave. Because nothing else touches the PRD branch while a slice is in flight, every merge back into the PRD branch is conflict-free by construction — the deliberate trade of wall-clock speed for zero agent-generated merge conflicts.
 
 **Kickoff**:
-The orchestrator entry point fired by labelling the PRD issue: create the PRD branch, then label the topologically-first tracer-bullet `agent:implement`.
+The orchestrator entry point fired by labelling the PRD issue: create the PRD branch, then label the topologically-first tracer-bullet `agent:implement`. The PRD is identified **structurally** — it has tracer-bullets and no `## Parent` of its own — not by a title prefix or a `prd` label, since `/to-prd` adds neither.
 
 **Advance**:
 The orchestrator entry point fired when a tracer-bullet PR merges into a PRD branch: close that tracer-bullet issue (merging into a non-default base does **not** auto-close it), then label the next single tracer-bullet in topological order (ties broken deterministically) — and when the last one closes, open the final PRD→default PR. Posts a progress comment on the PRD issue so it reads as the dashboard.

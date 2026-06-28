@@ -17,7 +17,7 @@ action until the final PR.
 
 Use a tiny, agent-buildable feature touching only this repo's docs/markdown (no Rails). Two or three dependent slices so both loop shapes and the advance sequencing are exercised. Example:
 
-1. **PRD issue** — title starting `PRD:`, body a short problem/solution. Example: "PRD: dogfood — add a CONTRIBUTORS list". Do **not** run `/to-prd` against real work; this is throwaway.
+1. **PRD issue** — a plain title (no `PRD:` prefix needed — PRD identity is structural: it has tracer-bullets and no `## Parent` of its own), body a short problem/solution. Example: "Dogfood: add a CONTRIBUTORS list". Do **not** run `/to-prd` against real work; this is throwaway.
 2. **Tracer-bullets** (each a standalone issue with `## Parent\n#<PRD>` and a `## Blocked by` section, `ready-for-agent`):
    - Slice A — "Create CONTRIBUTORS.md with a heading" — Blocked by: None.
    - Slice B — "Add the first contributor row" — Blocked by: #A.
