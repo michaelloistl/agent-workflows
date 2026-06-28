@@ -39,6 +39,7 @@ Use a tiny, agent-buildable feature touching only this repo's docs/markdown (no 
 - **Slice PR opened but not merged** → `implement`'s finalize couldn't merge (e.g. the `implement` caller/job lacks `contents: write`, or a non-default base protection blocks the merge).
 - **Advance doesn't fire after a merge** → the merge's base ref didn't match `agent/prd-*`, or the advance caller isn't on the default branch.
 - **Discovery finds nothing at kickoff** → a tracer-bullet's `## Parent`/`## Blocked by` headings drifted from the `to-issues` format (the parsed contract).
+- **A hook fix doesn't take effect mid-PRD** → expected: a PRD's slices run the `.sandcastle/` code frozen at PRD-branch-cut time (see the plan's "Hooks are frozen at PRD-branch-cut time"). Start a fresh PRD to pick up a hook change.
 
 ## Teardown
 

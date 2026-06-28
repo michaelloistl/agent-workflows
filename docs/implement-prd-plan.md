@@ -62,6 +62,10 @@ Add a sixth top-level workflow, `implement-prd`: an **orchestrator** (CONTEXT.md
 6. **`advance.mts` + advance caller** — assert merge → close + next slice; last merge → final draft PR with `Closes #<PRD>`.
 7. **End-to-end dogfood** on a throwaway 2–3-slice PRD in this repo.
 
+## Hooks are frozen at PRD-branch-cut time
+
+A PRD's slices run the `.sandcastle/` code **as it existed on the default branch when the PRD branch was cut**, not current `main`. The `implement` workflow runs its hooks from the working tree, and "Create agent branch" (`git checkout -B agent/issue-N origin/$BASE`) switches that tree to the PRD branch — so `yarn sandcastle:implement-finalize` executes the PRD branch's copy of the hook. Consequence: a fix to the orchestrator's hooks reaches only PRDs **started after** the fix; an in-flight PRD keeps its cut-time tooling (restart the PRD to pick up a fix). This is consistent within a PRD and fine in normal use — it only surprises if you change hooks mid-PRD (it cost a dogfood re-run; see ADR-0004's history). The PR verbs already side-step this with a default-branch tooling worktree; giving `implement` the same treatment is a possible future hardening, not currently needed.
+
 ## Risks / watch-list
 - **`to-issues` format is now load-bearing** (Decision 5). If a tracer-bullet omits `## Parent`/`## Blocked by` or uses non-`##` headers, discovery/edges break. Mitigate with clear guard refusals naming the offending issue.
 - **Branch-name contract** (Decision 6): a hand-renamed branch mid-flight makes advance blind to its merge. Documented limitation.
