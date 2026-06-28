@@ -70,8 +70,8 @@ The orchestrator entry point fired by labelling the PRD issue: create the PRD br
 **Advance**:
 The orchestrator entry point fired when a tracer-bullet PR merges into a PRD branch: close that tracer-bullet issue (merging into a non-default base does **not** auto-close it), then label the next single tracer-bullet in topological order (ties broken deterministically) — and when the last one closes, open the final PRD→default PR. Posts a progress comment on the PRD issue so it reads as the dashboard.
 
-**Slice review loop**:
-The autonomous per-slice review a tracer-bullet PR runs in place of a human gate when it targets a PRD branch: `implement` (opens the PR) → `agent:review-pr` (agent reviews it) → `agent:implement-pr` (agent addresses the review) → auto-merge into the PRD branch. Self-propelling — each verb's `finalize` hook detects PRD context (`base.ref ~ agent/prd-*`) and applies the next label; no central conductor. Only the final PRD→default PR gets a human gate.
+**Slice merge**:
+Under a PRD a tracer-bullet skips per-slice review (ADR-0004): `implement`'s finalize opens a ready PR to the PRD branch (detected via `base.ref ~ agent/prd-*`) and merges it straight in, which fires advance. The per-slice quality gate is the implement agent's own test loop; the single human gate is the final PRD→default PR. (An earlier design ran a per-slice `review-pr`→`implement-pr` loop here — dropped because `review-pr` emits only advisory `COMMENT`s, with no approve/request-changes verdict to drive on; see ADR-0004.)
 
 ### Tracker
 
