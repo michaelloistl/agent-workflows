@@ -1,6 +1,8 @@
 # Build plan — `implement-prd` orchestrator
 
-Add a sixth top-level workflow, `implement-prd`: an **orchestrator** (CONTEXT.md) that drives the `implement` verb across a PRD's tracer-bullets on a shared PRD branch, strictly sequentially. Triggered by labelling a PRD issue `agent:implement-prd`. See ADR-0003 for the strictly-sequential decision and CONTEXT.md for vocabulary (PRD branch, Tracer-bullet, Stacked, Kickoff, Advance, Slice review loop).
+Add a sixth top-level workflow, `implement-prd`: an **orchestrator** (CONTEXT.md) that drives the `implement` verb across a PRD's tracer-bullets on a shared PRD branch, strictly sequentially. Triggered by labelling a PRD issue `agent:implement-prd`. See ADR-0003 for the strictly-sequential decision and CONTEXT.md for vocabulary (PRD branch, Tracer-bullet, Stacked, Kickoff, Advance, Slice merge).
+
+> **Update (ADR-0004):** the per-slice **review loop** below (Decisions 7–8: `implement → review-pr → implement-pr → merge`) was **dropped** after the #8 dogfood showed it unsound (`review-pr` is advisory-only; `implement-pr` blocks on a no-op). A slice now merges straight into the PRD branch after it builds (`implement → merge → advance`); the only review is the human review of the final PRD→default PR. The decision rows below are kept as the historical design.
 
 ## Decisions (locked)
 

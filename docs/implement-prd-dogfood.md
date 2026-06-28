@@ -29,15 +29,15 @@ Use a tiny, agent-buildable feature touching only this repo's docs/markdown (no 
 
 1. Apply `agent:implement-prd` to the PRD issue.
 2. **Expect (kickoff):** an `agent/prd-<n>-…` branch is created; Slice A is labelled `agent:implement`; a progress comment appears on the PRD issue; `agent:implement-prd` is removed.
-3. **Expect (slice loop, per slice):** a ready PR `agent/issue-<a>-… → agent/prd-<n>-…`; `agent:review-pr` applied; the agent posts a review; a clean review merges the PR (else `agent:implement` addresses it, then merges).
+3. **Expect (per slice):** a ready PR `agent/issue-<a>-… → agent/prd-<n>-…`, merged straight into the PRD branch by `implement`'s finalize (no per-slice review — ADR-0004).
 4. **Expect (advance, per merge):** the merged slice's issue is closed; the next slice is labelled `agent:implement`; the PRD progress comment refreshes.
 5. **Expect (completion):** after Slice C merges, a **draft** PR `agent/prd-<n>-… → <default>` opens with `Closes #<PRD>`. Merging it (the only human step) auto-closes the PRD issue.
 
 ## What to watch / known stall points
 
-- **Loop stalls after the first PR** → `AGENT_PAT` missing or not a collaborator (PR authored by `github-actions[bot]`, association `NONE`).
-- **`agent:review-pr` applied but nothing runs** → the label didn't exist, or the PR-verb caller's author gate rejected the PR author.
 - **A slice goes `agent:blocked`** → the sequence halts by design; fix and re-apply `agent:implement` to resume (advance only fires on a merge).
+- **Slice PR opened but not merged** → `implement`'s finalize couldn't merge (e.g. the `implement` caller/job lacks `contents: write`, or a non-default base protection blocks the merge).
+- **Advance doesn't fire after a merge** → the merge's base ref didn't match `agent/prd-*`, or the advance caller isn't on the default branch.
 - **Discovery finds nothing at kickoff** → a tracer-bullet's `## Parent`/`## Blocked by` headings drifted from the `to-issues` format (the parsed contract).
 
 ## Teardown

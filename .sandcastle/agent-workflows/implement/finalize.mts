@@ -5,11 +5,12 @@
 //
 // Two shapes, keyed on whether the base is a PRD branch (the stacked topology):
 //   standalone → DRAFT PR to the default branch + `agent:review` (human gate).
-//   under PRD  → READY PR to the PRD branch + `agent:review-pr` — handing the slice
-//                to the autonomous review loop (#7); no human gate per slice, the
-//                in-progress label is cleared (`done`).
+//   under PRD  → READY PR to the PRD branch, MERGED straight in (which fires
+//                advance). No per-slice review (ADR-0004): the implement agent's
+//                own test loop is the per-slice gate; the final PRD→default PR is
+//                the human gate. The in-progress label is cleared (`done`).
 import { required, capture } from "../shared/process.mts";
-import { addLabel, setState } from "../shared/github.mts";
+import { setState } from "../shared/github.mts";
 import { isPrdBranch } from "../shared/prd-context.mts";
 
 const number = required("ISSUE_NUMBER");
@@ -25,11 +26,11 @@ if (!underPrd) args.push("--draft");
 const url = capture("gh", args).trim();
 
 if (underPrd) {
-  // Hand off to the slice review loop: the agent reviews its own PR. The base ref
-  // matches `agent/prd-*`, so review-pr's finalize knows it's inside a PRD.
+  // Merge the slice straight into the PRD branch (strictly sequential, so it's
+  // always clean). The merge fires advance, which closes this issue and dispatches
+  // the next slice — or opens the final PR.
   const pr = url.match(/\/pull\/(\d+)/)?.[1];
-  if (pr) addLabel("pr", pr, "agent:review-pr");
-  // No human gate under a PRD — clear in-progress, leave no review state on the issue.
+  if (pr) capture("gh", ["pr", "merge", pr, "--merge", "--delete-branch"]);
   setState("issue", number, "done");
 } else {
   // Standalone: a draft PR awaiting human review.
@@ -39,5 +40,5 @@ if (underPrd) {
 console.log(
   `Issue #${number}: opened ${underPrd ? "ready" : "draft"} PR from ${branch} → ${
     base || "(default)"
-  }${underPrd ? "; applied agent:review-pr" : ""}.`,
+  }${underPrd ? " and merged it" : ""}.`,
 );
