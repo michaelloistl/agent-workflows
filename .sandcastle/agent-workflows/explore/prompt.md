@@ -17,11 +17,23 @@ written exploration handed off to the next pass.
 
 # Task
 
-This repo (`agent-workflows`) holds reusable GitHub Actions workflows and the
-`.sandcastle/` hook layer that drives a label-triggered coding-agent fleet. Read
-`AGENTS.md`, `CONTEXT.md` (the domain glossary — match its vocabulary), and the
-`docs/adr/` decisions, then explore to understand what implementing this issue
-would involve.
+Explore the issue to understand what implementing it would involve, and hand off
+a written scope assessment.
+
+## Repo conventions & verify gate (customise per repo)
+
+<!-- CUSTOMISE PER REPO — a consuming repo replaces this block with its own
+     stack, conventions docs, and verify commands. This is agent-workflows'
+     own copy: a GitHub Actions + TypeScript repo (reusable workflows under
+     `.github/workflows/`, the `.sandcastle/` hook layer in `.mts` run via
+     `tsx`, and Markdown docs). No Rails, no full test suite. -->
+
+- **Read first:** `AGENTS.md`, `CONTEXT.md` (the domain glossary — match its
+  vocabulary), and the relevant `docs/adr/` decisions. Note the patterns a change
+  would have to follow — the hook contract, the tracker-agnostic boundary.
+- **Verify gate:** none. This is a read-only verb — your only product is the notes
+  file, so there are no commands to run. (A consuming repo still keeps the
+  conventions docs above current with its own stack.)
 
 Investigate, using search and read tools only, and form a view on:
 

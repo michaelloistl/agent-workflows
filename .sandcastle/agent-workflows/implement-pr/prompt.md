@@ -36,9 +36,27 @@ replies. You do NOT push, open, or close anything yourself.
 
 # Task
 
-This repo (`agent-workflows`) is a GitHub Actions + TypeScript repo. Read
-`AGENTS.md`, `CONTEXT.md` (match its vocabulary), and the relevant `docs/adr/`
-decisions before changing code.
+Address the review feedback test-first, and leave the verify gate green before
+you finish.
+
+## Repo conventions & verify gate (customise per repo)
+
+<!-- CUSTOMISE PER REPO — a consuming repo replaces this block with its own
+     stack, conventions docs, and verify commands. This is agent-workflows'
+     own copy: a GitHub Actions + TypeScript repo (reusable workflows under
+     `.github/workflows/`, the `.sandcastle/` hook layer in `.mts` run via
+     `tsx`, and Markdown docs). No Rails, no full test suite. -->
+
+- **Read first:** `AGENTS.md`, `CONTEXT.md` (match its vocabulary), and the
+  relevant `docs/adr/` decisions. Follow the existing patterns — the hook
+  contract, the tracker-agnostic boundary, the comment style.
+- **Tests:** hook logic lives in `.mts` with co-located `*.test.mts` run via
+  `tsx --test`. Workflow YAML and Markdown carry no unit tests — sanity-check
+  them by hand instead.
+- **Verify gate** (must be green before you declare the work complete):
+  - `yarn typecheck && yarn test`
+  - for any workflow YAML you touch: re-check the syntax and that every hook it
+    references exists.
 
 Work through the review feedback above:
 
@@ -47,10 +65,12 @@ Work through the review feedback above:
    top-level feedback. Decide which ask for a concrete change. Skip ones already
    resolved, purely informational, or that you reasonably disagree with (note
    your reasoning in the reply).
-2. **Make the requested changes**, following the project conventions and the
-   linked issue's intent. Keep the change valid (workflow YAML syntax; `.mts`
-   hooks consistent with the contract).
-3. **Commit** your changes (one commit, or a few focused commits) in imperative
+2. **Make the requested changes** one behaviour at a time, following the project
+   conventions and the linked issue's intent. When you touch hook logic, drive it
+   test-first: add or extend the co-located `*.test.mts`, watch it fail, then make
+   it pass. Refactor only when green.
+3. **Verify** — run the verify gate above and get it green *before* you commit.
+4. **Commit** your changes (one commit, or a few focused commits) in imperative
    present tense. Do NOT add a `Co-Authored-By` or "Generated with" trailer.
 
 ## Rules
@@ -76,6 +96,7 @@ This file is the only thing the next pass sees.
 
 # Done
 
-Once your changes are committed and you have written the notes file, output:
+Once your changes are committed, the verify gate is green, and you have written
+the notes file, output:
 
 <promise>COMPLETE</promise>

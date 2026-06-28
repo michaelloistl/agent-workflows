@@ -15,16 +15,36 @@ anything yourself.
 
 # Task
 
-This repo (`agent-workflows`) is a GitHub Actions + TypeScript repo. Merge the
-base branch into the current branch:
+Merge the base branch into the current branch, resolve any conflicts in line with
+the repo conventions, and confirm the result with the verify gate.
+
+## Repo conventions & verify gate (customise per repo)
+
+<!-- CUSTOMISE PER REPO — a consuming repo replaces this block with its own
+     stack, conventions docs, and verify commands. This is agent-workflows'
+     own copy: a GitHub Actions + TypeScript repo (reusable workflows under
+     `.github/workflows/`, the `.sandcastle/` hook layer in `.mts` run via
+     `tsx`, and Markdown docs). No Rails, no full test suite. -->
+
+- **Resolve conflicts by:** the project's conventions in `AGENTS.md`,
+  `CONTEXT.md`, and the relevant `docs/adr/` decisions — keep the hook contract
+  and the tracker-agnostic boundary intact.
+- **Verify gate** (must be green before you declare the merge complete):
+  - `yarn typecheck && yarn test`
+  - for any workflow YAML affected by the merge: re-check the syntax and that
+    every hook it references exists.
+
+## Workflow
 
 1. Run `git merge --no-edit origin/{{BASE_REF}}`.
 2. **If the merge is clean**, git has already created the merge commit — there is
    nothing to resolve.
 3. **If there are conflicts**, resolve every one. Read both sides and the
    surrounding code, keep the intent of BOTH branches, and prefer the project's
-   conventions (`AGENTS.md`, `CONTEXT.md`, `docs/adr/`). When the files are
-   resolved, `git add` them and complete the merge with `git commit --no-edit`.
+   conventions above. When the files are resolved, `git add` them and complete the
+   merge with `git commit --no-edit`.
+4. **Verify** — run the verify gate above and get it green to confirm the merge
+   (and any conflict resolution) is sound before you finish.
 
 ## Rules
 
@@ -38,6 +58,7 @@ base branch into the current branch:
 
 # Done
 
-Once the base branch is merged in and conflicts (if any) are resolved, output:
+Once the base branch is merged in, conflicts (if any) are resolved, and the
+verify gate is green, output:
 
 <promise>COMPLETE</promise>

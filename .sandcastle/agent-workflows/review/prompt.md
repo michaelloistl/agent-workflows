@@ -35,10 +35,23 @@ handed off to the next pass — you never change the code.
 
 # Task
 
-This repo (`agent-workflows`) is a GitHub Actions + TypeScript repo. Read
-`AGENTS.md`, `CONTEXT.md` (the domain glossary — match its vocabulary), and the
-relevant `docs/adr/` decisions, then review the diff. The PR head is checked out,
-so you can read any file in the repo for context.
+Review the diff against the linked issue and hand off a written review. The PR
+head is checked out, so you can read any file in the repo for context.
+
+## Repo conventions & verify gate (customise per repo)
+
+<!-- CUSTOMISE PER REPO — a consuming repo replaces this block with its own
+     stack, conventions docs, and verify commands. This is agent-workflows'
+     own copy: a GitHub Actions + TypeScript repo (reusable workflows under
+     `.github/workflows/`, the `.sandcastle/` hook layer in `.mts` run via
+     `tsx`, and Markdown docs). No Rails, no full test suite. -->
+
+- **Read first:** `AGENTS.md`, `CONTEXT.md` (the domain glossary — match its
+  vocabulary), and the relevant `docs/adr/` decisions. Judge the diff against the
+  patterns they set — the hook contract, the tracker-agnostic boundary.
+- **Verify gate:** none. This is a read-only verb — your only product is the notes
+  file, so there are no commands to run. (A consuming repo still keeps the
+  conventions docs above current with its own stack.)
 
 Review for:
 
