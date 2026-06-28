@@ -56,3 +56,7 @@ optional: `AGENT_PAT`, `RAILS_MASTER_KEY`, `LINEAR_API_KEY`.
 yarn install
 yarn typecheck
 ```
+
+## Support
+
+Need help? See [`SUPPORT.md`](SUPPORT.md).
