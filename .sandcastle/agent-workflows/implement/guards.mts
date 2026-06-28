@@ -6,6 +6,8 @@
 import { required, capture } from "../shared/process.mts";
 import { refuse } from "../shared/github.mts";
 import { section } from "../shared/markdown.mts";
+import { tracerBullets } from "../shared/prd-graph.mts";
+import { listIssues } from "../shared/prd-tracker.mts";
 
 const TRIGGER = "agent:implement";
 const number = required("ISSUE_NUMBER");
@@ -16,21 +18,28 @@ function gh(args: ReadonlyArray<string>): string {
   return capture("gh", args);
 }
 
-// PRD guard — a product-requirements doc (titled `PRD:` or carrying a `prd`
-// label) is a spec, not a buildable slice.
+// PRD guard — a product-requirements doc is a spec, not a buildable slice. Detect
+// it STRUCTURALLY (it has tracer-bullets referencing it as `## Parent`), since
+// `/to-prd` may not prefix the title `PRD:` or add a `prd` label; still honour
+// those markers when present.
 const title = gh(["issue", "view", number, "--json", "title", "-q", ".title"]).trim();
 const labels = gh(["issue", "view", number, "--json", "labels", "-q", ".labels[].name"])
   .split("\n")
   .map((l) => l.trim().toLowerCase());
-if (title.toLowerCase().startsWith("prd:") || labels.includes("prd")) {
-  const why = title.toLowerCase().startsWith("prd:")
-    ? "its title marks it as a PRD"
-    : "it carries the `prd` label";
+const childCount = tracerBullets(Number(number), listIssues()).length;
+const markedPrd = title.toLowerCase().startsWith("prd:") || labels.includes("prd");
+if (markedPrd || childCount > 0) {
+  const why =
+    childCount > 0
+      ? `${childCount} tracer-bullet(s) reference it as their \`## Parent\``
+      : title.toLowerCase().startsWith("prd:")
+        ? "its title marks it as a PRD"
+        : "it carries the `prd` label";
   refuse(
     "issue",
     number,
     TRIGGER,
-    `Skipping \`${TRIGGER}\`: ${why}. PRDs are specs, not buildable slices — break it down into smaller issues and run the agent on those. Removed the label without running.`,
+    `Skipping \`${TRIGGER}\`: ${why}, so #${number} is a PRD — a spec, not a buildable slice. Run \`agent:implement-prd\` on it to orchestrate its tracer-bullets, or break it down further. Removed the label without running.`,
   );
 }
 

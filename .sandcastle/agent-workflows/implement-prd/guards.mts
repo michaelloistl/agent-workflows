@@ -1,11 +1,15 @@
 // `implement-prd-guards` hook. Preflight for the orchestrator kickoff, behind the
 // contract like every other guard. A refusal retires `agent:implement-prd`,
 // comments why, and exits non-zero so the central workflow skips the run (NOT a
-// failure — never `agent:blocked`). Three checks: it must BE a PRD, it must not be
-// already kicked off, and it must have tracer-bullets to orchestrate.
+// failure — never `agent:blocked`).
+//
+// PRD identity is detected STRUCTURALLY, not by title/label: `/to-prd` does not
+// prefix the title with `PRD:` or add a `prd` label, so neither is reliable. A PRD
+// is an issue that (1) is not itself a tracer-bullet (has no `## Parent`) and (2)
+// has tracer-bullets pointing at it. Plus the idempotency check (already kicked off).
 import { required, capture } from "../shared/process.mts";
 import { refuse } from "../shared/github.mts";
-import { tracerBullets } from "../shared/prd-graph.mts";
+import { tracerBullets, parentRef } from "../shared/prd-graph.mts";
 import { pickPrdBranch } from "../shared/prd-context.mts";
 import { listIssues, remoteBranches } from "../shared/prd-tracker.mts";
 
@@ -17,18 +21,15 @@ function gh(args: ReadonlyArray<string>): string {
   return capture("gh", args);
 }
 
-// PRD guard — inverse of the `implement` PRD guard: this orchestrator runs ONLY on
-// a PRD (titled `PRD:` or carrying the `prd` label).
-const title = gh(["issue", "view", number, "--json", "title", "-q", ".title"]).trim();
-const labels = gh(["issue", "view", number, "--json", "labels", "-q", ".labels[].name"])
-  .split("\n")
-  .map((l) => l.trim().toLowerCase());
-if (!title.toLowerCase().startsWith("prd:") && !labels.includes("prd")) {
+// Tracer-bullet guard — refuse if this issue has its own `## Parent` (it's a slice,
+// not a PRD; run the orchestrator on its parent instead).
+const body = gh(["issue", "view", number, "--json", "body", "-q", ".body"]);
+if (parentRef(body) !== null) {
   refuse(
     "issue",
     number,
     TRIGGER,
-    `Skipping \`${TRIGGER}\`: #${number} isn't a PRD (no \`prd\` label and the title doesn't start with \`PRD:\`). This orchestrator runs on a PRD issue and builds its tracer-bullets. Removed the label without running.`,
+    `Skipping \`${TRIGGER}\`: #${number} is itself a tracer-bullet (it has a \`## Parent\` reference), not a PRD. Run the orchestrator on its parent PRD instead. Removed the label without running.`,
   );
 }
 
@@ -44,7 +45,8 @@ if (existing) {
   );
 }
 
-// Tracer-bullet guard — nothing to orchestrate without slices parented to the PRD.
+// Tracer-bullet presence guard — nothing to orchestrate, and confirms PRD-ness
+// (something parents to it).
 const bullets = tracerBullets(prd, listIssues());
 if (bullets.length === 0) {
   refuse(
