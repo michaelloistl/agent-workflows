@@ -21,6 +21,8 @@ repo.
   **`docs/adr/`** — architecture decisions (0001 thin-reusable-workflows;
   0002 toolchain generalization + feedback-loop boundary).
 
+See [`CONTRIBUTORS.md`](CONTRIBUTORS.md) for the people behind this repo.
+
 ## Using it from a consuming repo
 
 A thin caller triggers on a label and calls the matching reusable workflow:
