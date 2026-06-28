@@ -31,9 +31,9 @@ verify gate green before you finish.
      `.github/workflows/`, the `.sandcastle/` hook layer in `.mts` run via
      `tsx`, and Markdown docs). No Rails, no full test suite. -->
 
-- **Read first:** `AGENTS.md`, `CONTEXT.md` (match its vocabulary), and the
-  relevant `docs/adr/` decisions. Follow the existing patterns — the hook
-  contract, the tracker-agnostic boundary, the comment style.
+- **Read first:** `AGENTS.md`, `CONTEXT.md` (the domain glossary — match its
+  vocabulary), and the relevant `docs/adr/` decisions. Follow the existing
+  patterns — the hook contract, the tracker-agnostic boundary, the comment style.
 - **Tests:** hook logic lives in `.mts` with co-located `*.test.mts` run via
   `tsx --test`. Workflow YAML and Markdown carry no unit tests — sanity-check
   them by hand instead.
@@ -52,7 +52,7 @@ verify gate green before you finish.
    it pass — one behaviour per cycle. (YAML or Markdown-only changes have no test
    to write; lean on the syntax check and the verify gate.)
 4. **Refactor only when green** — tidy up once the behaviour passes, never before.
-5. **Verify** — run the verify gate above and get it green *before* you move on.
+5. **Verify** — run the verify gate above and get it green *before* you commit.
 6. **Commit** — one commit (or a few focused commits), imperative present tense.
    The body lists key decisions and files changed. Do NOT add a `Co-Authored-By`
    or "Generated with" trailer.

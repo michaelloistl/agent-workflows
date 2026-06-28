@@ -47,9 +47,9 @@ you finish.
      `.github/workflows/`, the `.sandcastle/` hook layer in `.mts` run via
      `tsx`, and Markdown docs). No Rails, no full test suite. -->
 
-- **Read first:** `AGENTS.md`, `CONTEXT.md` (match its vocabulary), and the
-  relevant `docs/adr/` decisions. Follow the existing patterns — the hook
-  contract, the tracker-agnostic boundary, the comment style.
+- **Read first:** `AGENTS.md`, `CONTEXT.md` (the domain glossary — match its
+  vocabulary), and the relevant `docs/adr/` decisions. Follow the existing
+  patterns — the hook contract, the tracker-agnostic boundary, the comment style.
 - **Tests:** hook logic lives in `.mts` with co-located `*.test.mts` run via
   `tsx --test`. Workflow YAML and Markdown carry no unit tests — sanity-check
   them by hand instead.
