@@ -8,7 +8,11 @@ on:
     types: [labeled]
 
 permissions:
-  contents: read
+  # write (not read): the reusable review-pr job needs contents:write to merge a
+  # clean slice into its PRD branch (the slice review loop, #7). A reusable
+  # workflow can't exceed its caller's token grant, so the caller must grant it
+  # too. The review agent run itself stays read-only.
+  contents: write
   issues: write
   pull-requests: write
 
