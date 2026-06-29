@@ -17,6 +17,9 @@ on:
       mode:
         type: string
         required: true
+      git-author-name:
+        type: string
+        default: Sandcastle Agent
       git-author-email:
         type: string
         required: true
@@ -108,7 +111,7 @@ jobs:
         run: yarn install --frozen-lockfile
       - name: Configure git identity
         run: |
-          git config user.name "Sandcastle Agent"
+          git config user.name "${{ inputs.git-author-name }}"
           git config user.email "${{ inputs.git-author-email }}"
       - name: Orchestrate
         run: yarn sandcastle:implement-prd-${{ inputs.mode }}
