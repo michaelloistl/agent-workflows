@@ -275,7 +275,8 @@ The five verbs share the same inputs:
 
 | Input | Type | Default | Notes |
 |---|---|---|---|
-| `git-author-email` | string | — | **required**; the `Sandcastle Agent` git identity |
+| `git-author-email` | string | — | **required**; email for the agent git identity |
+| `git-author-name` | string | `Sandcastle Agent` | name for the agent git identity |
 | `enable-ruby` | boolean | `true` | install the Ruby toolchain + prepare the test DB (Rails repos). Set `false` on non-Rails repos (ADR-0002) |
 | `database-url` | string | `postgres://postgres:postgres@localhost:5432/test` | `DATABASE_URL` the agent's feedback loop uses |
 | `system-packages` | string | `""` | space-separated apt packages to install before the run |
@@ -285,6 +286,7 @@ The `implement-prd` orchestrator is lighter (no build toolchain) and takes only:
 | Input | Type | Default | Notes |
 |---|---|---|---|
 | `git-author-email` | string | — | **required** |
+| `git-author-name` | string | `Sandcastle Agent` | name for the agent git identity |
 | `mode` | string | — | **required**; `kickoff` or `advance` |
 
 ## Secrets

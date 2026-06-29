@@ -20,6 +20,9 @@ on:
       database-url:
         type: string
         default: postgres://postgres:postgres@localhost:5432/test
+      git-author-name:
+        type: string
+        default: Sandcastle Agent
       git-author-email:
         type: string
         required: true
@@ -159,7 +162,7 @@ jobs:
 
       - name: Configure git identity
         run: |
-          git config user.name "Sandcastle Agent"
+          git config user.name "${{ inputs.git-author-name }}"
           git config user.email "${{ inputs.git-author-email }}"
 
       - name: Report in progress
