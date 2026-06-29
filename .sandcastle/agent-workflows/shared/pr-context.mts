@@ -81,7 +81,11 @@ export function gatherPrContext(prNumber: number, repo: string): PrContext {
     ) as LinkedIssue;
   }
 
-  const diff = gh(["pr", "diff", String(prNumber), "--repo", repo]);
+  // Compute the diff locally. The PR-verb workflows check out the PR head with
+  // fetch-depth: 0 and fetch the base, so `origin/<baseRef>...HEAD` matches
+  // what `gh pr diff` would return — without the API's 300-file cap that
+  // 406s on large PRs (`PullRequest.diff too_large`).
+  const diff = capture("git", ["diff", `origin/${meta.baseRefName}...HEAD`]);
 
   // Existing reviews and inline review comments, so the agent does not repeat
   // points already raised.
