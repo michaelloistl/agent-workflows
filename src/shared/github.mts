@@ -1,5 +1,5 @@
 // GitHub tracker adapter shared by the hook implementations. This is the GitHub
-// counterpart to on-vantage's Linear client: it is the ONE place all GitHub
+// counterpart to a Linear repo's Linear client: it is the ONE place all GitHub
 // tracker I/O (label transitions, comments, refusals) lives, so the central
 // reusable workflow can stay tracker-agnostic (ADR-0001, Decision 7) and a
 // future Linear repo only swaps this module out behind the same hook contract.
