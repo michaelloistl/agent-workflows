@@ -23,6 +23,13 @@ on:
       git-author-email:
         type: string
         required: true
+    # Declared explicitly (not `secrets: inherit`) so cross-owner callers can pass
+    # it — `inherit` only works when caller and reusable workflow share an owner.
+    # PRD orchestration runs no agent and touches no DB, so only the PAT is needed.
+    secrets:
+      AGENT_PAT:
+        description: PAT so dispatched workflows and PR/issue ops trigger downstream CI.
+        required: false
 
 concurrency:
   # Serialise the events that can actually race for one PRD: two advances (both
