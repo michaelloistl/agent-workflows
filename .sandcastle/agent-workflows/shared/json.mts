@@ -25,5 +25,5 @@ export interface StandardSchema<T> {
 export function standardSchema<T>(
   validate: (value: unknown) => ValidationResult<T>,
 ): StandardSchema<T> {
-  return { "~standard": { version: 1, vendor: "ldf-sandcastle", validate } };
+  return { "~standard": { version: 1, vendor: "sandcastle", validate } };
 }

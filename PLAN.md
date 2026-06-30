@@ -1,6 +1,6 @@
 # Build plan — unify agent workflows
 
-Unify the five label-triggered agent workflows across `lauza_loistl`, `ldf`, and `on-vantage` into reusable workflows in `michaelloistl/agent-workflows`, with each consuming repo supplying config + sandcastle hooks. See `docs/adr/0001` for the architecture decision and `CONTEXT.md` for vocabulary.
+Unify the five label-triggered agent workflows across multiple project repos into reusable workflows in `michaelloistl/agent-workflows`, with each consuming repo supplying config + sandcastle hooks. See `docs/adr/0001` for the architecture decision and `CONTEXT.md` for vocabulary.
 
 ## Decisions (locked)
 
@@ -74,7 +74,7 @@ The central repo (`michaelloistl/agent-workflows`) will also consume its own wor
 - [ ] thin callers merged to the **default branch** (label triggers only fire from there)
 - [ ] `workflow_dispatch` present on each caller (first-run trigger registration + manual runs)
 - [ ] `agent/*` in the repo's CI push triggers
-- [ ] secrets set: `CLAUDE_CODE_OAUTH_TOKEN`, `AGENT_PAT`, `RAILS_MASTER_KEY` (+ `LINEAR_API_KEY` for on-vantage)
+- [ ] secrets set: `CLAUDE_CODE_OAUTH_TOKEN`, `AGENT_PAT`, `RAILS_MASTER_KEY` (+ `LINEAR_API_KEY` for Linear repos)
 - [ ] `.node-version` file present
 - [ ] sandcastle hooks implemented for every verb
 - [ ] smoke test: explore → implement → review-pr

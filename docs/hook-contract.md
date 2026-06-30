@@ -7,8 +7,8 @@ Decision 7). A consuming repo implements every script for every verb it uses;
 only the implementations differ between GitHub-Issues and Linear repos.
 
 This repo's own `.sandcastle/agent-workflows/` is the **reference GitHub-Issues
-implementation** — ldf and lauza copy it; on-vantage swaps the tracker adapter
-(`shared/github.mts` → a Linear client) behind the same script names.
+implementation** — GitHub-Issues repos copy it; a Linear repo swaps the tracker
+adapter (`shared/github.mts` → a Linear client) behind the same script names.
 
 ## Scripts per verb
 

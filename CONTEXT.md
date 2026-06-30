@@ -11,7 +11,7 @@ This repo. Holds the reusable workflows and their version tags. Generic only —
 _Avoid_: shared repo, actions repo
 
 **Consuming repo**:
-A project repo (e.g. lauza_loistl, ldf, on-vantage) that calls the central workflows and supplies its own config and hooks.
+A project repo that calls the central workflows and supplies its own config and hooks.
 _Avoid_: client repo, child repo, downstream repo
 
 **Fleet**:
@@ -76,7 +76,7 @@ Under a PRD a tracer-bullet skips per-slice review (ADR-0004): `implement`'s fin
 ### Tracker
 
 **Tracker**:
-The system of record for the work an agent acts on. GitHub Issues (lauza, ldf) or Linear (on-vantage). GitHub Issues always serve as the workflow *trigger* even when Linear is the tracker.
+The system of record for the work an agent acts on — GitHub Issues or Linear. GitHub Issues always serve as the workflow *trigger* even when Linear is the tracker.
 
 **Tracker-agnostic**:
 The defining property of the central workflow: it performs zero tracker reads or writes and contains no `if: tracker == …` branch. All tracker I/O is behind hooks.

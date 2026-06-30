@@ -1,4 +1,4 @@
-// `implement-guards` hook. The four preflight checks the ldf YAML used to run
+// `implement-guards` hook. The four preflight checks the workflow YAML used to run
 // inline, now behind the contract: PRD, issue-shape, blocked-by, existing-PR. A
 // refusal retires `agent:implement`, comments why, and exits non-zero (the
 // central workflow reads the exit and skips the run — a refusal is NOT a
