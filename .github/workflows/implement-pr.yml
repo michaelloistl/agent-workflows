@@ -29,6 +29,9 @@ on:
       enable-ruby:
         type: boolean
         default: true
+      agent-model:
+        type: string
+        default: ""
 
 concurrency:
   group: agent-implement-pr-${{ github.event.pull_request.number }}
@@ -183,9 +186,10 @@ jobs:
           DATABASE_URL: ${{ inputs.database-url }}
           REDIS_URL: redis://localhost:6379/0
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
-        # Tooling worktree's entrypoint, PR working tree as cwd, so the agent reads
-        # and commits the PR's app code.
-        run: '"$TOOLING_DIR/node_modules/.bin/tsx" "$TOOLING_DIR/.sandcastle/agent-workflows/implement-pr/implement-pr.mts"'
+          AGENT_MODEL: ${{ inputs.agent-model }}
+        # Tooling worktree's packaged dispatcher, PR working tree as cwd, so the
+        # agent reads and commits the PR's app code.
+        run: '"$TOOLING_DIR/node_modules/.bin/agent-workflows" implement-pr run'
 
       - name: Push and finalize
         if: success()
