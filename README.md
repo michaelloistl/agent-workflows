@@ -1,20 +1,23 @@
 # agent-workflows
 
-Central, public repo of **reusable GitHub Actions workflows** that drive a
-label-triggered coding-agent fleet across multiple project repos. The central
-workflows own only the generic, tracker-agnostic orchestration shell; every
-repo- or domain-specific decision lives behind sandcastle hooks in the consuming
-repo.
+Central **Reusable GitHub Actions workflows** that drive a
+label-triggered coding-agent fleet across multiple project repos. The central Workflows own only the generic, tracker-agnostic orchestration shell; every
+repo- or domain-specific decision lives behind sandcastle hooks in the consuming repo.
 
 You label an issue or PR (e.g. `agent:implement`); the matching reusable
-workflow checks out your repo, spins up its toolchain, runs Claude Code against
-the work, pushes the result, and reports back to your tracker — all without the
-central YAML knowing anything about your tracker, stack, or domain.
+workflow checks out your repo, spins up its toolchain, runs Claude Code against the work, pushes the result, and reports back to your tracker — all without the central YAML knowing anything about your tracker, stack, or domain.
+
+The individual verbs work on any issue spec. The **PRD orchestrator**
+(`implement-prd`), however, expects its issues to be authored by
+[mattpocock/skills](https://github.com/mattpocock/skills) `/to-prd` and
+`/to-issues`: it parses the exact `## Parent` / `## Blocked by` body format those
+commands emit. See [Authoring PRD issues](#authoring-prd-issues) for the contract.
 
 ## Contents
 
 - [How it works](#how-it-works)
 - [The workflows](#the-workflows)
+- [Authoring PRD issues](#authoring-prd-issues)
 - [Labels](#labels)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -82,6 +85,59 @@ A few details worth knowing:
   PRs). It runs in two modes wired as two callers — `kickoff` (on the PRD-issue
   label) and `advance` (on a tracer-bullet PR merging into the PRD branch). See
   [`CONTEXT.md`](CONTEXT.md) and ADR-0003/0004 for the PRD model.
+
+## Authoring PRD issues
+
+The PRD orchestrator (`implement-prd`) is built to run on issues authored by
+[mattpocock/skills](https://github.com/mattpocock/skills) `/to-prd` and
+`/to-issues`. The intended end-to-end flow is:
+
+1. **`/to-prd`** turns a request into a **PRD issue** (a problem/solution brief).
+2. **`/to-issues`** breaks that PRD into **tracer-bullet issues** — thin,
+   independently-buildable vertical slices, each linking back to the PRD.
+3. You apply **`agent:implement-prd`** to the PRD issue; the orchestrator builds
+   the tracer-bullets one at a time on a shared PRD branch and opens the final
+   PRD→default PR for review (see [The workflows](#the-workflows)).
+
+The issue **body format is a load-bearing contract** — discovery parses it
+structurally, not by title or label. If the headings drift, orchestration breaks.
+
+**PRD issue** — identified *structurally*, not by a `PRD:` title prefix or a `prd`
+label (`/to-prd` adds neither):
+
+- It has **no `## Parent` section** of its own.
+- One or more tracer-bullets reference it as their `## Parent`.
+
+```markdown
+# Add CSV export to the reports page
+
+Users need to export any report as CSV. Today there's no way to get the data out…
+(problem / solution prose — no `## Parent` section)
+```
+
+**Tracer-bullet issue** — a slice of the PRD:
+
+- A **`## Parent`** section containing the PRD's `#<number>` (the first `#N` in the
+  section wins).
+- An optional **`## Blocked by`** section listing `#<number>` refs to other
+  tracer-bullets it depends on (used to sequence the build in topological order,
+  lowest issue number first).
+- Headings at **`##`** level.
+- A plain issue — **not** a native GitHub sub-issue or epic (the `implement`
+  shape guard refuses those; the PRD↔tracer-bullet link is textual).
+
+```markdown
+# Add a CSV serializer for report rows
+
+## Parent
+#42
+
+## Blocked by
+- #43
+
+## What to build
+A serializer that turns a report's rows into RFC-4180 CSV…
+```
 
 ## Labels
 
