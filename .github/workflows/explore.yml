@@ -32,6 +32,10 @@ on:
         description: Install the Ruby toolchain and prepare the test DB (Rails repos).
         type: boolean
         default: true
+      agent-model:
+        description: Claude model id for the agent run; empty uses the packaged default.
+        type: string
+        default: ""
 
 concurrency:
   group: agent-explore-${{ github.event.issue.number }}
@@ -182,6 +186,7 @@ jobs:
           DATABASE_URL: ${{ inputs.database-url }}
           REDIS_URL: redis://localhost:6379/0
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+          AGENT_MODEL: ${{ inputs.agent-model }}
         run: yarn sandcastle:explore
 
       - name: Finalize (post exploration comment)

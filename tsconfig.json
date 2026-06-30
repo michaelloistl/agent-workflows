@@ -11,7 +11,8 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "allowJs": true
   },
-  "include": [".sandcastle/**/*.mts"]
+  "include": ["src/**/*.mts", "bin/**/*.mts"]
 }

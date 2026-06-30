@@ -6,6 +6,7 @@ import {
   COMPLETION_SIGNAL,
 } from "../shared/agent.mts";
 import { required } from "../shared/process.mts";
+import { resolveAsset } from "../shared/resolve-asset.mts";
 
 // Thin agent-invocation entrypoint for the `agent:implement` GitHub Actions
 // workflow (see .github/workflows/agent-implement.yml). All GitHub orchestration
@@ -34,7 +35,7 @@ const result = await run({
   name: `issue-${ISSUE_NUMBER}`,
   agent: claudeAgent(),
   sandbox: hostSandbox(),
-  promptFile: "./.sandcastle/agent-workflows/implement/prompt.md",
+  promptFile: resolveAsset(import.meta.dirname, "prompt.md"),
   maxIterations: 3,
   completionSignal: COMPLETION_SIGNAL,
   branchStrategy: HEAD_STRATEGY,

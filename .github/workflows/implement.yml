@@ -31,6 +31,9 @@ on:
       enable-ruby:
         type: boolean
         default: true
+      agent-model:
+        type: string
+        default: ""
 
 concurrency:
   group: agent-implement-${{ github.event.issue.number }}
@@ -193,6 +196,7 @@ jobs:
           DATABASE_URL: ${{ inputs.database-url }}
           REDIS_URL: redis://localhost:6379/0
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+          AGENT_MODEL: ${{ inputs.agent-model }}
         run: yarn sandcastle:implement
 
       - name: Push branch and finalize

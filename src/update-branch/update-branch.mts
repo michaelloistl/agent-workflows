@@ -1,5 +1,4 @@
 import { writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { run } from "@ai-hero/sandcastle";
 import {
   claudeAgent,
@@ -8,6 +7,7 @@ import {
   COMPLETION_SIGNAL,
 } from "../shared/agent.mts";
 import { required, capture } from "../shared/process.mts";
+import { resolveAsset } from "../shared/resolve-asset.mts";
 
 // Thin agent-invocation entrypoint for the `agent:update-branch` GitHub Actions
 // workflow (see .github/workflows/agent-update-branch.yml). All GitHub
@@ -65,7 +65,7 @@ const result = await run({
   // workflow runs this entrypoint from a separate `main` tooling checkout (so a
   // stale PR branch missing the tooling can still run it) while cwd stays the
   // PR working tree the agent merges into and commits.
-  promptFile: join(import.meta.dirname, "prompt.md"),
+  promptFile: resolveAsset(import.meta.dirname, "prompt.md"),
   maxIterations: 3,
   completionSignal: COMPLETION_SIGNAL,
   branchStrategy: HEAD_STRATEGY,

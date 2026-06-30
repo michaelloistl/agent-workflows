@@ -5,6 +5,7 @@ import { required } from "../shared/process.mts";
 import { gatherPrContext, writePrContextFiles } from "../shared/pr-context.mts";
 import { reviewOutputSchema, reviewPayload } from "../shared/review-output.mts";
 import { runWithExtraction } from "../shared/run-with-extraction.mts";
+import { resolveAsset } from "../shared/resolve-asset.mts";
 
 // Thin agent-invocation entrypoint for the `agent:review-pr` GitHub Actions
 // workflow (see .github/workflows/agent-review-pr.yml). All GitHub orchestration
@@ -48,8 +49,8 @@ const { output, commits } = await runWithExtraction({
   // workflow runs this entrypoint from a separate `main` tooling checkout (so a
   // stale PR branch missing the tooling can still run it) while cwd stays the
   // PR working tree being reviewed.
-  workPromptFile: join(import.meta.dirname, "prompt.md"),
-  extractPromptFile: join(import.meta.dirname, "extract.md"),
+  workPromptFile: resolveAsset(import.meta.dirname, "prompt.md"),
+  extractPromptFile: resolveAsset(import.meta.dirname, "extract.md"),
   promptArgs,
   tag: "review",
   schema: reviewOutputSchema,
