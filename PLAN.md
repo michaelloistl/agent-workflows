@@ -14,7 +14,7 @@ Unify the five label-triggered agent workflows across multiple project repos int
 | 6 | **Architecture:** Model X (thin tracker-agnostic YAML + sandcastle hooks); Model Z (package the sandcastle layer) is the north star |
 | 7 | **Boundary:** central YAML does **zero** tracker I/O; `git push` in YAML, PR creation in the `finalize` hook |
 | 8 | **Versioning:** `@v1` moving major tag; `@main` during bring-up |
-| 9 | **Secrets:** `secrets: inherit` + static optional passthrough (`CLAUDE_CODE_OAUTH_TOKEN` required; `AGENT_PAT`, `RAILS_MASTER_KEY`, `LINEAR_API_KEY` optional, empty when absent) |
+| 9 | **Secrets:** declared explicitly in each `workflow_call.secrets` (`CLAUDE_CODE_OAUTH_TOKEN` required; `AGENT_PAT`, `RAILS_MASTER_KEY` optional). Cross-owner callers (e.g. `madebyon/*` → `michaelloistl/*`) MUST pass them by name — `secrets: inherit` only works same-owner. Same-owner callers may still use `inherit`. |
 | 10 | **Inputs:** three only (below); `default-branch` and `node-version` derived/standardized away |
 | 11 | **Rollout:** ldf pilot → on-vantage gates `@v1` → lauza fast-follow |
 
@@ -51,7 +51,7 @@ Central YAML responsibilities (generic): checkout default branch · install `sys
 
 ## Rollout
 
-1. **Build central repo** — 5 reusable workflows, the 3 inputs, `secrets: inherit` + passthrough, served at `@main`.
+1. **Build central repo** — 5 reusable workflows, the 3 inputs, explicit `workflow_call.secrets` (see Decision 9), served at `@main`.
 2. **Pilot: ldf** — migrate YAML guards → sandcastle hooks; thin callers → `@main`; iterate until the full fleet (explore → implement → review-pr → update-branch) is green.
 3. **Contract gate: on-vantage** — wire existing Linear hooks to the contract at `@main`. If Linear forces a contract change, make it now.
 4. **Cut `@v1`** — only once a GitHub repo *and* the Linear repo both pass.
