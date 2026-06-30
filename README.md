@@ -36,9 +36,11 @@ Three pieces collaborate:
    **zero** tracker I/O and contains no `if: tracker == …` branch (ADR-0001).
 2. **Thin caller** (your repo) — a tiny workflow file that triggers on a label
    and `uses:` the reusable workflow with your config. One per verb.
-3. **Sandcastle hooks** (your repo, under `.sandcastle/`) — `yarn` scripts the
-   reusable workflow calls at fixed points to do all tracker-aware and
-   domain-aware work: read the spec, post comments, open PRs, set labels.
+3. **Sandcastle hooks** (the `agent-workflows` package, installed in your repo)
+   — `yarn` scripts the reusable workflow calls at fixed points to do all
+   tracker-aware and domain-aware work: read the spec, post comments, open PRs,
+   set labels. Your `package.json` wires each script at the packaged dispatcher
+   bin; you host no hook code unless you override one.
 
 At fixed points in each run the workflow calls these hooks (your repo implements
 each as a `yarn` script — see [`docs/hook-contract.md`](docs/hook-contract.md)):
@@ -51,11 +53,13 @@ each as a `yarn` script — see [`docs/hook-contract.md`](docs/hook-contract.md)
 | `sandcastle:<verb>` | the agent run | do the work; write the verb's output file |
 | `sandcastle:<verb>-finalize` | after a successful run (post-push) | post results to the tracker (comment / review / draft PR / threaded replies) |
 
-This repo's own `.sandcastle/agent-workflows/` is the **reference GitHub-Issues
-implementation** of that contract (`shared/github.mts` is the tracker adapter).
-A GitHub repo copies it; a Linear repo swaps the adapter behind the same hook
-names. The repo is its own first consumer — the `.github/workflows/agent-*.yml`
-callers here dogfood the central workflows.
+This repo's `src/` is the **reference GitHub-Issues implementation** of that
+contract (`shared/github.mts` is the tracker adapter), distributed as the
+`agent-workflows` package. A GitHub repo installs it as a git dependency; a
+Linear repo swaps the adapter behind the same hook names (packaged separately —
+see #33). The repo is its own first consumer — the
+`.github/workflows/agent-*.yml` callers here dogfood the central workflows,
+running the dispatcher against `src/` directly.
 
 ## The workflows
 
@@ -173,27 +177,38 @@ trigger label and comments why, and never sets `agent:blocked`.
 
 Set up a consuming repo in five steps.
 
-**1. Add the sandcastle hooks.** Copy this repo's `.sandcastle/agent-workflows/`
-into your repo. For a GitHub-Issues tracker, the reference implementation works
-as-is. For Linear, swap the tracker adapter (`shared/github.mts`) for a Linear
-client behind the same hook names.
+**1. Add the sandcastle hooks.** Install the `agent-workflows` package as a git
+dependency — no registry, no copied code. For a GitHub-Issues tracker the
+packaged implementation works as-is. For Linear, swap the tracker adapter (see
+#33).
 
-**2. Wire the hook scripts in `package.json`.** Define a `yarn` script for every
-hook of every verb you use (and commit `.node-version` + `yarn.lock` — Node and
-Yarn are unconditional, since hooks run on `tsx`):
+```jsonc
+{
+  "devDependencies": { "agent-workflows": "github:michaelloistl/agent-workflows#v1" }
+}
+```
+
+**2. Wire the hook scripts in `package.json`.** Point each `yarn` script at the
+packaged dispatcher bin (`agent-workflows <verb> <hook>`; the agent-run script
+is `<verb> run`) for every verb you use — and commit `.node-version` +
+`yarn.lock` (Node and Yarn are unconditional; the package pulls in `tsx`):
 
 ```jsonc
 {
   "scripts": {
-    "sandcastle:implement":            "tsx .sandcastle/agent-workflows/implement/implement.mts",
-    "sandcastle:implement-guards":     "tsx .sandcastle/agent-workflows/implement/guards.mts",
-    "sandcastle:implement-fetch-spec": "tsx .sandcastle/agent-workflows/implement/fetch-spec.mts",
-    "sandcastle:implement-status":     "tsx .sandcastle/agent-workflows/implement/status.mts",
-    "sandcastle:implement-finalize":   "tsx .sandcastle/agent-workflows/implement/finalize.mts"
+    "sandcastle:implement":            "agent-workflows implement run",
+    "sandcastle:implement-guards":     "agent-workflows implement guards",
+    "sandcastle:implement-fetch-spec": "agent-workflows implement fetch-spec",
+    "sandcastle:implement-status":     "agent-workflows implement status",
+    "sandcastle:implement-finalize":   "agent-workflows implement finalize"
     // …repeat for each verb you use; see this repo's package.json for the full set
   }
 }
 ```
+
+To customize a hook, drop a single file at
+`.sandcastle/agent-workflows/<verb-dir>/<entry>.mts` (or `prompt.md`) — the
+dispatcher resolves it override-first, else the packaged default.
 
 **3. Create the trigger labels** listed in [Labels](#labels) for each verb you
 enable (the state labels are created on first use by the hooks).
@@ -331,16 +346,19 @@ The five verbs share the same inputs:
 
 | Input | Type | Default | Notes |
 |---|---|---|---|
-| `git-author-email` | string | — | **required**; the `Sandcastle Agent` git identity |
+| `git-author-email` | string | — | **required**; email for the agent git identity |
+| `git-author-name` | string | `Sandcastle Agent` | name for the agent git identity |
 | `enable-ruby` | boolean | `true` | install the Ruby toolchain + prepare the test DB (Rails repos). Set `false` on non-Rails repos (ADR-0002) |
 | `database-url` | string | `postgres://postgres:postgres@localhost:5432/test` | `DATABASE_URL` the agent's feedback loop uses |
 | `system-packages` | string | `""` | space-separated apt packages to install before the run |
+| `agent-model` | string | `""` | Claude model id for the agent run; empty uses the package's pinned default |
 
 The `implement-prd` orchestrator is lighter (no build toolchain) and takes only:
 
 | Input | Type | Default | Notes |
 |---|---|---|---|
 | `git-author-email` | string | — | **required** |
+| `git-author-name` | string | `Sandcastle Agent` | name for the agent git identity |
 | `mode` | string | — | **required**; `kickoff` or `advance` |
 
 ## Secrets
@@ -362,10 +380,14 @@ Pass with `secrets: inherit`.
 - **`.github/workflows/implement-prd.yml`** — the reusable PRD orchestrator
   (kickoff + advance modes).
 - **`.github/workflows/agent-*.yml`** — this repo's own thin callers. It is its
-  own first consumer (the dogfooding plumbing test).
-- **`.sandcastle/agent-workflows/`** — the reference **GitHub-Issues**
-  implementation of the hook contract (`shared/github.mts` is the tracker
-  adapter). Consuming GitHub repos copy this; a Linear repo swaps the adapter.
+  own first consumer (the dogfooding plumbing test), running the dispatcher
+  against `src/` directly rather than installing itself.
+- **`src/`** — the reference **GitHub-Issues** implementation of the hook
+  contract (`shared/github.mts` is the tracker adapter), distributed as the
+  `agent-workflows` package. Consuming GitHub repos install it as a git
+  dependency; a Linear repo swaps the adapter (packaged separately, #33).
+- **`bin/agent-workflows.mjs`** — the dispatcher: maps `<verb> <hook>` to a
+  `src/` entrypoint (override-first) and runs it under `tsx`.
 - **`docs/hook-contract.md`** — the interface every consuming repo implements.
 - **`CONTEXT.md`** — glossary. **`PLAN.md`** — build plan + rollout.
   **`docs/adr/`** — architecture decisions (0001 thin reusable workflows; 0002

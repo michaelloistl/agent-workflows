@@ -5,6 +5,7 @@ import { required } from "../shared/process.mts";
 import { gatherPrContext, writePrContextFiles } from "../shared/pr-context.mts";
 import { replyOutputSchema } from "../shared/reply-output.mts";
 import { runWithExtraction } from "../shared/run-with-extraction.mts";
+import { resolveAsset } from "../shared/resolve-asset.mts";
 
 // Thin agent-invocation entrypoint for the `agent:implement` PR workflow (see
 // .github/workflows/agent-implement-pr.yml). All GitHub orchestration — the
@@ -55,8 +56,8 @@ const { output, commits } = await runWithExtraction({
   // workflow runs this entrypoint from a separate `main` tooling checkout (so a
   // stale PR branch missing the tooling can still run it) while cwd stays the
   // PR working tree the agent edits and commits.
-  workPromptFile: join(import.meta.dirname, "prompt.md"),
-  extractPromptFile: join(import.meta.dirname, "extract.md"),
+  workPromptFile: resolveAsset(import.meta.dirname, "prompt.md"),
+  extractPromptFile: resolveAsset(import.meta.dirname, "extract.md"),
   promptArgs,
   tag: "replies",
   schema: replyOutputSchema,

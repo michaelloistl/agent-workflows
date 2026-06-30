@@ -22,12 +22,18 @@ on:
       database-url:
         type: string
         default: postgres://postgres:postgres@localhost:5432/test
+      git-author-name:
+        type: string
+        default: Sandcastle Agent
       git-author-email:
         type: string
         required: true
       enable-ruby:
         type: boolean
         default: true
+      agent-model:
+        type: string
+        default: ""
 
 concurrency:
   group: agent-implement-${{ github.event.issue.number }}
@@ -153,7 +159,7 @@ jobs:
 
       - name: Configure git identity
         run: |
-          git config user.name "Sandcastle Agent"
+          git config user.name "${{ inputs.git-author-name }}"
           git config user.email "${{ inputs.git-author-email }}"
 
       - name: Report in progress
@@ -190,6 +196,7 @@ jobs:
           DATABASE_URL: ${{ inputs.database-url }}
           REDIS_URL: redis://localhost:6379/0
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+          AGENT_MODEL: ${{ inputs.agent-model }}
         run: yarn sandcastle:implement
 
       - name: Push branch and finalize

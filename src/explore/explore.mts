@@ -5,6 +5,7 @@ import { required } from "../shared/process.mts";
 import { standardSchema } from "../shared/json.mts";
 import { isPresent } from "../shared/text.mts";
 import { runWithExtraction } from "../shared/run-with-extraction.mts";
+import { resolveAsset } from "../shared/resolve-asset.mts";
 
 // Thin agent-invocation entrypoint for the `agent:explore` GitHub Actions
 // workflow (see .github/workflows/agent-explore.yml). All GitHub orchestration —
@@ -49,8 +50,8 @@ const promptArgs = {
 
 const { output, commits } = await runWithExtraction({
   name: `explore-${ISSUE_NUMBER}`,
-  workPromptFile: "./.sandcastle/agent-workflows/explore/prompt.md",
-  extractPromptFile: "./.sandcastle/agent-workflows/explore/extract.md",
+  workPromptFile: resolveAsset(import.meta.dirname, "prompt.md"),
+  extractPromptFile: resolveAsset(import.meta.dirname, "extract.md"),
   promptArgs,
   tag: "comment",
   schema: commentSchema,

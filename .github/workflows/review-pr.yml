@@ -29,6 +29,9 @@ on:
       enable-ruby:
         type: boolean
         default: true
+      agent-model:
+        type: string
+        default: ""
 
 concurrency:
   group: agent-review-pr-${{ github.event.pull_request.number }}
@@ -178,10 +181,12 @@ jobs:
           DATABASE_URL: ${{ inputs.database-url }}
           REDIS_URL: redis://localhost:6379/0
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
-        # Run the tooling worktree's entrypoint with the PR working tree as cwd so
-        # the agent reviews the PR's code. The entrypoint resolves its prompt files
-        # relative to its own location, so it works from the worktree.
-        run: '"$TOOLING_DIR/node_modules/.bin/tsx" "$TOOLING_DIR/.sandcastle/agent-workflows/review/review.mts"'
+          AGENT_MODEL: ${{ inputs.agent-model }}
+        # Run the tooling worktree's packaged dispatcher with the PR working tree
+        # as cwd so the agent reviews the PR's code. The dispatcher resolves the
+        # entrypoint (override-first, else the packaged src/) and its prompt files
+        # relative to the package, so it works from the worktree.
+        run: '"$TOOLING_DIR/node_modules/.bin/agent-workflows" review-pr run'
 
       - name: Finalize (post review)
         if: success()
