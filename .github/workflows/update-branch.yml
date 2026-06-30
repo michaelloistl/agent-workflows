@@ -36,6 +36,18 @@ on:
       agent-model:
         type: string
         default: ""
+    # Declared explicitly (not `secrets: inherit`) so cross-owner callers can pass
+    # them — `inherit` only works when caller and reusable workflow share an owner.
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: OAuth token for the Claude Code CLI agent run.
+        required: true
+      AGENT_PAT:
+        description: PAT so pushes/PRs trigger downstream CI; falls back to GITHUB_TOKEN when absent.
+        required: false
+      RAILS_MASTER_KEY:
+        description: Rails master key to decrypt credentials for the test DB and suite.
+        required: false
 
 concurrency:
   group: agent-update-branch-${{ github.event.pull_request.number }}
