@@ -6,7 +6,7 @@
 import { required, capture } from "../shared/process.mts";
 import { refuse } from "../shared/github.mts";
 import { section } from "../shared/markdown.mts";
-import { tracerBullets } from "../shared/prd-graph.mts";
+import { parentRef, tracerBullets } from "../shared/prd-graph.mts";
 import { listIssues } from "../shared/prd-tracker.mts";
 
 const TRIGGER = "agent:implement";
@@ -74,17 +74,22 @@ if (issue.subIssuesSummary.total > 0) {
     `Skipping \`${TRIGGER}\`: it has ${issue.subIssuesSummary.total} sub-issue(s). The agent only builds standalone issues, not epics or sub-issues. Removed the label without running.`,
   );
 }
-if (issue.parent) {
+const body = gh(["issue", "view", number, "--json", "body", "-q", ".body"]);
+// A native GH sub-issue link is normally an epic/sub-issue marker (refuse), but
+// tracer-bullets under a PRD legitimately declare a native parent when the
+// tracker sync (e.g. Linear → GH) mirrors the parent/child edge. Allow it iff
+// the body's `## Parent` textual reference matches the native parent — that's
+// the PRD-orchestrator's tracer-bullet contract (prd-graph.mts).
+if (issue.parent && parentRef(body) !== issue.parent.number) {
   refuse(
     "issue",
     number,
     TRIGGER,
-    `Skipping \`${TRIGGER}\`: it is a sub-issue of #${issue.parent.number}. The agent only builds standalone issues, not epics or sub-issues. Removed the label without running.`,
+    `Skipping \`${TRIGGER}\`: it is a sub-issue of #${issue.parent.number} but does not declare it as its \`## Parent\`. The agent only builds standalone issues or PRD tracer-bullets, not epics or ad-hoc sub-issues. Removed the label without running.`,
   );
 }
 
 // Blocked-by guard — refuse while any issue named under `## Blocked by` is open.
-const body = gh(["issue", "view", number, "--json", "body", "-q", ".body"]);
 const blockedSection = section(body, "blocked by");
 const refs = [...new Set([...blockedSection.matchAll(/#(\d+)/g)].map((m) => m[1]))];
 const unmet = refs.filter((n) => {
