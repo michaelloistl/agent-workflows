@@ -190,8 +190,9 @@ packaged implementation works as-is. For Linear, swap the tracker adapter (see
 
 **2. Wire the hook scripts in `package.json`.** Point each `yarn` script at the
 packaged dispatcher bin (`agent-workflows <verb> <hook>`; the agent-run script
-is `<verb> run`) for every verb you use — and commit `.node-version` +
-`yarn.lock` (Node and Yarn are unconditional; the package pulls in `tsx`):
+is `<verb> run`) for every verb you use — and commit `yarn.lock` plus either a
+`.node-version` file or pass `node-version` on the caller (Node and Yarn are
+unconditional; the package pulls in `tsx`):
 
 ```jsonc
 {
@@ -352,6 +353,7 @@ The five verbs share the same inputs:
 | `database-url` | string | `postgres://postgres:postgres@localhost:5432/test` | `DATABASE_URL` the agent's feedback loop uses |
 | `system-packages` | string | `""` | space-separated apt packages to install before the run |
 | `agent-model` | string | `""` | Claude model id for the agent run; empty uses the package's pinned default |
+| `node-version` | string | `""` | Node version (e.g. `"20"`, `"lts/*"`). When empty, falls back to the consuming repo's `.node-version` file |
 
 The `implement-prd` orchestrator is lighter (no build toolchain) and takes only:
 
@@ -360,6 +362,7 @@ The `implement-prd` orchestrator is lighter (no build toolchain) and takes only:
 | `git-author-email` | string | — | **required** |
 | `git-author-name` | string | `Sandcastle Agent` | name for the agent git identity |
 | `mode` | string | — | **required**; `kickoff` or `advance` |
+| `node-version` | string | `""` | Node version (e.g. `"20"`, `"lts/*"`). When empty, falls back to the consuming repo's `.node-version` file |
 
 ## Secrets
 

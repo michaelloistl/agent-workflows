@@ -36,6 +36,10 @@ on:
         description: Claude model id for the agent run; empty uses the packaged default.
         type: string
         default: ""
+      node-version:
+        description: Node version (e.g. "20", "lts/*"). When empty, .node-version in the consuming repo is used.
+        type: string
+        default: ""
     # Declared explicitly (not `secrets: inherit`) so cross-owner callers can pass
     # them — `inherit` only works when caller and reusable workflow share an owner.
     secrets:
@@ -79,7 +83,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
-          node-version-file: .node-version
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ inputs.node-version == '' && '.node-version' || '' }}
           cache: yarn
       - name: Install JS dependencies
         run: yarn install --frozen-lockfile
@@ -157,7 +162,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
-          node-version-file: .node-version
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ inputs.node-version == '' && '.node-version' || '' }}
           cache: yarn
 
       - name: Install JS dependencies
