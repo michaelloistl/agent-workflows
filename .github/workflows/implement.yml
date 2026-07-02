@@ -199,6 +199,14 @@ jobs:
           git fetch origin "$BASE"
           git checkout -B "$BRANCH" "origin/$BASE"
 
+      - name: Sync bundler to working branch
+        # `setup-ruby --bundler-cache` above resolved gems against the default
+        # branch's Gemfile.lock, but the working branch (a stacked PRD branch)
+        # may add gems. Re-run install so bundler materializes against the
+        # checked-out lockfile; the vendor/bundle cache makes this a fast delta.
+        if: inputs.enable-ruby
+        run: bundle install --jobs 4 --retry 3
+
       - name: Prepare test database
         if: inputs.enable-ruby
         env:
