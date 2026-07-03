@@ -199,13 +199,32 @@ jobs:
           git fetch origin "$BASE"
           git checkout -B "$BRANCH" "origin/$BASE"
 
-      - name: Sync bundler to working branch
-        # `setup-ruby --bundler-cache` above resolved gems against the default
-        # branch's Gemfile.lock, but the working branch (a stacked PRD branch)
-        # may add gems. Re-run install so bundler materializes against the
-        # checked-out lockfile; the vendor/bundle cache makes this a fast delta.
+      # Re-invoke language setup after the working-branch checkout so
+      # `.ruby-version` / `.node-version` / `Gemfile.lock` resolve against the
+      # branch we're actually going to build on. The earlier invocations bind
+      # to the default branch's version files (needed so `Fetch spec` can run
+      # yarn); re-invoking here reconciles any pin the working branch bumped.
+      # Both actions are idempotent — a no-op when the version files match,
+      # a runtime swap + `bundle install` cache-restore keyed on the new
+      # lockfile hash when they differ. Supersedes a prior manual
+      # `bundle install` step: `bundler-cache: true` handles that here.
+      - name: Sync Ruby to working branch
         if: inputs.enable-ruby
-        run: bundle install --jobs 4 --retry 3
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Sync Node to working branch
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ inputs.node-version == '' && '.node-version' || '' }}
+          cache: yarn
+
+      - name: Sync JS dependencies to working branch
+        # setup-node handles Node + cache; install mirrors the pre-checkout
+        # step so node_modules matches the working branch's yarn.lock.
+        run: yarn install --frozen-lockfile
 
       - name: Prepare test database
         if: inputs.enable-ruby
