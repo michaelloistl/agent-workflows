@@ -1,0 +1,28 @@
+name: Agent Implement spec (advance)
+
+# Thin caller: when a tracer-bullet PR merges into a spec branch, run the reusable
+# `implement-spec` orchestrator in advance mode → it closes the merged slice and
+# dispatches the next, or opens the final spec→default PR. Plain `pull_request`
+# (not `_target`): advance runs no PR-head code, only `gh` orchestration, and
+# slice PRs are internal so the event carries secrets.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  advance:
+    # Only a merged tracer-bullet PR into a spec branch. The final spec→default PR
+    # has base == default branch, so it does NOT match and does NOT re-trigger.
+    if: >-
+      github.event.pull_request.merged == true
+      && startsWith(github.event.pull_request.base.ref, 'agent/spec-')
+    uses: michaelloistl/agent-workflows/.github/workflows/implement-spec.yml@main
+    with:
+      mode: advance
+      git-author-email: michael.loistl@gmail.com
+    secrets: inherit

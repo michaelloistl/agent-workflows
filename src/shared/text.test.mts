@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { slugify } from "./text.mts";
 
 test("slugify lowercases, hyphenates runs of non-alphanumerics, and trims", () => {
-  assert.equal(slugify("Add PRD: Orchestrate tracer-bullets!"), "add-prd-orchestrate-tracer-bullets");
+  assert.equal(slugify("Add spec: Orchestrate tracer-bullets!"), "add-spec-orchestrate-tracer-bullets");
   assert.equal(slugify("  spaces  "), "spaces");
 });
 

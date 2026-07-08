@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parentRef, blockedByRefs, tracerBullets, nextSlice, isComplete, topologicalOrder } from "./prd-graph.mts";
+import { parentRef, blockedByRefs, tracerBullets, nextSlice, isComplete, topologicalOrder } from "./spec-graph.mts";
 
-// A tracer-bullet body parented to `prd` with the given blockers.
-function bullet(prd: number, blockers: number[]): string {
+// A tracer-bullet body parented to `spec` with the given blockers.
+function bullet(spec: number, blockers: number[]): string {
   const blocked = blockers.length ? blockers.map((n) => `- #${n}`).join("\n") : "None";
-  return `## Parent\n#${prd}\n\n## Blocked by\n${blocked}`;
+  return `## Parent\n#${spec}\n\n## Blocked by\n${blocked}`;
 }
 
-test("parentRef reads the PRD number from the Parent section, ignoring #N elsewhere", () => {
+test("parentRef reads the spec number from the Parent section, ignoring #N elsewhere", () => {
   const body = [
     "## Parent",
     "#3",
@@ -36,11 +36,11 @@ test("blockedByRefs returns [] for a 'None' section", () => {
   assert.deepEqual(blockedByRefs(body), []);
 });
 
-test("tracerBullets keeps only candidates parented to the PRD, with their edges", () => {
+test("tracerBullets keeps only candidates parented to the spec, with their edges", () => {
   const candidates = [
     { number: 4, body: bullet(3, []) },
     { number: 5, body: bullet(3, [4]) },
-    { number: 9, body: bullet(8, []) }, // a different PRD's slice
+    { number: 9, body: bullet(8, []) }, // a different spec's slice
     { number: 10, body: "## What to build\nunrelated standalone issue" },
   ];
   assert.deepEqual(tracerBullets(3, candidates), [
@@ -62,8 +62,8 @@ test("nextSlice picks the lowest-numbered ready slice, advancing as blockers clo
   assert.equal(nextSlice(CHAIN, new Set([4, 5, 6])), null); // all closed
 });
 
-test("nextSlice ignores blockers outside the PRD's own slice set", () => {
-  // #100 is not a tracer-bullet of this PRD — the implement guard handles it, not us.
+test("nextSlice ignores blockers outside the spec's own slice set", () => {
+  // #100 is not a tracer-bullet of this spec — the implement guard handles it, not us.
   const bullets = [{ number: 4, blockedBy: [100] }];
   assert.equal(nextSlice(bullets, new Set()), 4);
 });

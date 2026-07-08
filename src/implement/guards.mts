@@ -1,13 +1,13 @@
 // `implement-guards` hook. The four preflight checks the workflow YAML used to run
-// inline, now behind the contract: PRD, issue-shape, blocked-by, existing-PR. A
+// inline, now behind the contract: spec, issue-shape, blocked-by, existing-PR. A
 // refusal retires `agent:implement`, comments why, and exits non-zero (the
 // central workflow reads the exit and skips the run — a refusal is NOT a
 // failure, so it never applies `agent:blocked`).
 import { required, capture } from "../shared/process.mts";
 import { refuse } from "../shared/github.mts";
 import { section } from "../shared/markdown.mts";
-import { parentRef, tracerBullets } from "../shared/prd-graph.mts";
-import { listIssues } from "../shared/prd-tracker.mts";
+import { parentRef, tracerBullets } from "../shared/spec-graph.mts";
+import { listIssues } from "../shared/spec-tracker.mts";
 
 const TRIGGER = "agent:implement";
 const number = required("ISSUE_NUMBER");
@@ -18,28 +18,28 @@ function gh(args: ReadonlyArray<string>): string {
   return capture("gh", args);
 }
 
-// PRD guard — a product-requirements doc is a spec, not a buildable slice. Detect
+// spec guard — a product-requirements doc is a spec, not a buildable slice. Detect
 // it STRUCTURALLY (it has tracer-bullets referencing it as `## Parent`), since
-// `/to-prd` may not prefix the title `PRD:` or add a `prd` label; still honour
+// `/to-spec` may not prefix the title `spec:` or add a `spec` label; still honour
 // those markers when present.
 const title = gh(["issue", "view", number, "--json", "title", "-q", ".title"]).trim();
 const labels = gh(["issue", "view", number, "--json", "labels", "-q", ".labels[].name"])
   .split("\n")
   .map((l) => l.trim().toLowerCase());
 const childCount = tracerBullets(Number(number), listIssues()).length;
-const markedPrd = title.toLowerCase().startsWith("prd:") || labels.includes("prd");
-if (markedPrd || childCount > 0) {
+const markedSpec = title.toLowerCase().startsWith("spec:") || labels.includes("spec");
+if (markedSpec || childCount > 0) {
   const why =
     childCount > 0
       ? `${childCount} tracer-bullet(s) reference it as their \`## Parent\``
-      : title.toLowerCase().startsWith("prd:")
-        ? "its title marks it as a PRD"
-        : "it carries the `prd` label";
+      : title.toLowerCase().startsWith("spec:")
+        ? "its title marks it as a spec"
+        : "it carries the `spec` label";
   refuse(
     "issue",
     number,
     TRIGGER,
-    `Skipping \`${TRIGGER}\`: ${why}, so #${number} is a PRD — a spec, not a buildable slice. Run \`agent:implement-prd\` on it to orchestrate its tracer-bullets, or break it down further. Removed the label without running.`,
+    `Skipping \`${TRIGGER}\`: ${why}, so #${number} is a spec — a spec, not a buildable slice. Run \`agent:implement-spec\` on it to orchestrate its tracer-bullets, or break it down further. Removed the label without running.`,
   );
 }
 
@@ -76,16 +76,16 @@ if (issue.subIssuesSummary.total > 0) {
 }
 const body = gh(["issue", "view", number, "--json", "body", "-q", ".body"]);
 // A native GH sub-issue link is normally an epic/sub-issue marker (refuse), but
-// tracer-bullets under a PRD legitimately declare a native parent when the
+// tracer-bullets under a spec legitimately declare a native parent when the
 // tracker sync (e.g. Linear → GH) mirrors the parent/child edge. Allow it iff
 // the body's `## Parent` textual reference matches the native parent — that's
-// the PRD-orchestrator's tracer-bullet contract (prd-graph.mts).
+// the spec-orchestrator's tracer-bullet contract (spec-graph.mts).
 if (issue.parent && parentRef(body) !== issue.parent.number) {
   refuse(
     "issue",
     number,
     TRIGGER,
-    `Skipping \`${TRIGGER}\`: it is a sub-issue of #${issue.parent.number} but does not declare it as its \`## Parent\`. The agent only builds standalone issues or PRD tracer-bullets, not epics or ad-hoc sub-issues. Removed the label without running.`,
+    `Skipping \`${TRIGGER}\`: it is a sub-issue of #${issue.parent.number} but does not declare it as its \`## Parent\`. The agent only builds standalone issues or spec tracer-bullets, not epics or ad-hoc sub-issues. Removed the label without running.`,
   );
 }
 

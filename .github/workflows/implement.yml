@@ -7,7 +7,7 @@ name: Agent Implement (reusable)
 # draft PR with the right cross-reference. ZERO tracker I/O lives here.
 #
 # Hook sequence (consuming repo provides each as a `yarn` script):
-#   implement-guards      preflight (PRD / shape / blocked-by / existing-PR);
+#   implement-guards      preflight (spec / shape / blocked-by / existing-PR);
 #                         exit non-zero = refused (skip rest, not a failure)
 #   implement-status      report state to the tracker (in-progress / review / blocked)
 #   implement-fetch-spec  write the issue spec to $SPEC_FILE; output `branch`
@@ -190,7 +190,7 @@ jobs:
         run: yarn sandcastle:implement-fetch-spec
 
       - name: Create agent branch
-        # `base` is the fetch-spec-derived base (a live PRD branch for a stacked
+        # `base` is the fetch-spec-derived base (a live spec branch for a stacked
         # tracer-bullet), falling back to the default branch for a standalone issue.
         env:
           BRANCH: ${{ steps.spec.outputs.branch }}
@@ -252,10 +252,10 @@ jobs:
         run: |
           # Plain git push (Decision 7). PR *creation* is the finalize hook's job
           # because the cross-reference (`Closes #N` vs a Linear ref) and the base
-          # (a PRD branch for a stacked tracer-bullet) are tracker-aware.
+          # (a spec branch for a stacked tracer-bullet) are tracker-aware.
           git push -u origin "$BRANCH"
           # finalize opens the PR AND applies the terminal label (`agent:review`
-          # standalone, `agent:review-pr` under a PRD), so it owns the state here.
+          # standalone, `agent:review-pr` under a spec), so it owns the state here.
           yarn sandcastle:implement-finalize
 
       - name: Report blocked on failure

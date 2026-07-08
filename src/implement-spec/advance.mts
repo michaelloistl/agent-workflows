@@ -1,23 +1,23 @@
-// `implement-prd-advance` hook. Fired when a tracer-bullet PR merges into a PRD
-// branch (the thin caller filters `merged && base.ref ~ agent/prd-*`). Close the
+// `implement-spec-advance` hook. Fired when a tracer-bullet PR merges into a spec
+// branch (the thin caller filters `merged && base.ref ~ agent/spec-*`). Close the
 // merged tracer-bullet (merging into a non-default base does NOT auto-close it),
-// recompute the PRD's slice set live, then dispatch the next single slice — or,
-// when the last one is done, open the final PRD→default PR. The orchestrator runs
-// NO agent; pure `gh` over the pure `prd-graph` brain. Strictly sequential
+// recompute the spec's slice set live, then dispatch the next single slice — or,
+// when the last one is done, open the final spec→default PR. The orchestrator runs
+// NO agent; pure `gh` over the pure `spec-graph` brain. Strictly sequential
 // (ADR-0003): exactly one slice is dispatched per advance.
 import { required, capture } from "../shared/process.mts";
 import { addLabel, comment } from "../shared/github.mts";
-import { tracerBullets, nextSlice, isComplete } from "../shared/prd-graph.mts";
-import { renderProgress } from "../shared/prd-report.mts";
-import { listIssues } from "../shared/prd-tracker.mts";
-import { prdNumberFromBranch, issueNumberFromBranch } from "../shared/prd-context.mts";
+import { tracerBullets, nextSlice, isComplete } from "../shared/spec-graph.mts";
+import { renderProgress } from "../shared/spec-report.mts";
+import { listIssues } from "../shared/spec-tracker.mts";
+import { specNumberFromBranch, issueNumberFromBranch } from "../shared/spec-context.mts";
 
 const baseRef = required("BASE_REF");
 const headRef = required("HEAD_REF");
 
-const prd = prdNumberFromBranch(baseRef);
-if (prd === null) {
-  console.log(`Base ${baseRef} is not a PRD branch — nothing to advance.`);
+const spec = specNumberFromBranch(baseRef);
+if (spec === null) {
+  console.log(`Base ${baseRef} is not a spec branch — nothing to advance.`);
   process.exit(0);
 }
 
@@ -33,7 +33,7 @@ if (merged !== null) {
 
 // 2. Recompute the slice set live — late-added slices are picked up.
 const issues = listIssues();
-const bullets = tracerBullets(prd, issues);
+const bullets = tracerBullets(spec, issues);
 const closed = new Set(issues.filter((i) => i.state === "CLOSED").map((i) => i.number));
 if (merged !== null) closed.add(merged); // guard against issue-list lag
 
@@ -42,14 +42,14 @@ const next = nextSlice(bullets, closed);
 if (next !== null) {
   addLabel("issue", String(next), "agent:implement");
 } else if (isComplete(bullets, closed)) {
-  openFinalPr(prd, baseRef);
+  openFinalPr(spec, baseRef);
 }
 
-// 4. Refresh the dashboard on the PRD issue.
-comment("issue", String(prd), renderProgress({ branch: baseRef, bullets, closed, dispatched: next }));
+// 4. Refresh the dashboard on the spec issue.
+comment("issue", String(spec), renderProgress({ branch: baseRef, bullets, closed, dispatched: next }));
 
 console.log(
-  `PRD #${prd}: closed ${merged === null ? "(none)" : `#${merged}`}; ${
+  `spec #${spec}: closed ${merged === null ? "(none)" : `#${merged}`}; ${
     next !== null
       ? `dispatched #${next}`
       : isComplete(bullets, closed)
@@ -58,10 +58,10 @@ console.log(
   }.`,
 );
 
-// The single human-review gate: a draft PR from the PRD branch to the default
-// branch with `Closes #<prd>` (base IS default, so the merge auto-closes the PRD).
+// The single human-review gate: a draft PR from the spec branch to the default
+// branch with `Closes #<spec>` (base IS default, so the merge auto-closes the spec).
 // Idempotent — never opens a second final PR.
-function openFinalPr(prdNumber: number, prdBranch: string): void {
+function openFinalPr(specNumber: number, specBranch: string): void {
   const defaultBranch = capture("gh", [
     "repo",
     "view",
@@ -74,7 +74,7 @@ function openFinalPr(prdNumber: number, prdBranch: string): void {
     "pr",
     "list",
     "--head",
-    prdBranch,
+    specBranch,
     "--base",
     defaultBranch,
     "--state",
@@ -88,8 +88,8 @@ function openFinalPr(prdNumber: number, prdBranch: string): void {
     console.log(`Final PR already open (#${existing}).`);
     return;
   }
-  const title = capture("gh", ["issue", "view", String(prdNumber), "--json", "title", "-q", ".title"]).trim();
-  const body = `Automated by the implement-prd orchestrator: every tracer-bullet of PRD #${prdNumber} is merged into \`${prdBranch}\`. This is the single human-review gate for the whole feature.\n\nCloses #${prdNumber}`;
+  const title = capture("gh", ["issue", "view", String(specNumber), "--json", "title", "-q", ".title"]).trim();
+  const body = `Automated by the implement-spec orchestrator: every tracer-bullet of spec #${specNumber} is merged into \`${specBranch}\`. This is the single human-review gate for the whole feature.\n\nCloses #${specNumber}`;
   capture("gh", [
     "pr",
     "create",
@@ -97,7 +97,7 @@ function openFinalPr(prdNumber: number, prdBranch: string): void {
     "--base",
     defaultBranch,
     "--head",
-    prdBranch,
+    specBranch,
     "--title",
     title,
     "--body",

@@ -1,16 +1,16 @@
-name: Agent Implement PRD (reusable)
+name: Agent Implement spec (reusable)
 
-# Reusable, tracker-agnostic PRD *orchestrator* (CONTEXT.md). It runs NO agent —
-# it sequences the `implement` verb across a PRD's tracer-bullets on a shared PRD
+# Reusable, tracker-agnostic spec *orchestrator* (CONTEXT.md). It runs NO agent —
+# it sequences the `implement` verb across a spec's tracer-bullets on a shared spec
 # branch, strictly sequentially (ADR-0003). A consuming repo wires two thin
-# callers: one on the PRD-issue label (`mode: kickoff`), one on PR-merge
+# callers: one on the spec-issue label (`mode: kickoff`), one on PR-merge
 # (`mode: advance`). ZERO tracker I/O lives here — all graph/`gh` logic is behind
-# the `implement-prd-<mode>` hooks. Lightweight: node + `gh` only, no
+# the `implement-spec-<mode>` hooks. Lightweight: node + `gh` only, no
 # postgres/redis/ruby (nothing to build).
 #
-#   kickoff  cut the PRD branch, dispatch the topologically-first tracer-bullet
+#   kickoff  cut the spec branch, dispatch the topologically-first tracer-bullet
 #   advance  (added in #8) on a slice PR merge: close it, dispatch the next, or
-#            open the final PRD→default PR
+#            open the final spec→default PR
 on:
   workflow_call:
     inputs:
@@ -29,19 +29,19 @@ on:
         description: Node version (e.g. "20", "lts/*"). When empty, .node-version in the consuming repo is used.
     # Declared explicitly (not `secrets: inherit`) so cross-owner callers can pass
     # it — `inherit` only works when caller and reusable workflow share an owner.
-    # PRD orchestration runs no agent and touches no DB, so only the PAT is needed.
+    # spec orchestration runs no agent and touches no DB, so only the PAT is needed.
     secrets:
       AGENT_PAT:
         description: PAT so dispatched workflows and PR/issue ops trigger downstream CI.
         required: false
 
 concurrency:
-  # Serialise the events that can actually race for one PRD: two advances (both
-  # keyed on the merged PR's base PRD branch) and a double-kickoff (both keyed on
-  # the PRD issue number). Kickoff and advance use different keys, but they never
+  # Serialise the events that can actually race for one spec: two advances (both
+  # keyed on the merged PR's base spec branch) and a double-kickoff (both keyed on
+  # the spec issue number). Kickoff and advance use different keys, but they never
   # overlap in time — kickoff finishes in seconds; the first slice it dispatches
   # only merges (→ advance) much later.
-  group: implement-prd-${{ github.event.issue.number || github.event.pull_request.base.ref }}
+  group: implement-spec-${{ github.event.issue.number || github.event.pull_request.base.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -78,7 +78,7 @@ jobs:
       - name: Run guards
         id: guards
         run: |
-          if yarn --silent sandcastle:implement-prd-guards; then
+          if yarn --silent sandcastle:implement-spec-guards; then
             echo "refused=false" >> "$GITHUB_OUTPUT"
           else
             echo "refused=true" >> "$GITHUB_OUTPUT"
@@ -127,4 +127,4 @@ jobs:
           git config user.name "${{ inputs.git-author-name }}"
           git config user.email "${{ inputs.git-author-email }}"
       - name: Orchestrate
-        run: yarn sandcastle:implement-prd-${{ inputs.mode }}
+        run: yarn sandcastle:implement-spec-${{ inputs.mode }}

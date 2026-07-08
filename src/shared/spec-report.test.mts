@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderProgress } from "./prd-report.mts";
+import { renderProgress } from "./spec-report.mts";
 
 const BULLETS = [
   { number: 4, blockedBy: [] },
@@ -10,12 +10,12 @@ const BULLETS = [
 
 test("renderProgress marks closed, dispatched, and pending slices in order", () => {
   const out = renderProgress({
-    branch: "agent/prd-3-stacked",
+    branch: "agent/spec-3-stacked",
     bullets: BULLETS,
     closed: new Set([4]),
     dispatched: 5,
   });
-  assert.match(out, /agent\/prd-3-stacked/);
+  assert.match(out, /agent\/spec-3-stacked/);
   assert.match(out, /- \[x\] #4$/m);
   assert.match(out, /- \[ \] #5 ◀ building$/m);
   assert.match(out, /- \[ \] #6$/m);
@@ -23,7 +23,7 @@ test("renderProgress marks closed, dispatched, and pending slices in order", () 
 
 test("renderProgress surfaces a deadlocked cycle rather than dropping it", () => {
   const out = renderProgress({
-    branch: "agent/prd-3-x",
+    branch: "agent/spec-3-x",
     bullets: [
       { number: 4, blockedBy: [5] },
       { number: 5, blockedBy: [4] },
