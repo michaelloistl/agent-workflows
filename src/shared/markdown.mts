@@ -1,5 +1,5 @@
 // Markdown section parsing shared by the agent-workflow hooks. Tracer-bullet and
-// PRD issue bodies use `## <heading>` sections (`## Parent`, `## Blocked by`); the
+// spec issue bodies use `## <heading>` sections (`## Parent`, `## Blocked by`); the
 // orchestrator and the `implement` blocked-by guard both need to read one section
 // without tripping on `#N` references elsewhere in the body.
 

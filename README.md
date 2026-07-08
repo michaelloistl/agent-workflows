@@ -7,17 +7,17 @@ repo- or domain-specific decision lives behind sandcastle hooks in the consuming
 You label an issue or PR (e.g. `agent:implement`); the matching reusable
 workflow checks out your repo, spins up its toolchain, runs Claude Code against the work, pushes the result, and reports back to your tracker — all without the central YAML knowing anything about your tracker, stack, or domain.
 
-The individual verbs work on any issue spec. The **PRD orchestrator**
-(`implement-prd`), however, expects its issues to be authored by
-[mattpocock/skills](https://github.com/mattpocock/skills) `/to-prd` and
-`/to-issues`: it parses the exact `## Parent` / `## Blocked by` body format those
-commands emit. See [Authoring PRD issues](#authoring-prd-issues) for the contract.
+The individual verbs work on any issue spec. The **spec orchestrator**
+(`implement-spec`), however, expects its issues to be authored by
+[mattpocock/skills](https://github.com/mattpocock/skills) `/to-spec` and
+`/to-tickets`: it parses the exact `## Parent` / `## Blocked by` body format those
+commands emit. See [Authoring spec issues](#authoring-spec-issues) for the contract.
 
 ## Contents
 
 - [How it works](#how-it-works)
 - [The workflows](#the-workflows)
-- [Authoring PRD issues](#authoring-prd-issues)
+- [Authoring spec issues](#authoring-spec-issues)
 - [Labels](#labels)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -73,7 +73,7 @@ no agent — it sequences a verb over a graph of issues).
 | **`implement-pr.yml`** | `agent:implement` on an open **PR** | reads the PR diff + review comments, makes the requested changes, commits | pushes (plain, never `--force`); posts threaded replies |
 | **`review-pr.yml`** | `agent:review-pr` on an open **PR** | read-only review of the PR | posts a GitHub review (inline comments + summary, advisory `COMMENT`) |
 | **`update-branch.yml`** | `agent:update-branch` on an open **PR** | merges the PR's base branch into the PR branch, resolving conflicts | pushes the merge; comments the outcome |
-| **`implement-prd.yml`** | `agent:implement-prd` on a PRD **issue**, plus PR-merge events | orchestrator: sequences `implement` across a PRD's tracer-bullets on a shared `agent/prd-…` branch, strictly sequentially | dispatches slices; opens the final PRD→default PR |
+| **`implement-spec.yml`** | `agent:implement-spec` on a spec **issue**, plus PR-merge events | orchestrator: sequences `implement` across a spec's tracer-bullets on a shared `agent/spec-…` branch, strictly sequentially | dispatches slices; opens the final spec→default PR |
 
 A few details worth knowing:
 
@@ -84,30 +84,31 @@ A few details worth knowing:
   against the PR head but load the **default branch's** tooling from a detached
   worktree — so a PR branch that predates the tooling still works. They gather
   their own PR context, so they have no `fetch-spec` hook.
-- **`implement-prd`** is an orchestrator, not a sixth verb: it triggers no agent,
-  only `gh`/graph work (cut the PRD branch, label the next tracer-bullet, open
-  PRs). It runs in two modes wired as two callers — `kickoff` (on the PRD-issue
-  label) and `advance` (on a tracer-bullet PR merging into the PRD branch). See
-  [`CONTEXT.md`](CONTEXT.md) and ADR-0003/0004 for the PRD model.
+- **`implement-spec`** is an orchestrator, not a sixth verb: it triggers no agent,
+  only `gh`/graph work (cut the spec branch, label the next tracer-bullet, open
+  PRs). It runs in two modes wired as two callers — `kickoff` (on the spec-issue
+  label) and `advance` (on a tracer-bullet PR merging into the spec branch). See
+  [`CONTEXT.md`](CONTEXT.md) and ADR-0003/0004 for the spec model.
 
-## Authoring PRD issues
+## Authoring spec issues
 
-The PRD orchestrator (`implement-prd`) is built to run on issues authored by
-[mattpocock/skills](https://github.com/mattpocock/skills) `/to-prd` and
-`/to-issues`. The intended end-to-end flow is:
+The spec orchestrator (`implement-spec`) is built to run on issues authored by
+[mattpocock/skills](https://github.com/mattpocock/skills) `/to-spec` and
+`/to-tickets`. The intended end-to-end flow is:
 
-1. **`/to-prd`** turns a request into a **PRD issue** (a problem/solution brief).
-2. **`/to-issues`** breaks that PRD into **tracer-bullet issues** — thin,
-   independently-buildable vertical slices, each linking back to the PRD.
-3. You apply **`agent:implement-prd`** to the PRD issue; the orchestrator builds
-   the tracer-bullets one at a time on a shared PRD branch and opens the final
-   PRD→default PR for review (see [The workflows](#the-workflows)).
+1. **`/to-spec`** turns a request into a **spec issue** (a problem/solution brief).
+2. **`/to-tickets`** breaks that spec into **tracer-bullet issues** — thin,
+   independently-buildable vertical slices, each linking back to the spec.
+3. You apply **`agent:implement-spec`** to the spec issue; the orchestrator builds
+   the tracer-bullets one at a time on a shared spec branch and opens the final
+   spec→default PR for review (see [The workflows](#the-workflows)).
 
 The issue **body format is a load-bearing contract** — discovery parses it
 structurally, not by title or label. If the headings drift, orchestration breaks.
 
-**PRD issue** — identified *structurally*, not by a `PRD:` title prefix or a `prd`
-label (`/to-prd` adds neither):
+**Spec issue** — identified *structurally*, not by a `spec:` title prefix or a `spec`
+label (`/to-spec` applies only the `ready-for-agent` triage label, which
+tracer-bullets carry too, so no label distinguishes a spec from its slices):
 
 - It has **no `## Parent` section** of its own.
 - One or more tracer-bullets reference it as their `## Parent`.
@@ -119,16 +120,16 @@ Users need to export any report as CSV. Today there's no way to get the data out
 (problem / solution prose — no `## Parent` section)
 ```
 
-**Tracer-bullet issue** — a slice of the PRD:
+**Tracer-bullet issue** — a slice of the spec:
 
-- A **`## Parent`** section containing the PRD's `#<number>` (the first `#N` in the
+- A **`## Parent`** section containing the spec's `#<number>` (the first `#N` in the
   section wins).
 - An optional **`## Blocked by`** section listing `#<number>` refs to other
   tracer-bullets it depends on (used to sequence the build in topological order,
   lowest issue number first).
 - Headings at **`##`** level.
 - A plain issue — **not** a native GitHub sub-issue or epic (the `implement`
-  shape guard refuses those; the PRD↔tracer-bullet link is textual).
+  shape guard refuses those; the spec↔tracer-bullet link is textual).
 
 ```markdown
 # Add a CSV serializer for report rows
@@ -157,10 +158,10 @@ to start a run; **state labels** are set and cleared only by the fleet.
 | `agent:implement` | open PR | `implement-pr` |
 | `agent:review-pr` | open PR | `review-pr` |
 | `agent:update-branch` | open PR | `update-branch` |
-| `agent:implement-prd` | PRD issue | `implement-prd` (kickoff) |
+| `agent:implement-spec` | spec issue | `implement-spec` (kickoff) |
 
-The PRD **advance** step needs no label — it fires automatically when a
-tracer-bullet PR merges into an `agent/prd-*` branch.
+The spec **advance** step needs no label — it fires automatically when a
+tracer-bullet PR merges into an `agent/spec-*` branch.
 
 **State labels** (managed by the `<verb>-status` hook; never set these by hand):
 
@@ -288,14 +289,14 @@ jobs:
 issue-triggered `implement` by the PR event) and needs `contents: write`.
 `update-branch` uses `agent:update-branch` and `contents: write`.
 
-### PRD orchestrator — `implement-prd`
+### Spec orchestrator — `implement-spec`
 
-The orchestrator needs **two** callers. Kickoff fires on the PRD-issue label and
+The orchestrator needs **two** callers. Kickoff fires on the spec-issue label and
 passes `mode: kickoff`:
 
 ```yaml
-# .github/workflows/agent-implement-prd-kickoff.yml
-name: Agent Implement PRD (kickoff)
+# .github/workflows/agent-implement-spec-kickoff.yml
+name: Agent Implement spec (kickoff)
 on:
   workflow_dispatch:
   issues:
@@ -306,20 +307,20 @@ permissions:
   pull-requests: write
 jobs:
   kickoff:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement-prd'
-    uses: michaelloistl/agent-workflows/.github/workflows/implement-prd.yml@main
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement-spec'
+    uses: michaelloistl/agent-workflows/.github/workflows/implement-spec.yml@main
     with:
       mode: kickoff
       git-author-email: agent@example.com
     secrets: inherit
 ```
 
-Advance fires when a tracer-bullet PR merges into a PRD branch and passes
+Advance fires when a tracer-bullet PR merges into a spec branch and passes
 `mode: advance` (no label, plain `pull_request` — it runs no PR-head code):
 
 ```yaml
-# .github/workflows/agent-implement-prd-advance.yml
-name: Agent Implement PRD (advance)
+# .github/workflows/agent-implement-spec-advance.yml
+name: Agent Implement spec (advance)
 on:
   pull_request:
     types: [closed]
@@ -329,12 +330,12 @@ permissions:
   pull-requests: write
 jobs:
   advance:
-    # Only a merged tracer-bullet PR into a PRD branch. The final PRD→default PR
+    # Only a merged tracer-bullet PR into a spec branch. The final spec→default PR
     # has base == default branch, so it does NOT match and does NOT re-trigger.
     if: >-
       github.event.pull_request.merged == true
-      && startsWith(github.event.pull_request.base.ref, 'agent/prd-')
-    uses: michaelloistl/agent-workflows/.github/workflows/implement-prd.yml@main
+      && startsWith(github.event.pull_request.base.ref, 'agent/spec-')
+    uses: michaelloistl/agent-workflows/.github/workflows/implement-spec.yml@main
     with:
       mode: advance
       git-author-email: agent@example.com
@@ -355,7 +356,7 @@ The five verbs share the same inputs:
 | `agent-model` | string | `""` | Claude model id for the agent run; empty uses the package's pinned default |
 | `node-version` | string | `""` | Node version (e.g. `"20"`, `"lts/*"`). When empty, falls back to the consuming repo's `.node-version` file |
 
-The `implement-prd` orchestrator is lighter (no build toolchain) and takes only:
+The `implement-spec` orchestrator is lighter (no build toolchain) and takes only:
 
 | Input | Type | Default | Notes |
 |---|---|---|---|
@@ -380,7 +381,7 @@ Pass with `secrets: inherit`.
 - **`.github/workflows/{explore,implement,implement-pr,review-pr,update-branch}.yml`**
   — the five reusable verbs (`on: workflow_call`). Tracker-agnostic; zero tracker
   I/O.
-- **`.github/workflows/implement-prd.yml`** — the reusable PRD orchestrator
+- **`.github/workflows/implement-spec.yml`** — the reusable spec orchestrator
   (kickoff + advance modes).
 - **`.github/workflows/agent-*.yml`** — this repo's own thin callers. It is its
   own first consumer (the dogfooding plumbing test), running the dispatcher
@@ -394,7 +395,7 @@ Pass with `secrets: inherit`.
 - **`docs/hook-contract.md`** — the interface every consuming repo implements.
 - **`CONTEXT.md`** — glossary. **`PLAN.md`** — build plan + rollout.
   **`docs/adr/`** — architecture decisions (0001 thin reusable workflows; 0002
-  toolchain generalization + feedback-loop boundary; 0003 PRD strictly
+  toolchain generalization + feedback-loop boundary; 0003 spec strictly
   sequential; 0004 no per-slice review).
 
 ## Local checks

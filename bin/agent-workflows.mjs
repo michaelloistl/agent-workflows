@@ -31,7 +31,7 @@ import { join, resolve } from "node:path";
 //   matches its name.
 // - The `run` hook (the agent run itself) is the `<dir>/<dir>.mts` entry;
 //   every other hook is `<dir>/<hook>.mts`. This generic rule also covers the
-//   implement-prd orchestrator's non-standard hooks (kickoff, advance).
+//   implement-spec orchestrator's non-standard hooks (kickoff, advance).
 export function resolveEntryRelPath(verb, hook) {
   const dir = verb === "review-pr" ? "review" : verb;
   const file = hook === "run" ? dir : hook;

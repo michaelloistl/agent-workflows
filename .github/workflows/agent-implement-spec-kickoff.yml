@@ -1,0 +1,24 @@
+name: Agent Implement spec (kickoff)
+
+# Thin caller: label a spec issue `agent:implement-spec` → run the reusable
+# `implement-spec` orchestrator in kickoff mode → it cuts the spec branch and
+# dispatches the first tracer-bullet. The advance side is a separate caller
+# (on PR-merge).
+on:
+  workflow_dispatch:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  kickoff:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement-spec'
+    uses: michaelloistl/agent-workflows/.github/workflows/implement-spec.yml@main
+    with:
+      mode: kickoff
+      git-author-email: michael.loistl@gmail.com
+    secrets: inherit

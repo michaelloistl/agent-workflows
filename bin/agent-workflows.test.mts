@@ -26,14 +26,14 @@ test("resolveEntryRelPath maps non-run hooks to <dir>/<hook>.mts", () => {
   );
 });
 
-test("resolveEntryRelPath covers the implement-prd orchestrator's non-standard hooks", () => {
+test("resolveEntryRelPath covers the implement-spec orchestrator's non-standard hooks", () => {
   assert.equal(
-    resolveEntryRelPath("implement-prd", "kickoff"),
-    join("implement-prd", "kickoff.mts"),
+    resolveEntryRelPath("implement-spec", "kickoff"),
+    join("implement-spec", "kickoff.mts"),
   );
   assert.equal(
-    resolveEntryRelPath("implement-prd", "advance"),
-    join("implement-prd", "advance.mts"),
+    resolveEntryRelPath("implement-spec", "advance"),
+    join("implement-spec", "advance.mts"),
   );
 });
 

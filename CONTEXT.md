@@ -30,7 +30,7 @@ _Avoid_: wrapper, stub
 One of the five agent actions: `explore`, `implement`, `implement-pr`, `review-pr`, `update-branch`.
 
 **Orchestrator**:
-A workflow that sequences a *verb* over a graph of issues but runs **no agent of its own** — pure tracker/graph work (`gh` reads, label and state changes, branch and PR creation). `implement-prd` is the first orchestrator: it drives `implement` across a PRD's tracer-bullets. It is **not** a sixth verb (it triggers no agent action) and does **not** follow the 5-hook contract. Like the verbs, its tracker I/O stays behind sandcastle hooks; the central YAML is a lightweight shell (node + `gh`, no postgres/redis/ruby).
+A workflow that sequences a *verb* over a graph of issues but runs **no agent of its own** — pure tracker/graph work (`gh` reads, label and state changes, branch and PR creation). `implement-spec` is the first orchestrator: it drives `implement` across a spec's tracer-bullets. It is **not** a sixth verb (it triggers no agent action) and does **not** follow the 5-hook contract. Like the verbs, its tracker I/O stays behind sandcastle hooks; the central YAML is a lightweight shell (node + `gh`, no postgres/redis/ruby).
 _Avoid_: meta-verb, super-verb, sixth verb
 
 **Sandcastle**:
@@ -43,35 +43,35 @@ A sandcastle command the central workflow calls at a fixed point in a verb's seq
 The fixed set of hook command names and their expected behaviour that the central workflow depends on. Stable across all consuming repos; only the implementations differ.
 
 **Guard**:
-A preflight check run before the agent (PRD, shape, blocked-by, existing-PR for GitHub repos). Lives in the `<verb>-guards` hook.
+A preflight check run before the agent (spec, shape, blocked-by, existing-PR for GitHub repos). Lives in the `<verb>-guards` hook.
 
 **Refusal**:
 A guard declining to run. The guard posts its own explanation and clears the trigger label, then signals non-zero so the workflow skips the rest. A refusal is **not** a failure.
 _Avoid_: rejection, error, block
 
-### PRD orchestration
+### Spec orchestration
 
-**PRD branch**:
-A single long-lived `agent/prd-<n>-…` branch cut once from the default branch by the `implement-prd` orchestrator. It is the **base** every tracer-bullet of that PRD branches from and merges back into. When the last tracer-bullet lands, the PRD branch holds the whole feature and one PR `PRD branch → default` goes up for final human review.
+**Spec branch**:
+A single long-lived `agent/spec-<n>-…` branch cut once from the default branch by the `implement-spec` orchestrator. It is the **base** every tracer-bullet of that spec branches from and merges back into. When the last tracer-bullet lands, the spec branch holds the whole feature and one PR `spec branch → default` goes up for final human review.
 _Avoid_: feature branch, epic branch, integration branch
 
 **Tracer-bullet**:
-A thin, independently-buildable vertical slice of a PRD — a standalone issue carrying a textual `## Parent` reference to the PRD and a `## Blocked by` section. **Not** a GitHub sub-issue (the `implement` issue-shape guard refuses sub-issues and epics), so the PRD↔tracer-bullet link is textual, not native.
+A thin, independently-buildable vertical slice of a spec — a standalone issue carrying a textual `## Parent` reference to the spec and a `## Blocked by` section. **Not** a GitHub sub-issue (the `implement` issue-shape guard refuses sub-issues and epics), so the spec↔tracer-bullet link is textual, not native.
 
 **Stacked**:
-The topology where each tracer-bullet branches from the current PRD-branch HEAD and its PR targets the PRD branch (not the default branch) — so each slice sees the accumulated work of the ones before it.
+The topology where each tracer-bullet branches from the current spec-branch HEAD and its PR targets the spec branch (not the default branch) — so each slice sees the accumulated work of the ones before it.
 
 **Strictly sequential**:
-The orchestrator runs **one tracer-bullet at a time** in topological (dependency) order, never a parallel wave. Because nothing else touches the PRD branch while a slice is in flight, every merge back into the PRD branch is conflict-free by construction — the deliberate trade of wall-clock speed for zero agent-generated merge conflicts.
+The orchestrator runs **one tracer-bullet at a time** in topological (dependency) order, never a parallel wave. Because nothing else touches the spec branch while a slice is in flight, every merge back into the spec branch is conflict-free by construction — the deliberate trade of wall-clock speed for zero agent-generated merge conflicts.
 
 **Kickoff**:
-The orchestrator entry point fired by labelling the PRD issue: create the PRD branch, then label the topologically-first tracer-bullet `agent:implement`. The PRD is identified **structurally** — it has tracer-bullets and no `## Parent` of its own — not by a title prefix or a `prd` label, since `/to-prd` adds neither.
+The orchestrator entry point fired by labelling the spec issue: create the spec branch, then label the topologically-first tracer-bullet `agent:implement`. The spec is identified **structurally** — it has tracer-bullets and no `## Parent` of its own — not by a title prefix or a `spec` label. `/to-spec` adds only a `ready-for-agent` triage label — which tracer-bullets carry too — so no label distinguishes a spec from its slices.
 
 **Advance**:
-The orchestrator entry point fired when a tracer-bullet PR merges into a PRD branch: close that tracer-bullet issue (merging into a non-default base does **not** auto-close it), then label the next single tracer-bullet in topological order (ties broken deterministically) — and when the last one closes, open the final PRD→default PR. Posts a progress comment on the PRD issue so it reads as the dashboard.
+The orchestrator entry point fired when a tracer-bullet PR merges into a spec branch: close that tracer-bullet issue (merging into a non-default base does **not** auto-close it), then label the next single tracer-bullet in topological order (ties broken deterministically) — and when the last one closes, open the final spec→default PR. Posts a progress comment on the spec issue so it reads as the dashboard.
 
 **Slice merge**:
-Under a PRD a tracer-bullet skips per-slice review (ADR-0004): `implement`'s finalize opens a ready PR to the PRD branch (detected via `base.ref ~ agent/prd-*`) and merges it straight in, which fires advance. The per-slice quality gate is the implement agent's own test loop; the single human gate is the final PRD→default PR. (An earlier design ran a per-slice `review-pr`→`implement-pr` loop here — dropped because `review-pr` emits only advisory `COMMENT`s, with no approve/request-changes verdict to drive on; see ADR-0004.)
+Under a spec a tracer-bullet skips per-slice review (ADR-0004): `implement`'s finalize opens a ready PR to the spec branch (detected via `base.ref ~ agent/spec-*`) and merges it straight in, which fires advance. The per-slice quality gate is the implement agent's own test loop; the single human gate is the final spec→default PR. (An earlier design ran a per-slice `review-pr`→`implement-pr` loop here — dropped because `review-pr` emits only advisory `COMMENT`s, with no approve/request-changes verdict to drive on; see ADR-0004.)
 
 ### Tracker
 

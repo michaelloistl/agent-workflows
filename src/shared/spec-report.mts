@@ -1,8 +1,8 @@
-// The PRD progress comment — the dashboard kickoff and advance post on the PRD
+// The spec progress comment — the dashboard kickoff and advance post on the spec
 // issue. Pure: given the tracer-bullets, which are closed, and which (if any) was
 // just dispatched, render the markdown. No `gh`.
 
-import { topologicalOrder, type TracerBullet } from "./prd-graph.mts";
+import { topologicalOrder, type TracerBullet } from "./spec-graph.mts";
 
 export interface ProgressView {
   branch: string;
@@ -25,7 +25,7 @@ export function renderProgress({ branch, bullets, closed, dispatched }: Progress
     .filter((b) => !inOrder.has(b.number))
     .map((b) => `- [ ] #${b.number} ⚠ blocked (dependency cycle)`);
   return [
-    `**PRD orchestration** on \`${branch}\` — strictly sequential, one slice at a time.`,
+    `**spec orchestration** on \`${branch}\` — strictly sequential, one slice at a time.`,
     "",
     ...lines,
     ...deadlocked,
