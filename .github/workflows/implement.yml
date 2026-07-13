@@ -110,6 +110,10 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
+          # DB name must match the one in `database-url` (default ends in `/test`).
+          # Without this, `db:prepare` connects to a non-existent DB and fails
+          # before it can create it.
+          POSTGRES_DB: test
         ports:
           - 5432:5432
         options: >-
