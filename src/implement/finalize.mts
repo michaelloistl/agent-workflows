@@ -16,13 +16,8 @@
 import { required, capture } from "../shared/process.mts";
 import { setState, comment } from "../shared/github.mts";
 import { isSpecBranch } from "../shared/spec-context.mts";
-import {
-  checkVerdict,
-  parseChecks,
-  pollAction,
-  type CheckRun,
-  type PollPolicy,
-} from "../shared/checks.mts";
+import { parseChecks, type CheckRun } from "../shared/checks.mts";
+import { awaitChecks } from "../shared/poll-checks.mts";
 
 const number = required("ISSUE_NUMBER");
 const title = required("ISSUE_TITLE");
@@ -44,11 +39,9 @@ if (underSpec) {
     console.error(`Issue #${number}: could not parse a PR number from ${url}.`);
     process.exit(1);
   }
-  // Gate the merge on the tracer PR's own CI. Poll rather than `gh pr merge
-  // --auto`, which would force branch-protection + required-checks config onto
-  // every consuming repo — the workflow must not demand that infrastructure.
-  const action = await awaitChecks(pr);
-  if (action === "merge") {
+  // Gate the merge on the tracer PR's own CI (issue #44, fix 1).
+  const passed = await awaitChecks(() => fetchChecks(pr));
+  if (passed) {
     // Merge the slice straight into the spec branch (strictly sequential, so it's
     // always clean). The merge fires advance, which closes this issue and
     // dispatches the next slice — or opens the final PR.
@@ -81,34 +74,6 @@ if (underSpec) {
   );
 }
 
-// Poll the PR's check-runs until they resolve to a merge/abort decision. Interval,
-// overall timeout, and the no-checks grace period are env-overridable (seconds) so
-// a consumer can tune them to its CI without editing the package.
-async function awaitChecks(pr: string): Promise<"merge" | "abort"> {
-  const policy: PollPolicy = {
-    timeoutMs: envSeconds("CHECKS_TIMEOUT_SECONDS", 1200) * 1000,
-    // Generous by default: `gh pr checks` can't tell "no CI on this base" from "CI
-    // not registered yet", so the grace window is the only thing stopping a merge
-    // before a slow-to-queue check even appears. Long enough that a registered
-    // check reliably shows up first; env-overridable for repos with no PR CI that
-    // want the merge sooner.
-    graceMs: envSeconds("CHECKS_GRACE_SECONDS", 180) * 1000,
-  };
-  const intervalMs = envSeconds("CHECKS_INTERVAL_SECONDS", 15) * 1000;
-  // Monotonic clock: elapsed time must not be perturbed by a wall-clock (NTP/DST)
-  // jump across the poll window.
-  const start = performance.now();
-  for (;;) {
-    const action = pollAction(
-      checkVerdict(fetchChecks(pr)),
-      performance.now() - start,
-      policy,
-    );
-    if (action !== "wait") return action;
-    await sleep(intervalMs);
-  }
-}
-
 // `gh pr checks` exits non-zero when checks are failing, pending, or absent — but
 // still prints the JSON we asked for (empty when there are no checks). Tolerate the
 // exit and parse whatever landed on stdout.
@@ -129,15 +94,4 @@ function tryDraft(pr: string): void {
   } catch {
     /* tolerate: leaving the PR ready with red checks is still a safe human gate */
   }
-}
-
-function envSeconds(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

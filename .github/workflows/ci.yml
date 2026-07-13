@@ -1,0 +1,32 @@
+# The package's OWN CI: typecheck + unit tests on every PR and on pushes to the
+# default branch. The other workflows here are the reusable *agent* workflows this
+# package ships; none of them run this repo's own test suite, so a PR could land
+# red. This is that gate — and it is what fixes #44's fixes 1/2 poll for on their
+# own PRs.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# One in-flight run per ref: a new push cancels the superseded run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      - run: yarn typecheck
+      - run: yarn test
