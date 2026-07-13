@@ -11,6 +11,8 @@ import { tracerBullets, nextSlice, isComplete } from "../shared/spec-graph.mts";
 import { renderProgress } from "../shared/spec-report.mts";
 import { listIssues } from "../shared/spec-tracker.mts";
 import { specNumberFromBranch, issueNumberFromBranch } from "../shared/spec-context.mts";
+import { parseCommitCheckRuns, type CheckRun } from "../shared/checks.mts";
+import { awaitChecks } from "../shared/poll-checks.mts";
 
 const baseRef = required("BASE_REF");
 const headRef = required("HEAD_REF");
@@ -40,6 +42,22 @@ if (merged !== null) closed.add(merged); // guard against issue-list lag
 // 3. Dispatch the next single slice, or open the final PR when complete.
 const next = nextSlice(bullets, closed);
 if (next !== null) {
+  // Gate on the spec branch's OWN CI before begetting the next tracer (issue #44,
+  // fix 2). The tracer just merged into `baseRef`; a red tip must not spawn the
+  // next slice stacked on top of the breakage. Belt-and-braces behind fix 1's
+  // per-PR gate: this catches consuming-repo checks that only run on push to the
+  // spec branch (full suite, rubocop, …) and breakage that predates fix 1. If CI
+  // is red (or never goes green in time) we do NOT dispatch — halt with a comment
+  // on the spec issue and exit non-zero so a human decides (fix the branch or roll
+  // back the last merge).
+  const passed = await awaitChecks(() => fetchSpecChecks(baseRef));
+  if (!passed) {
+    comment("issue", String(spec), haltMessage(baseRef, next));
+    console.error(
+      `spec #${spec}: spec-branch \`${baseRef}\` CI did not pass — halting; #${next} NOT dispatched.`,
+    );
+    process.exit(1);
+  }
   addLabel("issue", String(next), "agent:implement");
 } else if (isComplete(bullets, closed)) {
   openFinalPr(spec, baseRef);
@@ -103,4 +121,40 @@ function openFinalPr(specNumber: number, specBranch: string): void {
     "--body",
     body,
   ]);
+}
+
+// Read the check-runs on the spec branch's tip. The branch has no open PR (the
+// final PR opens only once every slice is done), so `gh pr checks` doesn't apply —
+// resolve the branch to its tip SHA, then read that commit's check-runs over the
+// REST API. Two calls because a branch name can contain slashes (`agent/spec-…`):
+// `git/ref/heads/<branch>` takes the full multi-segment ref, but the SHA it
+// returns is the slash-free key `commits/{ref}/check-runs` needs. Tolerant of a gh
+// error the same way finalize tolerates `gh pr checks`: an empty parse → verdict
+// "none", which the poll loop's grace window resolves rather than hanging.
+function fetchSpecChecks(branch: string): CheckRun[] {
+  try {
+    const sha = capture("gh", [
+      "api",
+      `repos/{owner}/{repo}/git/ref/heads/${branch}`,
+      "--jq",
+      ".object.sha",
+    ]).trim();
+    if (!sha) return [];
+    return parseCommitCheckRuns(
+      capture("gh", ["api", `repos/{owner}/{repo}/commits/${sha}/check-runs`]),
+    );
+  } catch (err) {
+    return parseCommitCheckRuns((err as { stdout?: string }).stdout ?? "");
+  }
+}
+
+function haltMessage(branch: string, blocked: number): string {
+  const runUrl = process.env.RUN_URL;
+  const tail = runUrl ? `\n\nSee the run: ${runUrl}` : "";
+  return (
+    `⛔ CI on the spec branch \`${branch}\` did not pass at its tip after the last ` +
+    `tracer-bullet merged (a check failed, or none went green before the timeout), ` +
+    `so the next slice (#${blocked}) was **not** dispatched. Fix the spec branch — ` +
+    `or roll back the last merge — then re-run to continue.${tail}`
+  );
 }

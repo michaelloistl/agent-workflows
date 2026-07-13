@@ -1,9 +1,11 @@
-// CI check-run aggregation for the `implement-finalize` merge gate (issue #44,
-// fix 1). Under a spec a tracer-bullet merges straight into the spec branch with
-// no per-slice human review (ADR-0004), so gating that merge on the PR's own green
-// CI is the only automated stop keeping a red slice from landing and cascading
-// onto the next tracer-bullet. These are the pure decisions behind that gate; the
-// polling loop and all `gh` I/O live in the finalize entrypoint.
+// CI check-run aggregation for the two CI gates that keep a red slice from
+// cascading onto the next tracer-bullet (issue #44). Under a spec a tracer merges
+// straight into the spec branch with no per-slice human review (ADR-0004), so:
+//   fix 1 — `implement-finalize` gates the tracer-PR merge on that PR's own CI.
+//   fix 2 — `implement-spec-advance` gates dispatching the next slice on the spec
+//           branch tip's CI after the merge.
+// These are the pure decisions behind both gates; the shared polling loop lives in
+// `poll-checks.mts` and all `gh` I/O lives in the entrypoints.
 
 // gh's `bucket` field: the coarse state of one check-run (`gh pr checks --json`).
 export type CheckBucket = "pass" | "fail" | "pending" | "skipping" | "cancel";
@@ -39,6 +41,58 @@ export function parseChecks(json: string): CheckRun[] {
   try {
     const data: unknown = JSON.parse(text);
     return Array.isArray(data) ? (data as CheckRun[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+// A raw check-run as returned by the REST API (`gh api …/commits/{ref}/check-runs`).
+// Unlike `gh pr checks` — which pre-buckets — the REST endpoint reports GitHub's
+// native (status, conclusion) pair, so fix 2 maps it to a bucket itself.
+export interface RawCheckRun {
+  readonly name?: string;
+  readonly status?: string; // queued | in_progress | completed
+  readonly conclusion?: string | null; // success | failure | skipped | … | null
+}
+
+// Collapse one REST check-run's (status, conclusion) into a bucket. Anything not
+// yet `completed` is pending; a completed run is a pass only on `success`. Non-
+// failing terminal outcomes (skipped/neutral/stale — the last is a superseded run)
+// bucket as "skipping" so they don't block; every other completed conclusion
+// (failure/timed_out/action_required, or a completed run with no conclusion) is a
+// hard failure — a gate must never read "not success" as "safe to proceed".
+export function bucketOfRun(run: RawCheckRun): CheckBucket {
+  if (run.status !== "completed") return "pending";
+  switch (run.conclusion) {
+    case "success":
+      return "pass";
+    case "skipped":
+    case "neutral":
+    case "stale":
+      return "skipping";
+    case "cancelled":
+      return "cancel";
+    default:
+      return "fail";
+  }
+}
+
+// Parse the JSON `gh api …/commits/{ref}/check-runs` prints (`{check_runs: […]}`)
+// into the bucketed CheckRun[] that `checkVerdict` consumes. Tolerant by the same
+// rule as `parseChecks`: a blank, non-object, or missing/`non-array` `check_runs`
+// collapses to "no runs" → verdict "none" rather than throwing.
+export function parseCommitCheckRuns(json: string): CheckRun[] {
+  const text = json.trim();
+  if (!text) return [];
+  try {
+    const data: unknown = JSON.parse(text);
+    const runs = (data as { check_runs?: unknown }).check_runs;
+    if (!Array.isArray(runs)) return [];
+    return (runs as RawCheckRun[]).map((r) => ({
+      name: r.name,
+      state: r.status,
+      bucket: bucketOfRun(r),
+    }));
   } catch {
     return [];
   }
