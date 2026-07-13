@@ -248,6 +248,30 @@ jobs:
           AGENT_MODEL: ${{ inputs.agent-model }}
         run: yarn sandcastle:implement
 
+      # Verify Rails boots against a fresh empty DB AFTER the agent's changes.
+      # The earlier `Prepare test database` step ran against pre-agent code, so
+      # any class-load-time DB query the agent introduces (e.g. via a DSL like
+      # `has_events`, `ActiveAdmin.register`, or a DB-touching initializer) would
+      # slip through and only surface on the NEXT tracer-bullet's `Prepare test
+      # database` step — after the buggy slice was already merged into the spec
+      # branch. This step catches it in the current run instead. See issue #44.
+      # Drops the DB out-of-band via psql so Rails env-load isn't required to
+      # reset state (the very thing we're testing).
+      - name: Verify fresh-DB boot on agent output
+        if: inputs.enable-ruby
+        env:
+          RAILS_ENV: test
+          DATABASE_URL: ${{ inputs.database-url }}
+          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: |
+          psql -d postgres -c 'DROP DATABASE IF EXISTS test'
+          psql -d postgres -c 'CREATE DATABASE test'
+          bundle exec rails db:prepare
+
       - name: Push branch and finalize
         if: success()
         env:
