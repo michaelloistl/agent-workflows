@@ -46,13 +46,53 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
   return { path: join(srcDir, rel), source: "packaged" };
 }
 
+// Classify the raw argv tail into an invocation kind. Two shapes are supported:
+//
+//   agent-workflows <verb>          → "verb": run the verb's whole sequence via
+//                                     the sequencer (issue #49).
+//   agent-workflows <verb> <hook>   → "hook": run one hook (the original form,
+//                                     unchanged — this is what consuming repos'
+//                                     `sandcastle:<verb>-<hook>` scripts call).
+//
+// Exported so the top-level dispatch is testable without spawning a child.
+export function classifyInvocation(args) {
+  const [verb, hook, ...rest] = args;
+  if (!verb) return { kind: "usage" };
+  if (!hook) return { kind: "verb", verb };
+  return { kind: "hook", verb, hook, rest };
+}
+
+// Run a whole verb through the sequencer: spawn its bridge entrypoint under tsx.
+// The bridge (src/sequencer/run.mts) re-invokes THIS bin once per step in the
+// verb's plan, so every step still goes through the unchanged per-hook path.
+function runVerb(verb) {
+  const runner = fileURLToPath(new URL("../src/sequencer/run.mts", import.meta.url));
+  const require = createRequire(import.meta.url);
+  const tsxCli = require.resolve("tsx/cli");
+
+  const child = spawnSync(process.execPath, [tsxCli, runner, verb], {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (child.error) {
+    console.error(`agent-workflows: failed to run sequencer for "${verb}":`, child.error);
+    process.exit(1);
+  }
+  process.exit(child.status ?? 1);
+}
+
 function main() {
-  const [verb, hook, ...rest] = process.argv.slice(2);
-  if (!verb || !hook) {
-    console.error("usage: agent-workflows <verb> <hook> [args...]");
+  const invocation = classifyInvocation(process.argv.slice(2));
+  if (invocation.kind === "usage") {
+    console.error("usage: agent-workflows <verb> [hook] [args...]");
     process.exit(2);
   }
+  if (invocation.kind === "verb") {
+    runVerb(invocation.verb);
+    return;
+  }
 
+  const { verb, hook, rest } = invocation;
   const srcDir = fileURLToPath(new URL("../src", import.meta.url));
   const { path: entry } = resolveEntry(verb, hook, {
     cwd: process.cwd(),

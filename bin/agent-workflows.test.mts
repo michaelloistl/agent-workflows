@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
-import { resolveEntryRelPath, resolveEntry } from "./agent-workflows.mjs";
+import { resolveEntryRelPath, resolveEntry, classifyInvocation } from "./agent-workflows.mjs";
 
 test("resolveEntryRelPath maps the run hook to the verb's own entry", () => {
   assert.equal(resolveEntryRelPath("implement", "run"), join("implement", "implement.mts"));
@@ -61,6 +61,29 @@ test("resolveEntry prefers a consumer override under .sandcastle/", () => {
   assert.equal(checked, expectedOverride, "checks the override path first");
   assert.equal(result.source, "override");
   assert.equal(result.path, expectedOverride);
+});
+
+test("classifyInvocation treats a lone verb as a whole-verb sequencer run", () => {
+  assert.deepEqual(classifyInvocation(["explore"]), { kind: "verb", verb: "explore" });
+});
+
+test("classifyInvocation treats verb + hook as the unchanged per-hook run", () => {
+  assert.deepEqual(classifyInvocation(["explore", "run"]), {
+    kind: "hook",
+    verb: "explore",
+    hook: "run",
+    rest: [],
+  });
+  assert.deepEqual(classifyInvocation(["explore", "status", "in-progress"]), {
+    kind: "hook",
+    verb: "explore",
+    hook: "status",
+    rest: ["in-progress"],
+  });
+});
+
+test("classifyInvocation reports usage when no verb is given", () => {
+  assert.deepEqual(classifyInvocation([]), { kind: "usage" });
 });
 
 test("resolveEntry falls back to the packaged src/ entry when no override exists", () => {
