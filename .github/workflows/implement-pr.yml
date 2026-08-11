@@ -44,6 +44,10 @@ on:
       agent-model:
         type: string
         default: ""
+      base-branch:
+        type: string
+        default: ""
+        description: Per-run override for the branch this verb bases on / targets. When empty, the config file's baseBranch (if set) then the repository default branch is used (issue #53).
       node-version:
         type: string
         default: ""
@@ -151,12 +155,20 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
 
-      - name: Set up default-branch tooling worktree
+      - name: Set up base-branch tooling worktree
         env:
+          BASE_BRANCH: ${{ inputs.base-branch }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           echo "TOOLING_DIR=$RUNNER_TEMP/agent-tooling" >> "$GITHUB_ENV"
-          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          # Base branch precedence (issue #53): the per-run override, then the config
+          # file's baseBranch (read with jq — the tooling is not installed yet), then
+          # the repository default. The tooling worktree tracks the base branch, so a
+          # repo whose integration branch is `develop` loads develop's tooling.
+          base="$BASE_BRANCH"
+          if [ -z "$base" ]; then base="$(jq -r '.baseBranch // empty' .sandcastle/agent-workflows/config.json 2>/dev/null || true)"; fi
+          if [ -z "$base" ]; then base="$DEFAULT_BRANCH"; fi
+          git fetch --no-tags origin "$base"
           git worktree add --detach "$RUNNER_TEMP/agent-tooling" FETCH_HEAD
 
       - name: Install system packages

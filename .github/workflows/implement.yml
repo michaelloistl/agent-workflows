@@ -47,6 +47,10 @@ on:
       agent-model:
         type: string
         default: ""
+      base-branch:
+        type: string
+        default: ""
+        description: Per-run override for the branch this verb bases on / targets. When empty, the config file's baseBranch (if set) then the repository default branch is used (issue #53).
       node-version:
         type: string
         default: ""
@@ -223,6 +227,9 @@ jobs:
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
           AGENT_MODEL: ${{ inputs.agent-model }}
           ENABLE_RUBY: ${{ inputs.enable-ruby }}
+          # Base branch precedence (issue #53): BASE_BRANCH (per-run override) →
+          # the config file's baseBranch → DEFAULT_BRANCH (the repository default).
+          BASE_BRANCH: ${{ inputs.base-branch }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: yarn sandcastle:implement-sequence
 
