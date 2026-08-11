@@ -19,6 +19,8 @@
     "sandcastle:explore-fetch-spec": "node bin/agent-workflows.mjs explore fetch-spec",
     "sandcastle:explore-status": "node bin/agent-workflows.mjs explore status",
     "sandcastle:explore-finalize": "node bin/agent-workflows.mjs explore finalize",
+    "sandcastle:implement-sequence": "node bin/agent-workflows.mjs implement",
+    "sandcastle:implement-guards-sequence": "node bin/agent-workflows.mjs implement --guards-only",
     "sandcastle:implement": "node bin/agent-workflows.mjs implement run",
     "sandcastle:implement-guards": "node bin/agent-workflows.mjs implement guards",
     "sandcastle:implement-fetch-spec": "node bin/agent-workflows.mjs implement fetch-spec",
