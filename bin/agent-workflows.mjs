@@ -6,10 +6,12 @@
 //   "sandcastle:implement-guards": "agent-workflows implement guards"
 //   "sandcastle:implement":        "agent-workflows implement run"
 //
-// and the central reusable workflow invokes the PR-verb agent run by absolute
-// path into the tooling checkout:
+// and the central reusable workflow invokes the PR-verb sequence by absolute
+// path into the tooling checkout, resolved to the node_modules symlink (a
+// consuming repo) or to this file (the central repo, which never installs
+// itself):
 //
-//   "$TOOLING_DIR/node_modules/.bin/agent-workflows" review-pr run   # cwd = PR head
+//   "$AGENT_WORKFLOWS_BIN" review-pr   # cwd = PR head
 //
 // It maps (verb, hook) to an entrypoint file, resolves it override-first (a
 // consumer's local .sandcastle/agent-workflows/ copy wins over the packaged

@@ -73,6 +73,46 @@ export function formatPreview(plan: SpecPlan): string {
   return lines.join("\n");
 }
 
+// ── Cutting the spec branch ─────────────────────────────────────────────────────
+//
+// One git command with its working directory, so the argv AND the cwd are asserted
+// rather than assumed. The cwd is the point: every git command the loop issues must
+// run in the RUN'S OWN WORKTREE, never in the checkout the developer is sitting in.
+// A cut issued in the ambient cwd silently moves the developer's HEAD onto the spec
+// branch — and worse, git then refuses to check that branch out in the worktree
+// where the slices are actually built, because a branch cannot be checked out twice.
+export interface GitCommand {
+  readonly file: "git";
+  readonly args: readonly string[];
+  // Always the worktree path. Explicit (never optional) so a caller cannot omit it
+  // and fall back to the ambient process cwd, which is the bug this shape prevents.
+  readonly cwd: string;
+}
+
+// The commands that cut the spec branch off the base and publish it — the same cut
+// the unattended kickoff does, so each slice's fetch-spec resolves it as the base to
+// stack on. With a base: fetch it, branch off `origin/<base>`, push with upstream.
+// Without one (no resolvable default): branch off the worktree's current HEAD, which
+// is already detached at the base, and push.
+export function specBranchCutCommands(o: {
+  specBranch: string;
+  base: string;
+  tree: string;
+}): GitCommand[] {
+  const at = (args: string[]): GitCommand => ({ file: "git", args, cwd: o.tree });
+  if (!o.base) {
+    return [
+      at(["checkout", "-B", o.specBranch]),
+      at(["push", "-u", "origin", o.specBranch]),
+    ];
+  }
+  return [
+    at(["fetch", "origin", o.base]),
+    at(["checkout", "-B", o.specBranch, `origin/${o.base}`]),
+    at(["push", "-u", "origin", o.specBranch]),
+  ];
+}
+
 // A slice PR's merged state as read back from GitHub (`gh pr list --json
 // number,state,mergedAt,baseRefName`). The loop reads this AFTER the slice's
 // implement run merged its PR, to prove the slice actually landed before advancing
@@ -137,6 +177,20 @@ export function mergeHaltReason(
   );
 }
 
+// Why the run halts when a slice's sequence REFUSED rather than ran. A refusal exits
+// 0 (CI must stay green on one), so without the outcome the loop saw a successful
+// sequence, found no merged PR, and reported the merge as unconfirmed — blaming the
+// last step for a decision taken at the first. Naming the refusing step points at the
+// thing to fix; a refusal is deliberately not a failure, so nothing is `agent:blocked`.
+export function sliceRefusedHaltReason(o: { slice: number; step: string }): string {
+  const where = o.step ? `at \`${o.step}\`` : "at one of its steps";
+  return (
+    `⛔ slice #${o.slice}: the implement sequence refused ${where} and built nothing — ` +
+    `a guard declined to run it (this is a refusal, not a failure). Its reason is above. ` +
+    `Halting; the next slice is NOT built.`
+  );
+}
+
 // One line reporting an action a real run would take but a dry run suppresses
 // (issue #59): "reporting each suppressed action". The driver supplies the specific
 // action text (e.g. "merge PR #12 into agent/spec-3-…").
@@ -157,17 +211,23 @@ export function formatSliceHeader(o: {
 
 // How one slice ended, for its footer: it landed, it built but the merge was
 // suppressed (dry run), or it only built (a halt before the merge).
-export type SliceOutcome = "merged" | "would-merge" | "built";
+// `refused` is distinct from `built`: a refused sequence produced NOTHING, so saying
+// "built (not merged)" repeats — one line lower — the same misattribution the refusal
+// halt reason exists to correct.
+export type SliceOutcome = "merged" | "would-merge" | "built" | "refused";
+
+// How each outcome reads in the footer. A map rather than a ternary cascade, so a new
+// outcome is one entry and the compiler names the case if one is forgotten.
+const SLICE_FOOTER: Record<SliceOutcome, string> = {
+  merged: "merged into the spec branch",
+  "would-merge": "built — merge suppressed (dry run)",
+  built: "built (not merged)",
+  refused: "refused — nothing was built",
+};
 
 // The footer closing a slice's frame.
 export function formatSliceFooter(o: { slice: number; outcome: SliceOutcome }): string {
-  const tail =
-    o.outcome === "merged"
-      ? "merged into the spec branch"
-      : o.outcome === "would-merge"
-        ? "built — merge suppressed (dry run)"
-        : "built (not merged)";
-  return `└─ slice #${o.slice}: ${tail}`;
+  return `└─ slice #${o.slice}: ${SLICE_FOOTER[o.outcome]}`;
 }
 
 // ── Checkpoints, resume, and graceful stop (issue #60) ──────────────────────────

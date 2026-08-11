@@ -36,7 +36,8 @@ import {
 } from "./plan.mts";
 import { acquireLock, lockPath, releaseLock } from "./lock.mts";
 import { resolveConfig } from "../shared/config.mts";
-import { IN_PROGRESS_LABEL } from "../shared/github.mts";
+import { IN_PROGRESS_LABEL, resolveRepoSlug } from "../shared/github.mts";
+import { parseSequenceState, type SequenceState } from "./sequence-state.mts";
 
 // The verbs delivered for attended runs. `explore` (read-only) came first; issue
 // #57 adds `implement`, which builds an issue end to end on the developer's machine
@@ -251,15 +252,17 @@ function finish(outcome: LocalOutcome, finalized: boolean, code: number): never 
   process.exit(code);
 }
 
-// Read the branch/base the first slice mirrored to the state file, so the confirmed
-// finalize slice threads the exact values the unattended tail would have seen.
-function readState(path: string): { branch: string; base: string } {
-  const out: Record<string, string> = {};
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    const eq = line.indexOf("=");
-    if (eq !== -1) out[line.slice(0, eq)] = line.slice(eq + 1);
+// What the sequence reported back: its outcome (a refusal is invisible in the exit
+// code) and the branch/base it resolved, which the confirmed finalize slice threads
+// so a local finalize lands exactly as the unattended tail would. An absent or
+// unreadable file is "nothing reported" — never a refusal, so a missing file can only
+// leave behaviour as it was.
+function readState(path: string): SequenceState {
+  try {
+    return parseSequenceState(readFileSync(path, "utf8"));
+  } catch {
+    return {};
   }
-  return { branch: out.branch ?? "", base: out.base ?? "" };
 }
 
 // A single-line yes/no prompt read from the terminal. `bash`'s `read` reads the
@@ -316,10 +319,21 @@ const runEnv: Record<string, string> = {
   COMMENT_FILE: commentFile,
   ANNOUNCE_REFUSALS: "false",
 };
+// The hooks require GH_REPO; in CI the workflow supplies `github.repository`, and an
+// attended run has no workflow — so it is derived from the checkout's own origin
+// remote. Without it the FIRST hook refuses with a missing-variable message, which
+// reads as an unexplained guard refusal.
+const repoSlug = resolveRepoSlug();
+if (repoSlug) runEnv.GH_REPO = repoSlug;
 if (force) runEnv.FORCE = "true";
 if (interactive) runEnv.INTERACTIVE = "true";
 if (verb === "implement" && finalizeMode !== "auto") runEnv.FINALIZE_MODE = finalizeMode;
-if (verb === "implement" && finalizeMode === "ask") runEnv.SEQUENCE_STATE_FILE = stateFile;
+// Always ask the sequence to report its outcome back. A guard refusal exits 0 (a
+// refusal must leave CI green), so without this an attended run cannot tell a
+// refusal from a clean success — and `LocalOutcome`'s `refused` case, which the
+// worktree policy already handles, was unreachable. The `ask` path reads the
+// branch/base from the same file (issue #57).
+runEnv.SEQUENCE_STATE_FILE = stateFile;
 const child = spawnSync("yarn", [`sandcastle:${verb}-sequence`], {
   stdio: "inherit",
   cwd: tree,
@@ -330,7 +344,13 @@ if (child.error) {
   finish("failed", false, 1);
 }
 
-const outcome = outcomeOf(child.status, child.signal);
+// A refusal exits 0, so the reported outcome — not the exit code — is what
+// distinguishes it from a clean success. Only a zero exit can be a refusal; a
+// non-zero exit or a signal keeps its own meaning (failed / aborted).
+const reported = readState(stateFile);
+const exitOutcome = outcomeOf(child.status, child.signal);
+const outcome: LocalOutcome =
+  exitOutcome === "succeeded" && reported.outcome === "refused" ? "refused" : exitOutcome;
 
 // The finalize accounting. An `auto` run's single sequence already pushed and
 // opened the PR (full parity), so a clean success IS finalized. A `never` run never
@@ -344,15 +364,14 @@ if (verb === "implement" && outcome === "succeeded") {
   if (finalizeMode === "auto") {
     finalized = true;
   } else if (finalizeMode === "ask") {
-    const state = readState(stateFile);
-    if (!state.branch) {
+    if (!reported.branch) {
       console.error("attended: could not read the agent branch — skipping finalize.");
     } else {
       console.log("");
-      console.log(`attended: implement #${issue} produced commits on ${state.branch}.`);
+      console.log(`attended: implement #${issue} produced commits on ${reported.branch}.`);
       console.log(
-        `attended: finalize will push ${state.branch}, open the pull request, and update the ` +
-          `tracker on ${state.base || "the default branch"} — exactly the unattended path.`,
+        `attended: finalize will push ${reported.branch}, open the pull request, and update the ` +
+          `tracker on ${reported.base || "the default branch"} — exactly the unattended path.`,
       );
       if (confirm("attended: finalize now? [y/N] ")) {
         const tail = spawnSync("yarn", ["sandcastle:implement-sequence"], {
@@ -365,8 +384,8 @@ if (verb === "implement" && outcome === "succeeded") {
             SPEC_FILE: specFile,
             COMMENT_FILE: commentFile,
             FINALIZE_TAIL_ONLY: "true",
-            BRANCH: state.branch,
-            BASE: state.base,
+            BRANCH: reported.branch,
+            BASE: reported.base,
           },
         });
         const tailCode = tail.error ? 1 : tail.status ?? 1;

@@ -18,10 +18,13 @@
 // Kept pure where it matters: detection, the pane title, and the command each emit
 // runs are unit-testable functions; only the injected `spawn` touches the process.
 
-// The environment variable Herdr sets inside every pane it manages: the pane/agent id
-// the CLI addresses. Its presence is the whole detection — absent, we are not in a
-// Herdr pane.
-const HERDR_PANE_ENV = "HERDR_PANE";
+// The environment variable Herdr sets inside every pane it manages: the pane id the
+// CLI addresses (e.g. `wR:p2`). Its presence is the whole detection — absent, we are
+// not in a Herdr pane. Verified against a live Herdr session (it also injects
+// HERDR_ENV, HERDR_TAB_ID, HERDR_WORKSPACE_ID, HERDR_SOCKET_PATH); the name was
+// previously guessed as `HERDR_PANE`, which silently disabled the whole surface —
+// best-effort emission means a wrong name looks exactly like "not in Herdr".
+const HERDR_PANE_ENV = "HERDR_PANE_ID";
 
 // The resolved Herdr context: the pane the CLI addresses. Null when not in a pane.
 export interface HerdrContext {
@@ -54,15 +57,18 @@ export function completeNotice(o: { spec: number }): string {
   return `spec #${o.spec} complete — final PR opened`;
 }
 
-// The `herdr` CLI invocation that renames the pane. Pure so the argv is testable; the
-// surface runs it best-effort.
+// The `herdr` CLI invocation that renames the pane: `herdr pane rename <pane_id>
+// <label>` — the pane id is POSITIONAL and the command lives under the `pane` group.
+// Pure so the argv is testable; the surface runs it best-effort.
 export function renameCommand(ctx: HerdrContext, title: string): { file: string; args: string[] } {
-  return { file: "herdr", args: ["rename", "--pane", ctx.pane, title] };
+  return { file: "herdr", args: ["pane", "rename", ctx.pane, title] };
 }
 
-// The `herdr` CLI invocation that fires a notification into the pane's UI.
-export function notifyCommand(ctx: HerdrContext, message: string): { file: string; args: string[] } {
-  return { file: "herdr", args: ["notify", "--pane", ctx.pane, message] };
+// The `herdr` CLI invocation that fires a notification: `herdr notification show
+// <title> [--body TEXT]`. Session-scoped, NOT pane-addressed — the CLI has no per-pane
+// notify — so it takes no context and the message carries the spec number itself.
+export function notifyCommand(message: string): { file: string; args: string[] } {
+  return { file: "herdr", args: ["notification", "show", message] };
 }
 
 // The injected process runner. Returns void; its result is ignored — the surface never
@@ -99,10 +105,10 @@ export function createHerdrSurface(env: NodeJS.ProcessEnv, spawn: Spawn): HerdrS
       if (ctx) emit(renameCommand(ctx, sliceTitle(o)));
     },
     notifyHalt(o) {
-      if (ctx) emit(notifyCommand(ctx, haltNotice(o)));
+      if (ctx) emit(notifyCommand(haltNotice(o)));
     },
     notifyComplete(o) {
-      if (ctx) emit(notifyCommand(ctx, completeNotice(o)));
+      if (ctx) emit(notifyCommand(completeNotice(o)));
     },
   };
 }

@@ -61,7 +61,7 @@
 // and reclaimed by the next run when a crash left it behind (`shared/spec-marker.mts`).
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "../shared/config.mts";
@@ -70,7 +70,7 @@ import { tracerBullets } from "../shared/spec-graph.mts";
 import { specStep, type SpecAction } from "../shared/spec-step.mts";
 import { renderProgress } from "../shared/spec-report.mts";
 import { awaitChecks } from "../shared/poll-checks.mts";
-import { addLabel, comment, ensureLabel, removeLabel } from "../shared/github.mts";
+import { addLabel, comment, ensureLabel, removeLabel, resolveRepoSlug } from "../shared/github.mts";
 import {
   LOCAL_RUN_LABEL,
   LOCAL_RUN_LABEL_DESCRIPTION,
@@ -90,6 +90,7 @@ import {
 } from "../shared/spec-advance.mts";
 import { acquireLock, lockPath, readLockOwner, releaseLock } from "./lock.mts";
 import { runLogPath, appendRunLine } from "./run-log.mts";
+import { parseSequenceState, type SequenceState } from "./sequence-state.mts";
 import { createHerdrSurface } from "./herdr.mts";
 import {
   resolveOrder,
@@ -101,6 +102,8 @@ import {
   mergeConfirmed,
   mergeHaltReason,
   dryRunSuppressed,
+  specBranchCutCommands,
+  sliceRefusedHaltReason,
   specFlagConflict,
   sliceDisposition,
   formatCheckpoint,
@@ -155,8 +158,12 @@ function run(file: string, args: readonly string[], cwd?: string, env?: Record<s
   return spawnSync(file, [...args], { stdio: "inherit", cwd, env: { ...process.env, ...env } });
 }
 
-function capture(file: string, args: readonly string[]): string {
-  const child = spawnSync(file, [...args], { encoding: "utf8" });
+// `cwd` is explicit for every git command that WRITES: a write issued in the ambient
+// cwd lands in the developer's own checkout, which is the one place this loop
+// promises never to touch. Reads (`git rev-parse origin/HEAD`) and the worktree
+// removal must run in the main checkout, so the parameter is optional, not forced.
+function capture(file: string, args: readonly string[], cwd?: string): string {
+  const child = spawnSync(file, [...args], { encoding: "utf8", cwd });
   if (child.status !== 0) {
     throw new Error(`${file} ${args.join(" ")} exited ${child.status ?? "with a signal"}`);
   }
@@ -176,6 +183,17 @@ function confirm(question: string): boolean {
   return answer === "y" || answer === "yes";
 }
 
+// The outcome the slice's sequence just reported. An unreadable or absent file means
+// "nothing reported" — an empty state, never a refusal, so a missing file can only
+// make the loop proceed as it did before, not invent a halt.
+function readSliceState(): SequenceState {
+  try {
+    return parseSequenceState(readFileSync(sliceStateFile, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
 function closedSet(issues: RawIssue[]): Set<number> {
   return new Set(issues.filter((i) => i.state === "CLOSED").map((i) => i.number));
 }
@@ -192,6 +210,9 @@ function resolveBase(configured: string): string {
 }
 
 const config = resolveConfig();
+// `owner/name` for the hooks each slice runs (GH_REPO). Resolved once, from the env
+// or the checkout's origin remote.
+const repoSlug = resolveRepoSlug();
 // The run ceiling (issue #61): the most this run may spend before a human sees it
 // again — slices attempted, wall-clock, or both. Resolved by the standard precedence
 // (env override → config file → unset); absent all, it is empty ({}) and the loop is
@@ -206,6 +227,10 @@ const lock = lockPath(root, `implement-spec-${specNum}`);
 // fetch-spec requires it) — the local stand-in for the path the reusable workflow
 // resolves under $RUNNER_TEMP. Reused across slices; each slice overwrites it.
 const specFile = join(tmpdir(), `agent-workflows-spec-loop-${process.pid}-spec.md`);
+// Where each slice's sequence reports its outcome back to this loop. Reused across
+// slices; each slice overwrites it, and it is read immediately after that slice's
+// sequence exits.
+const sliceStateFile = join(tmpdir(), `agent-workflows-spec-loop-${process.pid}-state`);
 
 // The append-only run log (issue #62): every transition the loop makes is appended
 // here — slice, action, outcome, timestamp — so a run that halts at 2am leaves
@@ -505,15 +530,14 @@ if (!remoteBranches().includes(specBranch)) {
   if (dryRun) {
     console.log(dryRunSuppressed(`cut and push the spec branch ${specBranch} off ${base || "the default branch"}`));
     record(null, "spec-branch", "cut suppressed (dry run)");
-  } else if (base) {
-    capture("git", ["fetch", "origin", base]);
-    capture("git", ["checkout", "-B", specBranch, `origin/${base}`]);
-    capture("git", ["push", "-u", "origin", specBranch]);
-    record(null, "spec-branch", `cut off ${base}`);
   } else {
-    capture("git", ["checkout", "-B", specBranch]);
-    capture("git", ["push", "-u", "origin", specBranch]);
-    record(null, "spec-branch", "cut off the default branch");
+    // Every command runs IN THE WORKTREE (see `specBranchCutCommands`): issued in the
+    // ambient cwd they would move the developer's own checkout onto the spec branch,
+    // and git would then refuse to check that branch out here, where the slices build.
+    for (const cmd of specBranchCutCommands({ specBranch, base, tree })) {
+      capture(cmd.file, cmd.args, cmd.cwd);
+    }
+    record(null, "spec-branch", `cut off ${base || "the default branch"}`);
   }
 }
 
@@ -745,12 +769,27 @@ async function drive(): Promise<never> {
       SPEC_FILE: specFile,
       ANNOUNCE_REFUSALS: "false",
     };
+    // The hooks require GH_REPO; in CI the workflow supplies `github.repository`,
+    // and an attended run has no workflow — so it is derived from the checkout's
+    // own origin remote. Without it the slice's FIRST hook refuses, which surfaces
+    // here as an unconfirmed merge rather than as the missing variable it is.
+    if (repoSlug) buildEnv.GH_REPO = repoSlug;
     if (force) buildEnv.FORCE = "true";
     if (dryRun) buildEnv.FINALIZE_MODE = "never";
     // `--interactive` (issue #60): each slice's implement run hands over a live agent
     // session so the developer steers it. Per-slice by design — and mutually
     // exclusive with --no-pause, rejected up front.
     if (interactive) buildEnv.INTERACTIVE = "true";
+    // Ask the sequence to report its OUTCOME back here. A guard refusal exits 0 (a
+    // refusal must leave CI green), so the exit code alone cannot distinguish
+    // "refused, built nothing" from "ran and succeeded" — and the loop would then
+    // blame the merge for a decision taken at the sequence's first step.
+    buildEnv.SEQUENCE_STATE_FILE = sliceStateFile;
+    // Clear it first: the file is reused across slices, and a sequence that exits 0
+    // WITHOUT writing one — a worktree whose packaged sequencer predates this seam is
+    // the realistic case, since the worktree runs the checked-out commit's code, not
+    // this one — would otherwise leave the loop reading the PREVIOUS slice's outcome.
+    rmSync(sliceStateFile, { force: true });
     record(slice, "build", "running the implement sequence");
     const build = run("yarn", ["sandcastle:implement-sequence"], tree, buildEnv);
 
@@ -765,6 +804,18 @@ async function drive(): Promise<never> {
       };
       console.log(formatSliceFooter({ slice, outcome: "built" }));
       finish(interrupted || build.signal ? 130 : build.status || 1);
+    }
+
+    // A REFUSED sequence exited 0 having built nothing. Halt on the refusal itself,
+    // naming the step that declined — not on the merge that could never have happened.
+    const sliceState = readSliceState();
+    if (sliceState.outcome === "refused") {
+      const reason = sliceRefusedHaltReason({ slice, step: sliceState.step ?? "" });
+      console.error(reason);
+      halted = { slice, reason: `the implement sequence refused at \`${sliceState.step ?? "?"}\`` };
+      record(slice, "refused", `the sequence refused at ${sliceState.step ?? "?"}`);
+      console.log(formatSliceFooter({ slice, outcome: "refused" }));
+      finish(1);
     }
 
     if (dryRun) {
