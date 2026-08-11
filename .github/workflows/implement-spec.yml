@@ -54,11 +54,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Preflight, kickoff only (advance has no guard — it reacts to a merge). A
-  # refusal retires the trigger label + comments, then exits non-zero so the run
-  # job is skipped — NOT a failure, never `agent:blocked`.
+  # Preflight for BOTH modes. A refusal exits non-zero so the run job is skipped —
+  # NOT a failure, never `agent:blocked`; on kickoff it also retires the trigger
+  # label + comments why.
+  #
+  # advance is guarded too (it used to be unguarded, on the reasoning that it merely
+  # reacts to a merge). The attended slice loop merges slice PRs into the spec branch
+  # itself, so a local merge fires this workflow, and advance would then label the
+  # NEXT tracer-bullet `agent:implement` — starting in CI the very slice the local
+  # loop is about to build. The advance guard reads the local-run marker on the spec
+  # issue and stands down while a local run holds it. It needs BASE_REF (there is no
+  # ISSUE_NUMBER on a PR event); the spec number comes from that branch name.
   guard:
-    if: inputs.mode == 'kickoff'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -69,8 +76,10 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
+      SPEC_MODE: ${{ inputs.mode }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_TITLE: ${{ github.event.issue.title }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
     steps:
       - name: Checkout default branch
         uses: actions/checkout@v6
@@ -95,9 +104,9 @@ jobs:
 
   run:
     needs: [guard]
-    # Run for advance (no guard), or for a kickoff that wasn't refused. `always()`
-    # lets the job proceed when the guard job is skipped (advance mode).
-    if: always() && (inputs.mode != 'kickoff' || needs.guard.outputs.refused == 'false')
+    # Both modes are guarded, so this is a plain "the guard did not refuse" gate: a
+    # refusal (or a guard job that could not complete) skips the orchestration.
+    if: needs.guard.outputs.refused == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

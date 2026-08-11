@@ -274,7 +274,7 @@ function updateBranchPlan(): readonly Step[] {
 // plan is a single tracker/`gh`-only step: the `kickoff` or `advance` hook, chosen
 // by `context.specMode`. Both entry points delegate their whole sequence here so
 // they share one pinned shape. A non-zero exit is a genuine `failure` (the hook
-// never refuses — the separate kickoff guard job owns refusals; and advance exits
+// never refuses — the separate guard job owns refusals for both modes; and advance exits
 // non-zero to halt on a red spec branch, which must fail the job). No `cwd` split
 // and no fetch-spec: the orchestrator works the issue graph from one checkout.
 function implementSpecPlan(context: RunContext): readonly Step[] {

@@ -27,6 +27,17 @@ export function listIssues(): RawIssue[] {
   return JSON.parse(json) as RawIssue[];
 }
 
+// The label names on one issue. The read behind the local-run marker
+// (`spec-marker.mts`): the advance guard asks whether the spec issue is claimed by
+// an attended local run, and the loop asks whether a marker it finds is one it must
+// reclaim. Throws when `gh` fails — the caller decides how tolerant to be.
+export function issueLabels(issue: number | string): string[] {
+  return capture("gh", ["issue", "view", String(issue), "--json", "labels", "-q", ".labels[].name"])
+    .split("\n")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
 // Short names of the repo's remote branches (no `refs/heads/` prefix). Used to
 // detect a live spec branch (`pickSpecBranch`).
 export function remoteBranches(): string[] {
