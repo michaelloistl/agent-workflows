@@ -347,6 +347,28 @@ export function parseFinalizeMode(argv: readonly string[]): FinalizeMode {
   return "auto";
 }
 
+// The verbs an interactive run may drive (issue #58). An interactive run hands the
+// composed prompt to a LIVE agent session in the terminal so the developer can steer
+// the work in progress — which suits only the verbs whose result is COMMITS the
+// finalize tail reads back from git (`implement`, `implement-pr`). The read-only verbs
+// (`explore`, `review-pr`) and `update-branch` instead depend on a structured
+// extraction pass a free-form interactive session cannot produce, so the sequencer
+// refuses the combination outright rather than degrade into a run that cannot report
+// its result.
+const INTERACTIVE_VERBS = ["implement", "implement-pr"] as const;
+
+// Whether `verb` may run interactively (issue #58). Pure — the single source of truth
+// both entry points consult before handing a composed prompt to a live agent session,
+// so the attended path and the sequencer bridge refuse the same combinations. The
+// eligible verbs are named in the refusal message via `INTERACTIVE_VERBS`.
+export function interactiveEligible(verb: string): boolean {
+  return (INTERACTIVE_VERBS as readonly string[]).includes(verb);
+}
+
+// The eligible verbs, for a refusal message that lists them. Kept beside the predicate
+// so the two never drift (issue #58).
+export const interactiveVerbs: readonly string[] = INTERACTIVE_VERBS;
+
 // The end-of-run summary an attended run prints on exit (issue #57), so the
 // developer sees what happened without scrolling back through streamed output.
 export interface RunSummary {

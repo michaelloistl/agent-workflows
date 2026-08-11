@@ -89,6 +89,7 @@ test("classifyInvocation treats a verb + issue number as an attended local run",
     issue: "55",
     force: false,
     finalize: undefined,
+    interactive: false,
   });
 });
 
@@ -101,6 +102,7 @@ test("classifyInvocation reads a trailing --force on an attended run", () => {
     issue: "55",
     force: true,
     finalize: undefined,
+    interactive: false,
   });
 });
 
@@ -114,6 +116,7 @@ test("classifyInvocation forwards a --finalize flag on an attended run", () => {
     issue: "57",
     force: false,
     finalize: "--finalize=ask",
+    interactive: false,
   });
   assert.deepEqual(classifyInvocation(["implement", "57", "--force", "--finalize=never"]), {
     kind: "attended",
@@ -121,7 +124,33 @@ test("classifyInvocation forwards a --finalize flag on an attended run", () => {
     issue: "57",
     force: true,
     finalize: "--finalize=never",
+    interactive: false,
   });
+});
+
+// A trailing `--interactive` on an attended run sets the flag the entry point uses to
+// hand the composed prompt to a live agent session (issue #58). It rides alongside
+// the other attended flags in any order.
+test("classifyInvocation reads a trailing --interactive on an attended run", () => {
+  assert.deepEqual(classifyInvocation(["implement", "58", "--interactive"]), {
+    kind: "attended",
+    verb: "implement",
+    issue: "58",
+    force: false,
+    finalize: undefined,
+    interactive: true,
+  });
+  assert.deepEqual(
+    classifyInvocation(["implement", "58", "--interactive", "--force", "--finalize=ask"]),
+    {
+      kind: "attended",
+      verb: "implement",
+      issue: "58",
+      force: true,
+      finalize: "--finalize=ask",
+      interactive: true,
+    },
+  );
 });
 
 // A hook name is never all-digits, so only a numeric second arg is an attended

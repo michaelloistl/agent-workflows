@@ -6,6 +6,7 @@ import {
   worktreePath,
   retainWorktree,
   parseFinalizeMode,
+  interactiveEligible,
   formatRunSummary,
   type Step,
 } from "./plan.mts";
@@ -318,6 +319,21 @@ test("parseFinalizeMode reads the flag, defaults to auto, and rejects a typo", (
   assert.equal(parseFinalizeMode(["implement", "57", "--finalize=never"]), "never");
   assert.equal(parseFinalizeMode(["implement", "57", "--finalize=auto"]), "auto");
   assert.throws(() => parseFinalizeMode(["--finalize=nver"]), /unknown finalize mode "nver"/);
+});
+
+// Interactive eligibility (issue #58): the sequencer hands the composed prompt to a
+// LIVE agent session only for the verbs whose result is COMMITS the finalize tail
+// reads back from git — `implement` and `implement-pr`. The read-only verbs
+// (`explore`, `review-pr`) and `update-branch` depend on a structured extraction pass
+// a free-form interactive session cannot produce, so the combination is refused
+// outright rather than degrading into a run that cannot report its result.
+test("interactiveEligible admits implement and implement-pr, refuses the rest", () => {
+  assert.equal(interactiveEligible("implement"), true);
+  assert.equal(interactiveEligible("implement-pr"), true);
+  assert.equal(interactiveEligible("explore"), false);
+  assert.equal(interactiveEligible("review-pr"), false);
+  assert.equal(interactiveEligible("update-branch"), false);
+  assert.equal(interactiveEligible("implement-spec"), false);
 });
 
 // The end-of-run summary (issue #57) states the outcome, the worktree's fate, and —

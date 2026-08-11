@@ -1,9 +1,11 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { interactive } from "@ai-hero/sandcastle";
+import { claudeAgent, hostSandbox, HEAD_STRATEGY } from "../shared/agent.mts";
 import { required } from "../shared/process.mts";
 import { gatherPrContext, writePrContextFiles } from "../shared/pr-context.mts";
-import { replyOutputSchema } from "../shared/reply-output.mts";
+import { replyOutputSchema, type ReplyOutput } from "../shared/reply-output.mts";
 import { runWithExtraction } from "../shared/run-with-extraction.mts";
 import { resolveAsset } from "../shared/resolve-asset.mts";
 
@@ -50,18 +52,46 @@ const promptArgs = {
   NOTES_FILE,
 };
 
-const { output, commits } = await runWithExtraction({
-  name: `implement-pr-${PR_NUMBER}`,
-  // Resolve prompt files relative to THIS script, not the process cwd: the PR
-  // workflow runs this entrypoint from a separate `main` tooling checkout (so a
-  // stale PR branch missing the tooling can still run it) while cwd stays the
-  // PR working tree the agent edits and commits.
-  workPromptFile: resolveAsset(import.meta.dirname, "prompt.md"),
-  extractPromptFile: resolveAsset(import.meta.dirname, "extract.md"),
-  promptArgs,
-  tag: "replies",
-  schema: replyOutputSchema,
-});
+// Interactive mode (issue #58): an attended run sets this to hand the composed prompt
+// to a LIVE agent session in the terminal so the developer steers the fixes directly.
+// Unset on every unattended (CI) run, which always runs headless.
+const INTERACTIVE = process.env.INTERACTIVE === "true";
+
+let output: ReplyOutput;
+let commits: ReadonlyArray<{ sha: string }>;
+if (INTERACTIVE) {
+  // A live session drives the WORK pass only; sandcastle collects the commits when it
+  // ends, exactly as the headless work pass does. A free-form interactive session
+  // cannot emit the structured per-comment replies the extraction pass produces, so an
+  // interactive run forgoes them — the feedback is addressed in the commits (the verb's
+  // real result the sequencer admits it for) and finalize posts a plain summary rather
+  // than threaded replies.
+  const result = await interactive({
+    name: `implement-pr-${PR_NUMBER}`,
+    agent: claudeAgent(),
+    sandbox: hostSandbox(),
+    branchStrategy: HEAD_STRATEGY,
+    promptFile: resolveAsset(import.meta.dirname, "prompt.md"),
+    promptArgs,
+  });
+  commits = result.commits;
+  output = { summary: "Addressed the review feedback in an interactive session.", replies: [] };
+} else {
+  const res = await runWithExtraction({
+    name: `implement-pr-${PR_NUMBER}`,
+    // Resolve prompt files relative to THIS script, not the process cwd: the PR
+    // workflow runs this entrypoint from a separate `main` tooling checkout (so a
+    // stale PR branch missing the tooling can still run it) while cwd stays the
+    // PR working tree the agent edits and commits.
+    workPromptFile: resolveAsset(import.meta.dirname, "prompt.md"),
+    extractPromptFile: resolveAsset(import.meta.dirname, "extract.md"),
+    promptArgs,
+    tag: "replies",
+    schema: replyOutputSchema,
+  });
+  output = res.output;
+  commits = res.commits;
+}
 
 // No commits → the agent addressed nothing. Exit non-zero so the workflow's
 // failure path marks the PR `agent:blocked` rather than pushing an unchanged

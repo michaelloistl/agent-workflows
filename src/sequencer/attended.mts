@@ -28,6 +28,8 @@ import {
   worktreePath,
   retainWorktree,
   parseFinalizeMode,
+  interactiveEligible,
+  interactiveVerbs,
   formatRunSummary,
   type FinalizeMode,
   type LocalOutcome,
@@ -48,9 +50,26 @@ const issue = process.argv[3];
 // the `agent:in-progress` label and the local lock. The single flag a developer
 // uses to start a run they know is safe despite a preflight or a mutex saying no.
 const force = process.argv.includes("--force");
+// `--interactive` (issue #58) hands the composed prompt to a LIVE agent session in the
+// terminal so the developer steers the work directly, rather than only watching a
+// headless run. Accepted only for the commit-producing verbs (`implement`,
+// `implement-pr`); the sequencer refuses it for the read-only verbs and `update-branch`.
+const interactive = process.argv.includes("--interactive");
 if (!verb || !issue) {
   console.error(
-    "attended: usage: agent-workflows <verb> <issue-number> [--force] [--finalize=auto|ask|never]",
+    "attended: usage: agent-workflows <verb> <issue-number> [--force] [--finalize=auto|ask|never] [--interactive]",
+  );
+  process.exit(2);
+}
+// Refuse `--interactive` on an ineligible verb BEFORE any worktree or bootstrap work
+// (issue #58): a read-only verb's result is a structured extraction a free-form
+// interactive session cannot produce, so the run could not report itself. This check
+// precedes the attended-verb gate so the reason names interactivity, not availability.
+if (interactive && !interactiveEligible(verb)) {
+  console.error(
+    `attended: --interactive is not available for "${verb}" — only ${interactiveVerbs.join(", ")} ` +
+      `produce commits a live agent session can steer. "${verb}" depends on a structured extraction ` +
+      `pass an interactive session cannot produce, so its result could not be reported.`,
   );
   process.exit(2);
 }
@@ -284,6 +303,12 @@ if (config.bootstrap) {
 // drops the finalize tail (and the in-progress status write) so nothing reaches
 // GitHub until finalize, and `ask` additionally asks the sequence to mirror its
 // resolved branch/base to the state file for the confirmed finalize slice.
+//
+// `--interactive` (issue #58) rides along as `INTERACTIVE`: the verb's run hook reads
+// it and hands the composed prompt to a live agent session instead of a headless run.
+// It is set only for an eligible verb (ineligible verbs were refused above), and only
+// the run step reads it — every later step (the boot check, push, and finalize) behaves
+// exactly as it does for a headless run.
 const runEnv: Record<string, string> = {
   ISSUE_NUMBER: issue,
   ISSUE_TITLE: issueTitle,
@@ -292,6 +317,7 @@ const runEnv: Record<string, string> = {
   ANNOUNCE_REFUSALS: "false",
 };
 if (force) runEnv.FORCE = "true";
+if (interactive) runEnv.INTERACTIVE = "true";
 if (verb === "implement" && finalizeMode !== "auto") runEnv.FINALIZE_MODE = finalizeMode;
 if (verb === "implement" && finalizeMode === "ask") runEnv.SEQUENCE_STATE_FILE = stateFile;
 const child = spawnSync("yarn", [`sandcastle:${verb}-sequence`], {
