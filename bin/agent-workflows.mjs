@@ -54,6 +54,7 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
 //                                           the guard step, for the light guard
 //                                           job's cheap preflight (issue #50).
 //   agent-workflows <verb> <issue-number> [--force] [--finalize=auto|ask|never]
+//                                          [--interactive]
 //                                         → "attended": run the verb locally as an
 //                                           attended run against that issue, in its
 //                                           own git worktree (issue #55). A hook
@@ -62,7 +63,9 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
 //                                           trailing `--force` overrules a refusal
 //                                           and both concurrency mutexes (issue #56);
 //                                           `--finalize=<mode>` selects an `implement`
-//                                           run's finalize policy (issue #57). Both
+//                                           run's finalize policy (issue #57);
+//                                           `--interactive` hands the composed prompt
+//                                           to a live agent session (issue #58). All
 //                                           are forwarded to the attended entry point.
 //   agent-workflows <verb> <hook>         → "hook": run one hook (the original
 //                                           form, unchanged — what consuming
@@ -77,14 +80,16 @@ export function classifyInvocation(args) {
   if (second === "--guards-only") return { kind: "verb", verb, guardsOnly: true };
   if (/^\d+$/.test(second)) {
     // Forward the attended flags verbatim (the entry point parses their meaning):
-    // `--force` (issue #56) and `--finalize=<mode>` (issue #57). `finalize` carries
-    // the raw flag string so a typo surfaces at the entry point, not here.
+    // `--force` (issue #56), `--finalize=<mode>` (issue #57), and `--interactive`
+    // (issue #58). `finalize` carries the raw flag string so a typo surfaces at the
+    // entry point, not here.
     return {
       kind: "attended",
       verb,
       issue: second,
       force: rest.includes("--force"),
       finalize: rest.find((a) => a.startsWith("--finalize=")),
+      interactive: rest.includes("--interactive"),
     };
   }
   return { kind: "hook", verb, hook: second, rest };
@@ -114,7 +119,7 @@ function runVerb(verb, guardsOnly) {
 // Run a verb locally as an attended run: spawn the attended sequencer entrypoint
 // under tsx. It creates a git worktree, bootstraps it, streams the run to the
 // terminal, and cleans up per the worktree policy (issue #55).
-function runAttended(verb, issue, force, finalize) {
+function runAttended(verb, issue, force, finalize, interactive) {
   const runner = fileURLToPath(new URL("../src/sequencer/attended.mts", import.meta.url));
   const require = createRequire(import.meta.url);
   const tsxCli = require.resolve("tsx/cli");
@@ -122,6 +127,7 @@ function runAttended(verb, issue, force, finalize) {
   const runnerArgs = [tsxCli, runner, verb, issue];
   if (force) runnerArgs.push("--force");
   if (finalize) runnerArgs.push(finalize);
+  if (interactive) runnerArgs.push("--interactive");
   const child = spawnSync(process.execPath, runnerArgs, {
     stdio: "inherit",
     env: process.env,
@@ -144,7 +150,13 @@ function main() {
     return;
   }
   if (invocation.kind === "attended") {
-    runAttended(invocation.verb, invocation.issue, invocation.force, invocation.finalize);
+    runAttended(
+      invocation.verb,
+      invocation.issue,
+      invocation.force,
+      invocation.finalize,
+      invocation.interactive,
+    );
     return;
   }
 
