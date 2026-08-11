@@ -88,6 +88,7 @@ test("classifyInvocation treats a verb + issue number as an attended local run",
     verb: "explore",
     issue: "55",
     force: false,
+    finalize: undefined,
   });
 });
 
@@ -99,6 +100,27 @@ test("classifyInvocation reads a trailing --force on an attended run", () => {
     verb: "explore",
     issue: "55",
     force: true,
+    finalize: undefined,
+  });
+});
+
+// A `--finalize=<mode>` flag on an attended run is captured verbatim and forwarded
+// to the entry point, which parses its meaning (issue #57). It rides alongside
+// `--force` in either order.
+test("classifyInvocation forwards a --finalize flag on an attended run", () => {
+  assert.deepEqual(classifyInvocation(["implement", "57", "--finalize=ask"]), {
+    kind: "attended",
+    verb: "implement",
+    issue: "57",
+    force: false,
+    finalize: "--finalize=ask",
+  });
+  assert.deepEqual(classifyInvocation(["implement", "57", "--force", "--finalize=never"]), {
+    kind: "attended",
+    verb: "implement",
+    issue: "57",
+    force: true,
+    finalize: "--finalize=never",
   });
 });
 

@@ -67,6 +67,13 @@ export interface ShellStep extends StepBase {
 
 export type Step = HookStep | ShellStep;
 
+// How an attended `implement` run finalizes (issue #57). `auto` is full parity
+// with the unattended path — the single sequence pushes, opens the PR, and updates
+// the tracker. `never` stops with the commits on the agent branch (nothing reaches
+// GitHub). `ask` produces the commits, then finalizes only on the developer's
+// confirmation. Unattended runs never set this; they always finalize (`auto`).
+export type FinalizeMode = "auto" | "ask" | "never";
+
 // Per-run inputs shared by every verb's plan.
 export interface RunContext {
   // The branch a produced PR falls back to targeting when the issue is not a
@@ -89,6 +96,16 @@ export interface RunContext {
   // continues. Set only by the attended entry point's `--force`; unattended never
   // forces, so its guards stay a `refusal`.
   readonly force?: boolean;
+  // How an attended `implement` run finalizes (issue #57). Absent/`auto` keeps the
+  // push + finalize tail on the sequence (full parity); `ask`/`never` drop it so
+  // the sequence stops with the commits on the agent branch. Ignored by every other
+  // verb and by unattended runs (which never set it).
+  readonly finalize?: FinalizeMode;
+  // Run ONLY the finalize tail — push the branch, then open the PR / update the
+  // tracker (issue #57). The attended `ask` path runs this as a second, confirmed
+  // slice after its first slice produced the commits; `BRANCH`/`BASE` are threaded
+  // in by the caller since there is no fetch-spec in this slice. `implement` only.
+  readonly finalizeTailOnly?: boolean;
 }
 
 function hook(
@@ -146,13 +163,26 @@ const PUSH = `git push -u origin "$BRANCH"`;
 // check → push the branch → finalize (open the PR and apply the terminal label).
 // finalize owns the terminal state, so there is no trailing `status done`.
 function implementPlan(context: RunContext): readonly Step[] {
-  const steps: Step[] = [
-    hook("guards", "refusal"),
-    hook("status", "failure", ["in-progress"]),
-    hook("fetch-spec", "failure"),
-    shell("create-branch", CREATE_BRANCH, "failure"),
-    hook("run", "failure"),
-  ];
+  // The finalize tail in isolation: push the agent branch, then open the PR and
+  // update the tracker. An attended `ask` run (issue #57) runs this as a second,
+  // confirmed slice after the first slice produced the commits — the SAME two steps
+  // the unattended tail runs, so a confirmed local finalize lands on GitHub exactly
+  // as CI's does. `BRANCH`/`BASE` are supplied by the caller (no fetch-spec here).
+  if (context.finalizeTailOnly) {
+    return [shell("push", PUSH, "failure"), hook("finalize", "failure")];
+  }
+
+  // An attended `ask` or `never` run keeps everything off GitHub until finalize
+  // (issue #57): it drops the finalize tail AND the `in-progress` status step, so a
+  // `never` run and a declined `ask` run touch the tracker not at all — nothing
+  // reaches GitHub before the developer has looked. An `auto` run (and every
+  // unattended run) keeps both, for full parity.
+  const untilFinalize = context.finalize === "ask" || context.finalize === "never";
+  const steps: Step[] = [hook("guards", "refusal")];
+  if (!untilFinalize) steps.push(hook("status", "failure", ["in-progress"]));
+  steps.push(hook("fetch-spec", "failure"));
+  steps.push(shell("create-branch", CREATE_BRANCH, "failure"));
+  steps.push(hook("run", "failure"));
   if (context.enableRuby) {
     steps.push(
       shell("boot-check", BOOT_CHECK, "failure", {
@@ -164,8 +194,10 @@ function implementPlan(context: RunContext): readonly Step[] {
       }),
     );
   }
-  steps.push(shell("push", PUSH, "failure"));
-  steps.push(hook("finalize", "failure"));
+  if (!untilFinalize) {
+    steps.push(shell("push", PUSH, "failure"));
+    steps.push(hook("finalize", "failure"));
+  }
   return steps;
 }
 
@@ -287,12 +319,70 @@ export function worktreePath(root: string, verb: string, issue: string | number)
   return join(root, `${verb}-${issue}`);
 }
 
-// The worktree cleanup policy (issue #55). The tree is REMOVED only on a clean end
-// with nothing to inspect — a success, or a guard refusal that produced no work and
-// posted its own explanation. A failure or a Ctrl-C abort RETAINS the tree, because
-// that half-finished tree is exactly what the developer wants to open.
-export function retainWorktree(outcome: LocalOutcome): boolean {
-  return outcome === "failed" || outcome === "aborted";
+// The worktree cleanup policy (issues #55, #57). A failure or a Ctrl-C abort always
+// RETAINS the tree — that half-finished tree is exactly what the developer wants to
+// open. An attended `implement` run also retains on SUCCESS: what provides
+// inspection is the surviving worktree the developer can open, diff, and re-run
+// against — not a withheld push (issue #57). Every other verb (the read-only
+// `explore`) REMOVES a clean success, and a guard refusal (which produced no work
+// and posted its own explanation) removes for all verbs.
+export function retainWorktree(outcome: LocalOutcome, verb?: string): boolean {
+  if (outcome === "failed" || outcome === "aborted") return true;
+  if (verb === "implement" && outcome === "succeeded") return true;
+  return false;
+}
+
+// Parse the attended `--finalize=<mode>` flag (issue #57). Absent → `auto` (full
+// parity). An unrecognised value throws rather than silently defaulting to `auto`,
+// because defaulting a typo to the pushing path is exactly the surprise the flag
+// exists to prevent.
+export function parseFinalizeMode(argv: readonly string[]): FinalizeMode {
+  const flag = "--finalize=";
+  for (const arg of argv) {
+    if (!arg.startsWith(flag)) continue;
+    const mode = arg.slice(flag.length);
+    if (mode === "auto" || mode === "ask" || mode === "never") return mode;
+    throw new Error(`unknown finalize mode "${mode}" — expected auto, ask, or never`);
+  }
+  return "auto";
+}
+
+// The end-of-run summary an attended run prints on exit (issue #57), so the
+// developer sees what happened without scrolling back through streamed output.
+export interface RunSummary {
+  readonly verb: string;
+  readonly issue: string;
+  readonly outcome: LocalOutcome;
+  readonly retained: boolean;
+  readonly tree: string;
+  // The finalize mode — only an `implement` run carries one; absent for `explore`,
+  // whose read-only "finalize" (a posted comment) needs no accounting here.
+  readonly finalize?: FinalizeMode;
+  // Whether the finalize tail actually ran and succeeded (pushed + opened the PR).
+  readonly finalized?: boolean;
+}
+
+// Render the summary as a compact block. Pure — a string derivation the entry point
+// prints; kept here beside the other attended helpers so it is unit-testable.
+export function formatRunSummary(s: RunSummary): string {
+  const lines = [
+    `── ${s.verb} #${s.issue}: ${s.outcome} ──`,
+    `worktree: ${s.retained ? "retained" : "removed"} at ${s.tree}`,
+  ];
+  if (s.finalize) lines.push(`finalize: ${finalizeSummaryLine(s.finalize, s.finalized ?? false)}`);
+  return lines.join("\n");
+}
+
+function finalizeSummaryLine(mode: FinalizeMode, finalized: boolean): string {
+  if (finalized) return `${mode} — pushed the branch, opened the PR, updated the tracker`;
+  switch (mode) {
+    case "never":
+      return "never — nothing pushed; the commits are on the agent branch in the worktree";
+    case "ask":
+      return "ask — not finalized; the commits are on the agent branch in the worktree";
+    case "auto":
+      return "auto — not finalized (the run did not succeed)";
+  }
 }
 
 // The guards step of a plan, with its non-zero disposition relaxed to `tolerated`
