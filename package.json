@@ -41,6 +41,7 @@
     "sandcastle:update-branch-guards": "node bin/agent-workflows.mjs update-branch guards",
     "sandcastle:update-branch-status": "node bin/agent-workflows.mjs update-branch status",
     "sandcastle:update-branch-finalize": "node bin/agent-workflows.mjs update-branch finalize",
+    "sandcastle:implement-spec-sequence": "node bin/agent-workflows.mjs implement-spec",
     "sandcastle:implement-spec-guards": "node bin/agent-workflows.mjs implement-spec guards",
     "sandcastle:implement-spec-kickoff": "node bin/agent-workflows.mjs implement-spec kickoff",
     "sandcastle:implement-spec-advance": "node bin/agent-workflows.mjs implement-spec advance"

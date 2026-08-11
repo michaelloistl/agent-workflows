@@ -37,6 +37,9 @@ const context: RunContext = {
   guardsOnly,
   enableRuby: process.env.ENABLE_RUBY === "true",
   baseBranch: process.env.DEFAULT_BRANCH || "",
+  // Which orchestrator entry point to sequence — `implement-spec` reads this;
+  // every other verb ignores it (issue #52).
+  specMode: process.env.SPEC_MODE,
 };
 const plan = planVerb(verb, context);
 

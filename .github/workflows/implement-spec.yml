@@ -8,6 +8,11 @@ name: Agent Implement spec (reusable)
 # the `implement-spec-<mode>` hooks. Lightweight: node + `gh` only, no
 # postgres/redis/ruby (nothing to build).
 #
+# The sequence lives in the sequencer, not this YAML (issue #52). The run job hands
+# the mode to the sequencer, which runs the orchestrator's short plan — a single
+# `kickoff` or `advance` hook — through the unchanged per-hook dispatcher:
+#   SPEC_MODE=<mode> yarn sandcastle:implement-spec-sequence
+#
 #   kickoff  cut the spec branch, dispatch the topologically-first tracer-bullet
 #   advance  (added in #8) on a slice PR merge: close it, dispatch the next, or
 #            open the final spec→default PR
@@ -127,4 +132,9 @@ jobs:
           git config user.name "${{ inputs.git-author-name }}"
           git config user.email "${{ inputs.git-author-email }}"
       - name: Orchestrate
-        run: yarn sandcastle:implement-spec-${{ inputs.mode }}
+        # ONE sequencer invocation runs the orchestrator's (short) sequence: the
+        # single `kickoff` or `advance` hook, selected by SPEC_MODE. No agent and no
+        # database services — the whole shape lives in the sequencer (issue #52).
+        env:
+          SPEC_MODE: ${{ inputs.mode }}
+        run: yarn sandcastle:implement-spec-sequence

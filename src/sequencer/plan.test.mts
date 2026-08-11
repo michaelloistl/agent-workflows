@@ -111,6 +111,36 @@ test("planVerb('update-branch') pins the workflow's sequence", () => {
   ]);
 });
 
+// Pin the `implement-spec` orchestrator's KICKOFF plan to the sequence its run
+// job performs today (issue #52): a single tracer/`gh`-only step, the kickoff
+// hook, with no agent and no fetch-spec. A non-zero exit is a genuine failure
+// (the kickoff hook never refuses — the separate guard job owns that). No `cwd`
+// split: the orchestrator runs in one checkout.
+test("planVerb('implement-spec') pins the kickoff sequence", () => {
+  const plan = planVerb("implement-spec", { specMode: "kickoff" });
+
+  assert.deepEqual(plan.map(shape), [
+    { kind: "hook", hook: "kickoff", args: [], onNonZero: "failure", cwd: undefined },
+  ]);
+});
+
+// Pin the ADVANCE plan the same way: a single advance hook step. A non-zero exit
+// is a failure — advance exits non-zero to halt the run when the spec branch's CI
+// is red, and that must fail the job so a human decides.
+test("planVerb('implement-spec') pins the advance sequence", () => {
+  const plan = planVerb("implement-spec", { specMode: "advance" });
+
+  assert.deepEqual(plan.map(shape), [
+    { kind: "hook", hook: "advance", args: [], onNonZero: "failure", cwd: undefined },
+  ]);
+});
+
+// The orchestrator's mode selects the plan; an unrecognised mode is a wiring bug,
+// not a silent empty sequence.
+test("planVerb('implement-spec') throws for an unknown mode", () => {
+  assert.throws(() => planVerb("implement-spec", { specMode: "nope" }), /unknown mode "nope"/);
+});
+
 // Guards-only mode returns just the guard step, so the light guard job catches a
 // refusal before Ruby and Postgres are paid for (spec #48 story 26). enable-ruby
 // must not leak the boot check into a guards-only plan. The issue verbs guard in
