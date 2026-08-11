@@ -556,6 +556,7 @@ Pass with `secrets: inherit`.
   `src/` entrypoint (override-first) and runs it under `tsx`.
 - **`docs/hook-contract.md`** — the interface every consuming repo implements.
 - **`CONTEXT.md`** — glossary. **`PLAN.md`** — build plan + rollout.
+  **[`CHANGELOG.md`](CHANGELOG.md)** — notable changes per release.
   **`docs/adr/`** — architecture decisions (0001 thin reusable workflows; 0002
   toolchain generalization + feedback-loop boundary; 0003 spec strictly
   sequential; 0004 no per-slice review).
