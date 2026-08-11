@@ -348,6 +348,9 @@ export interface SpecRunSummary {
   // ceiling was configured — then the summary omits the line, preserving today's
   // output exactly.
   readonly ceiling?: CeilingReport | null;
+  // The append-only run log's path (issue #62), so the record of every transition is
+  // discoverable from the summary and survives a halt. Absent → the line is omitted.
+  readonly runLog?: string;
 }
 
 // Render the summary as a compact block. Pure — the driver prints it.
@@ -364,5 +367,6 @@ export function formatSpecSummary(s: SpecRunSummary): string {
   if (s.ceiling) lines.push(formatCeilingConsumption(s.ceiling));
   if (s.finalPrOpened) lines.push(`final PR : opened for ${s.specBranch}`);
   else if (!s.dryRun && !s.halted) lines.push("final PR : (none opened)");
+  if (s.runLog) lines.push(`run log : ${s.runLog}`);
   return lines.join("\n");
 }

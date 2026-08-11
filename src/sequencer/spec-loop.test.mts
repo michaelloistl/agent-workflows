@@ -384,6 +384,28 @@ test("formatSpecSummary reports what was consumed against the ceiling", () => {
   assert.match(out, /consumed : 2\/2 slices, 65s wall-clock/);
 });
 
+test("formatSpecSummary surfaces the run log path when given, and omits the line otherwise (issue #62)", () => {
+  const withLog = formatSpecSummary({
+    spec: 3,
+    specBranch: "agent/spec-3-x",
+    dryRun: false,
+    merged: [4],
+    halted: null,
+    finalPrOpened: true,
+    runLog: "/tmp/wt/spec-3-run.log",
+  });
+  assert.match(withLog, /run log : \/tmp\/wt\/spec-3-run\.log/);
+  const withoutLog = formatSpecSummary({
+    spec: 3,
+    specBranch: "agent/spec-3-x",
+    dryRun: false,
+    merged: [4],
+    halted: null,
+    finalPrOpened: true,
+  });
+  assert.doesNotMatch(withoutLog, /run log :/);
+});
+
 test("formatSpecSummary omits the consumed line when no ceiling was configured", () => {
   const out = formatSpecSummary({
     spec: 3,

@@ -333,6 +333,24 @@ opens** (the run is complete and the branch lives on the remote); every halt —
 failure, a Ctrl-C abort, a graceful stop, a checkpoint decline, a dry run — **retains**
 it for inspection and resume.
 
+**Run log and Herdr progress (a long run made legible).** Two optional, independent
+surfaces make a run readable while it happens and after it ends — neither is a
+dependency and both are strictly best-effort. An **append-only run log** at
+`<worktreeRoot>/spec-<n>-run.log` records every transition the loop makes — slice,
+action, outcome, timestamp, tab-separated — so a spec that halts at 2am leaves
+something to read in the morning; the summary prints its path. It lives under the
+worktree *root* (not inside the per-spec worktree, which is removed on completion),
+so it survives both a halt and a completed run's cleanup. The log is **written, never
+consulted**: nothing reads it to decide what happens next, so resume still derives
+entirely from the tracker and the branches — it does not reintroduce local state.
+When the loop runs inside a **Herdr-managed pane** (detected by the `HERDR_PANE`
+environment variable Herdr sets), it also emits best-effort progress into the UI
+already on screen — it renames the pane to the slice being built and fires a
+notification on halt and on completion, via the `herdr` CLI. Outside a Herdr pane
+**nothing is emitted and no warning is printed**, and a failed rename, notification,
+or log write **never fails or delays the run** — the sequencer gains no required
+dependency and still runs unchanged in CI and a bare terminal.
+
 **3. Create the trigger labels** listed in [Labels](#labels) for each verb you
 enable (the state labels are created on first use by the hooks).
 
