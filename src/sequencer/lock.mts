@@ -53,6 +53,13 @@ export function isProcessAlive(
   }
 }
 
+// The pid recorded in a lock (the running owner), or null when absent/unreadable.
+// Exported so a second terminal's graceful-stop command can find the live loop to
+// signal it (issue #60) — the lock already records the owner pid for staleness.
+export function readLockOwner(dir: string): number | null {
+  return readOwner(dir);
+}
+
 // The pid recorded in a lock directory, or null when absent or unreadable (a
 // half-written lock counts as pid-less, hence stale).
 function readOwner(dir: string): number | null {

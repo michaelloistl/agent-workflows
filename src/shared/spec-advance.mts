@@ -7,7 +7,7 @@
 // YAML (ADR-0001), so a Linear repo swaps this behind the same hooks.
 
 import { capture } from "./process.mts";
-import { parseCommitCheckRuns, type CheckRun } from "./checks.mts";
+import { parseChecks, parseCommitCheckRuns, type CheckRun } from "./checks.mts";
 import { resolveConfig } from "./config.mts";
 
 // Close a merged tracer-bullet (merging into a non-default base does NOT auto-close
@@ -96,6 +96,26 @@ export function fetchSpecChecks(branch: string): CheckRun[] {
   } catch (err) {
     return parseCommitCheckRuns((err as { stdout?: string }).stdout ?? "");
   }
+}
+
+// Read the check-runs on a slice PR (its own CI), tolerant of gh's non-zero exit
+// exactly as implement-finalize is: `gh pr checks` still prints the JSON we asked
+// for even when it exits non-zero (checks pending/failing/absent). Used when the
+// attended loop RESUMES at a slice's gate — an open PR left by an interrupted run is
+// gated and merged here rather than re-running the agent (issue #60).
+export function fetchSlicePrChecks(pr: number): CheckRun[] {
+  try {
+    return parseChecks(capture("gh", ["pr", "checks", String(pr), "--json", "name,state,bucket"]));
+  } catch (err) {
+    return parseChecks((err as { stdout?: string }).stdout ?? "");
+  }
+}
+
+// Merge an open slice PR straight into the spec branch — the merge implement-finalize
+// would have run, replayed by the attended loop when it resumes at a slice's gate
+// (issue #60). Deletes the head branch, matching the finalize path.
+export function mergeSlicePr(pr: number): void {
+  capture("gh", ["pr", "merge", String(pr), "--merge", "--delete-branch"]);
 }
 
 // Why the run halts when the spec branch's tip CI does not pass after the last

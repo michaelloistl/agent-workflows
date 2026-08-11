@@ -169,6 +169,96 @@ export function formatSliceFooter(o: { slice: number; outcome: SliceOutcome }): 
   return `└─ slice #${o.slice}: ${tail}`;
 }
 
+// ── Checkpoints, resume, and graceful stop (issue #60) ──────────────────────────
+//
+// A long spec run is made controllable, stoppable, and restartable. The loop pauses
+// between slices by DEFAULT — the checkpoint where the developer inspects the
+// accumulated spec branch before the next slice stacks on it, which is what makes a
+// parity finalize acceptable rather than a loss of control. `--no-pause` runs
+// straight through; interactive mode steers every slice and is therefore mutually
+// exclusive with running straight through. Resume derives ENTIRELY from the tracker
+// and the branches — no local file — so a spec interrupted under one entry point
+// resumes under the other.
+
+// Interactive per-slice mode and run-straight-through are mutually exclusive: one
+// stops to steer every slice, the other never stops at all — asking for both is a
+// contradiction. Returns the refusal message when both are set, null otherwise.
+export function specFlagConflict(o: { interactive: boolean; runThrough: boolean }): string | null {
+  if (o.interactive && o.runThrough) {
+    return (
+      "spec-loop: --interactive and --no-pause are mutually exclusive — interactive mode " +
+      "hands over a live session per slice, while --no-pause runs the whole spec straight " +
+      "through without pausing. Pick one."
+    );
+  }
+  return null;
+}
+
+// What to do with a slice at the top of its turn, decided from the PR state read
+// back from GitHub — the ONLY source, so resume is identical under either entry
+// point and needs no local file. A slice whose PR is already merged into the spec
+// branch is treated as landed (advance without work); one whose PR is open resumes
+// at its GATE — await checks, then merge — rather than re-running the agent, which
+// would be the most expensive mistake the loop could make; anything else is built.
+export type SliceDisposition = "build" | "resume-gate" | "already-merged";
+
+export function sliceDisposition(pr: PrMergeView | null, specBranch: string): SliceDisposition {
+  if (mergeConfirmed(pr, specBranch)) return "already-merged";
+  if (pr !== null && pr.state === "OPEN" && pr.baseRefName === specBranch) return "resume-gate";
+  return "build";
+}
+
+// The checkpoint framing printed between slices (issue #60): the slice that just
+// landed, the spec branch to inspect, and the next slice that will stack on it. The
+// driver follows it with a confirmation prompt (unless `--no-pause` is set).
+export function formatCheckpoint(o: { lastMerged: number; next: number; specBranch: string }): string {
+  return (
+    `\n⏸ checkpoint: slice #${o.lastMerged} is merged into \`${o.specBranch}\`. ` +
+    `Inspect the spec branch before the next slice (#${o.next}) stacks on it.`
+  );
+}
+
+// The single-line prompt read back at a checkpoint. Declining halts the run cleanly
+// at a between-slices boundary, so re-running the command resumes it.
+export function checkpointPrompt(next: number): string {
+  return `spec-loop: continue to slice #${next}? [y/N] `;
+}
+
+// The note printed when a graceful stop is acknowledged (issue #60): the loop
+// finishes the slice it is on and halts at the next checkpoint — unlike Ctrl-C,
+// which aborts immediately. Requested from a SECOND terminal (the running one is
+// occupied) via `implement-spec <spec> --stop`.
+export function gracefulStopAcknowledged(): string {
+  return (
+    "\n◼ graceful stop requested — finishing the current slice, then halting at the next " +
+    "checkpoint. (Ctrl-C in the running terminal still aborts immediately.)"
+  );
+}
+
+// The halt reason recorded when a graceful stop lands at a checkpoint. The spec is
+// left exactly at a between-slices boundary, so resume picks it up cleanly.
+export function gracefulStopHaltReason(lastMerged: number | null): string {
+  return lastMerged === null
+    ? "graceful stop before any slice merged — re-run to resume"
+    : `graceful stop after slice #${lastMerged} merged — re-run to resume`;
+}
+
+// The note printed when a slice resumes at its gate (issue #60): an open PR from a
+// prior run is merged here rather than re-running the agent.
+export function formatResumeGate(o: { slice: number; pr: number; specBranch: string }): string {
+  return (
+    `↻ slice #${o.slice}: PR #${o.pr} into \`${o.specBranch}\` is already open — resuming at ` +
+    `its gate (await checks, then merge); NOT re-running the agent.`
+  );
+}
+
+// The note printed when a slice's PR is already merged on resume (issue #60): the
+// slice landed under a prior run (or the unattended orchestrator); advance without
+// rebuilding.
+export function formatAlreadyMerged(o: { slice: number; pr: number; specBranch: string }): string {
+  return `✔ slice #${o.slice}: PR #${o.pr} is already merged into \`${o.specBranch}\` — advancing without rebuilding.`;
+}
+
 // The end-of-run summary the loop prints on exit, so the outcome is legible without
 // scrolling back through a long multi-slice run.
 export interface SpecRunSummary {

@@ -90,6 +90,13 @@ export function classifyInvocation(args) {
         execute: rest.includes("--execute"),
         dryRun: rest.includes("--dry-run"),
         force: rest.includes("--force"),
+        // Issue #60: `--no-pause` runs the whole spec straight through (the loop
+        // otherwise pauses at a checkpoint between slices); `--interactive` hands
+        // each slice's implement run to a live agent session; `--stop` is the
+        // graceful-stop control command run from a second terminal.
+        noPause: rest.includes("--no-pause"),
+        interactive: rest.includes("--interactive"),
+        stop: rest.includes("--stop"),
       };
     }
     // Forward the attended flags verbatim (the entry point parses their meaning):
@@ -156,7 +163,7 @@ function runAttended(verb, issue, force, finalize, interactive) {
 // under tsx. It creates one worktree on the spec branch, bootstraps it once, and
 // builds the spec's tracer-bullets one at a time — dispatching, gating, merging,
 // and confirming each slice from the terminal (issue #59).
-function runSpecLoop(spec, execute, dryRun, force) {
+function runSpecLoop(spec, execute, dryRun, force, noPause, interactive, stop) {
   const runner = fileURLToPath(new URL("../src/sequencer/spec-loop-run.mts", import.meta.url));
   const require = createRequire(import.meta.url);
   const tsxCli = require.resolve("tsx/cli");
@@ -165,6 +172,9 @@ function runSpecLoop(spec, execute, dryRun, force) {
   if (execute) runnerArgs.push("--execute");
   if (dryRun) runnerArgs.push("--dry-run");
   if (force) runnerArgs.push("--force");
+  if (noPause) runnerArgs.push("--no-pause");
+  if (interactive) runnerArgs.push("--interactive");
+  if (stop) runnerArgs.push("--stop");
   const child = spawnSync(process.execPath, runnerArgs, {
     stdio: "inherit",
     env: process.env,
@@ -187,7 +197,15 @@ function main() {
     return;
   }
   if (invocation.kind === "spec-loop") {
-    runSpecLoop(invocation.spec, invocation.execute, invocation.dryRun, invocation.force);
+    runSpecLoop(
+      invocation.spec,
+      invocation.execute,
+      invocation.dryRun,
+      invocation.force,
+      invocation.noPause,
+      invocation.interactive,
+      invocation.stop,
+    );
     return;
   }
   if (invocation.kind === "attended") {

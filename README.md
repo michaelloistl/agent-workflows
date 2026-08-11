@@ -268,7 +268,10 @@ accumulated spec-branch HEAD (the stacked topology, setup paid once).
 ```sh
 agent-workflows implement-spec 48              # DRY RUN (the default): preview + one pass
 agent-workflows implement-spec 48 --execute    # real merges into the spec branch
-agent-workflows implement-spec 48 --execute --force   # also overrule the local lock
+agent-workflows implement-spec 48 --execute --force      # also overrule the local lock
+agent-workflows implement-spec 48 --execute --no-pause   # run straight through, no checkpoints
+agent-workflows implement-spec 48 --execute --interactive # steer a live session per slice
+agent-workflows implement-spec 48 --stop       # from a SECOND terminal: graceful stop
 ```
 
 Before the first agent runs it prints a **preview** — the resolved slice list in
@@ -285,6 +288,35 @@ a failed slice halts the whole run with no skip and no retry, the spec issue's
 progress comment is posted each iteration, and the final spec→base PR opens when the
 last slice lands. A spec run this way produces the same git history and tracker
 state as the same spec run in CI.
+
+**Checkpoints, stopping, and resume (a long run made controllable).** The loop
+**pauses at a checkpoint between slices by default** — the moment to inspect the
+accumulated spec branch before the next slice stacks on it — and continues on
+confirmation. `--no-pause` runs the whole spec straight through for a well-understood
+spec; `--interactive` instead hands *each* slice's build to a live agent session, and
+because that is per-slice it is rejected together with `--no-pause` (one stops at
+every slice, the other never stops).
+
+There are **two ways to stop**, and they are different:
+
+- **Ctrl-C** in the running terminal **aborts immediately** — mid-slice it abandons a
+  half-built tracer-bullet, leaving work for resume to untangle.
+- **`agent-workflows implement-spec <spec> --stop`**, run from a **second terminal**
+  (the running one is occupied), asks for a **graceful stop**: the loop finishes the
+  slice it is on and halts at the next checkpoint, leaving a clean between-slices
+  boundary. It finds the live run through the pid its local lock records.
+
+**Resume derives entirely from the tracker and the branches — no local file is
+consulted.** Re-running the same command picks up where the run stopped: closed
+tracer-bullets are skipped, tracer-bullets **added after the run started** are picked
+up (the slice set is recomputed every iteration), and a slice whose branch has an
+**open unmerged PR resumes at its gate** — await checks, then merge — rather than
+re-running the agent (the most expensive mistake the loop could make). Because state
+is external, a spec interrupted under this local loop can be resumed by the unattended
+orchestrator, and the reverse. The **worktree is removed once the final spec PR
+opens** (the run is complete and the branch lives on the remote); every halt — a
+failure, a Ctrl-C abort, a graceful stop, a checkpoint decline, a dry run — **retains**
+it for inspection and resume.
 
 **3. Create the trigger labels** listed in [Labels](#labels) for each verb you
 enable (the state labels are created on first use by the hooks).
