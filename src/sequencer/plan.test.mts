@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planVerb, type Step } from "./plan.mts";
+import { join } from "node:path";
+import { planVerb, worktreePath, retainWorktree, type Step } from "./plan.mts";
 
 // Normalize a step to its pinned identity: a hook by name/args, a shell step by
 // its label, plus its `cwd` split. The exact shell command strings are
@@ -172,4 +173,32 @@ test("planVerb produces steps with an env map and is pure (no I/O)", () => {
 
 test("planVerb throws for a verb it has no plan for", () => {
   assert.throws(() => planVerb("nope", {}), /no plan for verb "nope"/);
+});
+
+// The attended entry point's worktree path derivation lives here, not in a
+// separate module, and is pinned by these tests (issue #55). Each run gets its
+// own directory UNDER the configured root, named for the verb and issue so
+// concurrent runs of different verbs/issues never collide and a retained tree is
+// self-identifying. The path is deterministic in (root, verb, issue) so re-running
+// the same command lands on the same tree.
+test("worktreePath derives a per-run directory under the configured root", () => {
+  assert.equal(worktreePath("/tmp/wt", "explore", "55"), join("/tmp/wt", "explore-55"));
+  assert.equal(worktreePath("/tmp/wt", "explore", 55), join("/tmp/wt", "explore-55"));
+});
+
+test("worktreePath is deterministic and distinct per verb and issue", () => {
+  assert.equal(worktreePath("/root", "explore", "1"), worktreePath("/root", "explore", "1"));
+  assert.notEqual(worktreePath("/root", "explore", "1"), worktreePath("/root", "explore", "2"));
+  assert.notEqual(worktreePath("/root", "explore", "1"), worktreePath("/root", "implement", "1"));
+});
+
+// The cleanup policy lives here too (issue #55). The worktree is REMOVED only on a
+// clean end with nothing to inspect — a success, or a guard refusal that produced
+// no work and posted its own explanation. A failure or a Ctrl-C abort RETAINS the
+// tree, because that half-finished tree is exactly what the developer wants to open.
+test("retainWorktree keeps the tree on failure or abort, removes it otherwise", () => {
+  assert.equal(retainWorktree("failed"), true);
+  assert.equal(retainWorktree("aborted"), true);
+  assert.equal(retainWorktree("succeeded"), false);
+  assert.equal(retainWorktree("refused"), false);
 });

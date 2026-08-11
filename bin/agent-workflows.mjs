@@ -53,6 +53,11 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
 //   agent-workflows <verb> --guards-only  → "verb" in guards-only mode: run just
 //                                           the guard step, for the light guard
 //                                           job's cheap preflight (issue #50).
+//   agent-workflows <verb> <issue-number> → "attended": run the verb locally as an
+//                                           attended run against that issue, in its
+//                                           own git worktree (issue #55). A hook
+//                                           name is never all-digits, so a numeric
+//                                           second arg disambiguates cleanly.
 //   agent-workflows <verb> <hook>         → "hook": run one hook (the original
 //                                           form, unchanged — what consuming
 //                                           repos' `sandcastle:<verb>-<hook>`
@@ -64,6 +69,7 @@ export function classifyInvocation(args) {
   if (!verb) return { kind: "usage" };
   if (second === undefined) return { kind: "verb", verb };
   if (second === "--guards-only") return { kind: "verb", verb, guardsOnly: true };
+  if (/^\d+$/.test(second)) return { kind: "attended", verb, issue: second };
   return { kind: "hook", verb, hook: second, rest };
 }
 
@@ -88,14 +94,37 @@ function runVerb(verb, guardsOnly) {
   process.exit(child.status ?? 1);
 }
 
+// Run a verb locally as an attended run: spawn the attended sequencer entrypoint
+// under tsx. It creates a git worktree, bootstraps it, streams the run to the
+// terminal, and cleans up per the worktree policy (issue #55).
+function runAttended(verb, issue) {
+  const runner = fileURLToPath(new URL("../src/sequencer/attended.mts", import.meta.url));
+  const require = createRequire(import.meta.url);
+  const tsxCli = require.resolve("tsx/cli");
+
+  const child = spawnSync(process.execPath, [tsxCli, runner, verb, issue], {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (child.error) {
+    console.error(`agent-workflows: failed to run attended ${verb} #${issue}:`, child.error);
+    process.exit(1);
+  }
+  process.exit(child.status ?? 1);
+}
+
 function main() {
   const invocation = classifyInvocation(process.argv.slice(2));
   if (invocation.kind === "usage") {
-    console.error("usage: agent-workflows <verb> [hook] [args...]");
+    console.error("usage: agent-workflows <verb> [hook | issue-number] [args...]");
     process.exit(2);
   }
   if (invocation.kind === "verb") {
     runVerb(invocation.verb, invocation.guardsOnly);
+    return;
+  }
+  if (invocation.kind === "attended") {
+    runAttended(invocation.verb, invocation.issue);
     return;
   }
 

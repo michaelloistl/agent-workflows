@@ -8,9 +8,12 @@ import {
   resolveBaseBranch,
   resolveAgentModel,
   resolveCheckTimings,
+  resolveWorktreeRoot,
+  resolveBootstrap,
   resolveConfig,
   effectiveBase,
   DEFAULT_AGENT_MODEL,
+  DEFAULT_WORKTREE_ROOT,
   type ConfigFile,
 } from "./config.mts";
 
@@ -100,13 +103,34 @@ test("resolveCheckTimings ignores invalid env and file values", () => {
   );
 });
 
+// The attended local sequencer's worktree root: per-run override (WORKTREE_ROOT)
+// → file (`worktreeRoot`) → the OS-temp default. Never the developer's checkout.
+test("resolveWorktreeRoot: override beats file beats the default", () => {
+  const file: ConfigFile = { worktreeRoot: "/repo/.worktrees" };
+  assert.equal(resolveWorktreeRoot({ env: { WORKTREE_ROOT: "/tmp/run" }, file }), "/tmp/run");
+  assert.equal(resolveWorktreeRoot({ env: {}, file }), "/repo/.worktrees");
+  assert.equal(resolveWorktreeRoot({ env: {}, file: {} }), DEFAULT_WORKTREE_ROOT);
+  assert.equal(resolveWorktreeRoot({ env: { WORKTREE_ROOT: "" }, file: { worktreeRoot: "" } }), DEFAULT_WORKTREE_ROOT);
+});
+
+// The bootstrap command that makes a fresh worktree runnable: override (BOOTSTRAP)
+// → file (`bootstrap`) → empty (no bootstrap step). Empty is a valid "skip" value.
+test("resolveBootstrap: override beats file beats empty", () => {
+  const file: ConfigFile = { bootstrap: "yarn install" };
+  assert.equal(resolveBootstrap({ env: { BOOTSTRAP: "make setup" }, file }), "make setup");
+  assert.equal(resolveBootstrap({ env: {}, file }), "yarn install");
+  assert.equal(resolveBootstrap({ env: {}, file: {} }), "");
+});
+
 test("resolveConfig combines the resolvers over env and file", () => {
   const cfg = resolveConfig(
     { DEFAULT_BRANCH: "main", AGENT_MODEL: "" },
-    { baseBranch: "develop", checks: { timeoutSeconds: 900 } },
+    { baseBranch: "develop", checks: { timeoutSeconds: 900 }, bootstrap: "yarn install" },
   );
   assert.equal(cfg.baseBranch, "develop");
   assert.equal(cfg.agentModel, DEFAULT_AGENT_MODEL);
   assert.equal(cfg.checks.timeoutSeconds, 900);
   assert.equal(cfg.checks.intervalSeconds, 15);
+  assert.equal(cfg.worktreeRoot, DEFAULT_WORKTREE_ROOT);
+  assert.equal(cfg.bootstrap, "yarn install");
 });

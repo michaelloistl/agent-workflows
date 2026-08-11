@@ -14,7 +14,8 @@
 // Kept pure where it matters: the resolvers take an explicit `{ env, file }` so
 // precedence is unit-testable without touching disk; only `loadConfigFile` does I/O.
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
+import { tmpdir } from "node:os";
 
 // The committed config file's shape. Every field is optional — an absent file, or
 // an absent field, falls through to the per-run override then the built-in default.
@@ -32,11 +33,22 @@ export interface ConfigFile {
     readonly timeoutSeconds?: number;
     readonly graceSeconds?: number;
   };
+  // Root directory under which the attended local sequencer creates each run's git
+  // worktree (issue #55). Absent → the OS temp dir. Never the developer's checkout.
+  readonly worktreeRoot?: string;
+  // Command the attended local sequencer runs on a fresh worktree to make it
+  // runnable (issue #55) — e.g. "yarn install". Treated as opaque; a non-zero exit
+  // fails the run before the agent starts. Absent/empty → no bootstrap step.
+  readonly bootstrap?: string;
 }
 
 // The model default lives here (not agent.mts) so the file/override resolution and
 // the agent factory cannot drift to two different defaults.
 export const DEFAULT_AGENT_MODEL = "claude-opus-4-8";
+
+// Default worktree root for attended local runs (issue #55): a subdirectory of the
+// OS temp dir, so a run never touches the developer's checkout even with no config.
+export const DEFAULT_WORKTREE_ROOT = join(tmpdir(), "agent-workflows-worktrees");
 
 const DEFAULT_INTERVAL_SECONDS = 15;
 const DEFAULT_TIMEOUT_SECONDS = 1200;
@@ -101,6 +113,18 @@ export function resolveAgentModel({ env, file }: ResolveInputs): string {
   return firstNonEmpty(env.AGENT_MODEL, file.agentModel) ?? DEFAULT_AGENT_MODEL;
 }
 
+// The worktree root the attended local sequencer creates run worktrees under:
+// per-run override (WORKTREE_ROOT) → file (`worktreeRoot`) → OS-temp default.
+export function resolveWorktreeRoot({ env, file }: ResolveInputs): string {
+  return firstNonEmpty(env.WORKTREE_ROOT, file.worktreeRoot) ?? DEFAULT_WORKTREE_ROOT;
+}
+
+// The bootstrap command that makes a fresh worktree runnable: per-run override
+// (BOOTSTRAP) → file (`bootstrap`) → empty (skip the step). Empty is a valid value.
+export function resolveBootstrap({ env, file }: ResolveInputs): string {
+  return firstNonEmpty(env.BOOTSTRAP, file.bootstrap) ?? "";
+}
+
 export interface CheckTimings {
   readonly intervalSeconds: number;
   readonly timeoutSeconds: number;
@@ -124,6 +148,8 @@ export interface ResolvedConfig {
   readonly baseBranch: string;
   readonly agentModel: string;
   readonly checks: CheckTimings;
+  readonly worktreeRoot: string;
+  readonly bootstrap: string;
 }
 
 // The whole resolved config in one call — what the entrypoints use. Reads the file
@@ -136,6 +162,8 @@ export function resolveConfig(
     baseBranch: resolveBaseBranch({ env, file }),
     agentModel: resolveAgentModel({ env, file }),
     checks: resolveCheckTimings({ env, file }),
+    worktreeRoot: resolveWorktreeRoot({ env, file }),
+    bootstrap: resolveBootstrap({ env, file }),
   };
 }
 

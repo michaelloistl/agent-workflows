@@ -82,6 +82,25 @@ test("classifyInvocation treats verb + hook as the unchanged per-hook run", () =
   });
 });
 
+test("classifyInvocation treats a verb + issue number as an attended local run", () => {
+  assert.deepEqual(classifyInvocation(["explore", "55"]), {
+    kind: "attended",
+    verb: "explore",
+    issue: "55",
+  });
+});
+
+// A hook name is never all-digits, so only a numeric second arg is an attended
+// run — the per-hook form (verb + hook) is untouched.
+test("classifyInvocation keeps a non-numeric second arg as a per-hook run", () => {
+  assert.deepEqual(classifyInvocation(["explore", "fetch-spec"]), {
+    kind: "hook",
+    verb: "explore",
+    hook: "fetch-spec",
+    rest: [],
+  });
+});
+
 test("classifyInvocation treats --guards-only as a guards-only whole-verb run", () => {
   assert.deepEqual(classifyInvocation(["implement", "--guards-only"]), {
     kind: "verb",

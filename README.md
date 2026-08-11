@@ -229,9 +229,33 @@ because only GitHub Actions can act on them. Every value resolves per-run overri
   "agentModel": "claude-opus-4-8",
   // CI check-poll timings for the merge gates, in seconds (env overrides win:
   // CHECKS_INTERVAL_SECONDS / CHECKS_TIMEOUT_SECONDS / CHECKS_GRACE_SECONDS).
-  "checks": { "intervalSeconds": 15, "timeoutSeconds": 1200, "graceSeconds": 180 }
+  "checks": { "intervalSeconds": 15, "timeoutSeconds": 1200, "graceSeconds": 180 },
+  // Attended local runs only (see below). Root the per-run worktree is created
+  // under (WORKTREE_ROOT overrides; absent → an OS-temp dir), and the opaque
+  // command that makes a fresh worktree runnable (BOOTSTRAP overrides; absent →
+  // no bootstrap step).
+  "worktreeRoot": "/Users/you/.agent-worktrees",
+  "bootstrap": "yarn install"
 }
 ```
+
+**Attended runs — start a verb from your terminal.** Alongside the label-triggered
+fleet (the *unattended* path), you can run a verb on your own machine:
+
+```sh
+agent-workflows explore 55   # run `explore` locally against issue #55
+```
+
+Each run gets its own git **worktree** under `worktreeRoot` — never the checkout
+you are sitting in — created detached at the configured base branch. The
+`bootstrap` command runs on that fresh tree (a non-zero exit fails the run before
+the agent starts), the agent's output streams to your terminal, and Ctrl-C aborts.
+Credentials come from your already-authenticated `gh` and existing agent
+credentials — the sequencer reads and writes no secret material. The worktree is
+removed on success and **retained on failure or abort**, so a broken run is left on
+disk for you to inspect. Only the read-only `explore` verb is available this way so
+far. `explore` run locally posts the same exploration comment as the unattended
+path — it hands the same sequence to the sequencer inside the worktree.
 
 **3. Create the trigger labels** listed in [Labels](#labels) for each verb you
 enable (the state labels are created on first use by the hooks).

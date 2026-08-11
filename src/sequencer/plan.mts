@@ -8,6 +8,8 @@
 // anything. It only describes what should run; the executor (executor.mts) runs
 // it and the bin's whole-verb bridge (run.mts) wires the two together.
 
+import { join } from "node:path";
+
 // Where a step runs — the split the PR verbs need and the issue verbs do not.
 // A PR verb runs the agent against the PR head while loading its tracker tooling
 // from a detached worktree checked out at the default branch (the PR branch may
@@ -263,6 +265,29 @@ function fullPlan(verb: string, context: RunContext): readonly Step[] {
     default:
       throw new Error(`sequencer: no plan for verb "${verb}"`);
   }
+}
+
+// How an attended local run (issue #55) ended, for the worktree cleanup policy.
+// The first three mirror the executor's `Outcome`; `aborted` is the extra case the
+// executor cannot see — a Ctrl-C signal killed the run mid-step.
+export type LocalOutcome = "succeeded" | "refused" | "failed" | "aborted";
+
+// Where an attended local run's git worktree lives (issue #55). Each run gets its
+// OWN directory under the configured `root` — never the developer's own checkout —
+// named for the verb and issue so concurrent runs of different verbs/issues never
+// collide and a retained tree is self-identifying. Deterministic in its inputs, so
+// re-running the same command lands on the same tree. Pure — a string derivation,
+// no I/O; the entry point (attended.mts) creates and removes the directory.
+export function worktreePath(root: string, verb: string, issue: string | number): string {
+  return join(root, `${verb}-${issue}`);
+}
+
+// The worktree cleanup policy (issue #55). The tree is REMOVED only on a clean end
+// with nothing to inspect — a success, or a guard refusal that produced no work and
+// posted its own explanation. A failure or a Ctrl-C abort RETAINS the tree, because
+// that half-finished tree is exactly what the developer wants to open.
+export function retainWorktree(outcome: LocalOutcome): boolean {
+  return outcome === "failed" || outcome === "aborted";
 }
 
 // Return the ordered step list for `verb` under `context`. Pure — no I/O. In
