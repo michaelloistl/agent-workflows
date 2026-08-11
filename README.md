@@ -25,6 +25,7 @@ commands emit. See [Authoring spec issues](#authoring-spec-issues) for the contr
 - [Secrets](#secrets)
 - [Repo layout](#repo-layout)
 - [Local checks](#local-checks)
+- [Releasing](#releasing)
 
 ## How it works
 
@@ -568,3 +569,34 @@ yarn install
 yarn typecheck
 yarn test
 ```
+
+## Releasing
+
+There is no publish step — the package ships straight from git tags. A release is
+just the merge commit, tagged, with the floating `v1` pointer moved to it. Cut one
+like this:
+
+1. **Merge the work into `main`.** Everything in a release is already reviewed and
+   merged; the release only labels a commit that is on `main`.
+2. **Promote `## Unreleased` in [`CHANGELOG.md`](CHANGELOG.md)** to a new
+   `## vX.Y.Z — YYYY-MM-DD` heading (leaving a fresh empty `## Unreleased` above
+   it), and merge that too.
+3. **Pull `main` locally so it points at the merge commit:**
+   `git checkout main && git pull`. GitHub creates the merge commit server-side,
+   so your local `main` is stale until you pull — tagging before this would tag
+   the wrong commit.
+4. **Tag the merge commit:** `git tag -a vX.Y.Z -m "<summary>"`.
+5. **Move the floating major tag:** `git tag -f v1 vX.Y.Z`.
+6. **Push both:** `git push origin vX.Y.Z && git push -f origin v1`.
+
+The `v1` tag is a floating major-version pointer (see [`CHANGELOG.md`](CHANGELOG.md)):
+it always tracks the newest `v1.x.y` release, so consumers pin
+`github:michaelloistl/agent-workflows#v1` and follow the latest compatible version
+without editing their workflow on every release.
+
+**Consumers on `#v1` still need `yarn upgrade agent-workflows` to pick up a moved
+tag.** A git-dependency install records the *resolved commit* in the consumer's
+`yarn.lock`, not the tag name — so moving `v1` to a new commit does not reach a repo
+whose lockfile still pins the old one. `yarn upgrade agent-workflows` re-resolves
+`#v1` to the commit it now points at and rewrites the lockfile; until a consumer runs
+it (and commits the changed `yarn.lock`), they stay on the release they installed.
