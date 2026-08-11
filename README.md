@@ -243,7 +243,9 @@ because only GitHub Actions can act on them. Every value resolves per-run overri
 fleet (the *unattended* path), you can run a verb on your own machine:
 
 ```sh
-agent-workflows explore 55   # run `explore` locally against issue #55
+agent-workflows explore 55            # run `explore` locally against issue #55
+agent-workflows implement 57          # build issue #57 end to end (--finalize=ask|never)
+agent-workflows implement 57 --interactive   # steer a live agent session
 ```
 
 Each run gets its own git **worktree** under `worktreeRoot` — never the checkout
@@ -251,11 +253,38 @@ you are sitting in — created detached at the configured base branch. The
 `bootstrap` command runs on that fresh tree (a non-zero exit fails the run before
 the agent starts), the agent's output streams to your terminal, and Ctrl-C aborts.
 Credentials come from your already-authenticated `gh` and existing agent
-credentials — the sequencer reads and writes no secret material. The worktree is
-removed on success and **retained on failure or abort**, so a broken run is left on
-disk for you to inspect. Only the read-only `explore` verb is available this way so
-far. `explore` run locally posts the same exploration comment as the unattended
-path — it hands the same sequence to the sequencer inside the worktree.
+credentials — the sequencer reads and writes no secret material. A `read-only`
+run's clean worktree is removed on success; an `implement` worktree is **retained**
+(it is what you inspect), and every run retains its tree on failure or abort. Each
+verb runs the SAME sequence the unattended path hands the sequencer, so the two
+paths cannot drift.
+
+**Attended spec loop — build a whole spec from your terminal.** `implement-spec`
+with a spec issue number drives the entire spec as a **slice loop**: it builds the
+tracer-bullets one at a time, in topological order, on **one** worktree created on
+the spec branch and bootstrapped once — each slice branching inside it from the
+accumulated spec-branch HEAD (the stacked topology, setup paid once).
+
+```sh
+agent-workflows implement-spec 48              # DRY RUN (the default): preview + one pass
+agent-workflows implement-spec 48 --execute    # real merges into the spec branch
+agent-workflows implement-spec 48 --execute --force   # also overrule the local lock
+```
+
+Before the first agent runs it prints a **preview** — the resolved slice list in
+topological order, the spec branch, the base branch, and whether this is a dry run
+— and does not begin until you accept it. A **dry run** (the safer default) runs the
+loop with every irreversible action suppressed, reports what a real run would do,
+and halts where it would first merge — leaving no merge, no closed issue, and no
+final PR behind; watch one pass before trusting it with real merges. An `--execute`
+run merges each slice into the spec branch exactly as CI does, then **reads the PR's
+merged state back from GitHub** before advancing — a queued, blocked, or stale merge
+halts the run rather than being mistaken for a landed slice. Both CI gates are kept
+(a slice cannot merge on red; the next slice cannot start on a red spec-branch tip),
+a failed slice halts the whole run with no skip and no retry, the spec issue's
+progress comment is posted each iteration, and the final spec→base PR opens when the
+last slice lands. A spec run this way produces the same git history and tracker
+state as the same spec run in CI.
 
 **3. Create the trigger labels** listed in [Labels](#labels) for each verb you
 enable (the state labels are created on first use by the hooks).

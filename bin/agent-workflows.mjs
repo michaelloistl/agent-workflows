@@ -79,6 +79,19 @@ export function classifyInvocation(args) {
   if (second === undefined) return { kind: "verb", verb };
   if (second === "--guards-only") return { kind: "verb", verb, guardsOnly: true };
   if (/^\d+$/.test(second)) {
+    // `implement-spec <spec-issue>` is the attended SPEC LOOP (issue #59): it drives
+    // a whole spec locally rather than running a single verb, so it routes to its
+    // own entry point. A dry run is the safer default; `--execute` opts into real
+    // merges and `--force` overrules the local lock and each slice's guards.
+    if (verb === "implement-spec") {
+      return {
+        kind: "spec-loop",
+        spec: second,
+        execute: rest.includes("--execute"),
+        dryRun: rest.includes("--dry-run"),
+        force: rest.includes("--force"),
+      };
+    }
     // Forward the attended flags verbatim (the entry point parses their meaning):
     // `--force` (issue #56), `--finalize=<mode>` (issue #57), and `--interactive`
     // (issue #58). `finalize` carries the raw flag string so a typo surfaces at the
@@ -139,6 +152,30 @@ function runAttended(verb, issue, force, finalize, interactive) {
   process.exit(child.status ?? 1);
 }
 
+// Run a whole spec locally as the attended spec loop: spawn the loop entrypoint
+// under tsx. It creates one worktree on the spec branch, bootstraps it once, and
+// builds the spec's tracer-bullets one at a time — dispatching, gating, merging,
+// and confirming each slice from the terminal (issue #59).
+function runSpecLoop(spec, execute, dryRun, force) {
+  const runner = fileURLToPath(new URL("../src/sequencer/spec-loop-run.mts", import.meta.url));
+  const require = createRequire(import.meta.url);
+  const tsxCli = require.resolve("tsx/cli");
+
+  const runnerArgs = [tsxCli, runner, spec];
+  if (execute) runnerArgs.push("--execute");
+  if (dryRun) runnerArgs.push("--dry-run");
+  if (force) runnerArgs.push("--force");
+  const child = spawnSync(process.execPath, runnerArgs, {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (child.error) {
+    console.error(`agent-workflows: failed to run the spec loop for #${spec}:`, child.error);
+    process.exit(1);
+  }
+  process.exit(child.status ?? 1);
+}
+
 function main() {
   const invocation = classifyInvocation(process.argv.slice(2));
   if (invocation.kind === "usage") {
@@ -147,6 +184,10 @@ function main() {
   }
   if (invocation.kind === "verb") {
     runVerb(invocation.verb, invocation.guardsOnly);
+    return;
+  }
+  if (invocation.kind === "spec-loop") {
+    runSpecLoop(invocation.spec, invocation.execute, invocation.dryRun, invocation.force);
     return;
   }
   if (invocation.kind === "attended") {
