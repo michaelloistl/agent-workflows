@@ -13,6 +13,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.mts\" \"bin/**/*.test.mts\"",
+    "agent:explore": "node bin/agent-workflows.mjs explore",
+    "agent:implement": "node bin/agent-workflows.mjs implement",
+    "agent:implement-spec": "node bin/agent-workflows.mjs implement-spec",
     "sandcastle:explore-sequence": "node bin/agent-workflows.mjs explore",
     "sandcastle:explore": "node bin/agent-workflows.mjs explore run",
     "sandcastle:explore-guards": "node bin/agent-workflows.mjs explore guards",
