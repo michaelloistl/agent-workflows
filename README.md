@@ -174,6 +174,16 @@ tracer-bullet PR merges into an `agent/spec-*` branch.
 A refusal (a guard declining to run) is **not** a failure: the guard clears the
 trigger label and comments why, and never sets `agent:blocked`.
 
+**Run marker** (managed by the attended spec loop; never set this by hand):
+
+| Label | Applied to | Meaning |
+|---|---|---|
+| `agent:local` | spec issue | an attended local run owns this spec's sequencing; CI **advance** stands down while it is present |
+
+Nothing triggers on `agent:local` — it is read, never reacted to. The loop creates
+it on first use, claims it before its first merge, and releases it when the run
+ends (see the attended spec loop below).
+
 ## Installation
 
 Set up a consuming repo in five steps.
@@ -292,6 +302,19 @@ a failed slice halts the whole run with no skip and no retry, the spec issue's
 progress comment is posted each iteration, and the final spec→base PR opens when the
 last slice lands. A spec run this way produces the same git history and tracker
 state as the same spec run in CI.
+
+**CI stands down while a local run owns the spec.** Merging a slice PR into the spec
+branch is exactly the event the unattended **advance** workflow triggers on — and
+advance responds by labelling the next tracer-bullet `agent:implement`, which would
+start CI building the very slice the loop is about to build itself. So an `--execute`
+run claims `agent:local` on the spec issue before its first merge, and the advance
+guard **refuses** (stands down; not a failure, nothing is dispatched) while that
+marker is present. The marker is released when the run ends — on completion, on any
+halt, on a graceful stop, and on Ctrl-C. If a run dies hard and leaves the marker
+behind, the next local run **reclaims** it rather than refusing to start (holding the
+local lock proves no live local run owns it); to hand the spec straight back to CI
+instead, remove the label by hand. A **dry run** never merges, so it never fires
+advance and never takes the marker.
 
 **Checkpoints, stopping, and resume (a long run made controllable).** The loop
 **pauses at a checkpoint between slices by default** — the moment to inspect the

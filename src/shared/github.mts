@@ -49,6 +49,20 @@ export function removeLabel(kind: Kind, number: string, label: string): void {
   tryEdit(kind, number, ["--remove-label", label]);
 }
 
+// Create a label in the repo if it is not there yet. `gh issue edit --add-label`
+// fails on a label the repo does not have, and label edits are best-effort (they
+// swallow that failure), so a label the fleet applies itself — rather than one a
+// human created by hand — has to be ensured before it is added. Tolerant: an
+// already-existing label makes `gh label create` exit non-zero, which is the
+// expected case, not an error.
+export function ensureLabel(name: string, description: string): void {
+  try {
+    gh(["label", "create", name, "--description", description]);
+  } catch {
+    /* already exists (the common case), or the token cannot create labels */
+  }
+}
+
 export function comment(kind: Kind, number: string, body: string): void {
   gh([kind, "comment", number, "--body", body]);
 }

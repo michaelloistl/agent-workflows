@@ -1,0 +1,90 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  LOCAL_RUN_LABEL,
+  markerPresent,
+  advanceStandDown,
+  markerAcquired,
+  markerReleased,
+  markerUnverified,
+} from "./spec-marker.mts";
+
+// — Reading the marker off an issue's labels —
+
+test("the marker is present when the label is on the issue", () => {
+  assert.equal(markerPresent(["ready-for-agent", LOCAL_RUN_LABEL]), true);
+});
+
+test("the marker is absent when the issue carries no labels", () => {
+  assert.equal(markerPresent([]), false);
+});
+
+// State labels are a different vocabulary — none of them is the marker, and none is
+// a trigger string, which is exactly why they could not solve this in the first place.
+test("state labels are not the marker", () => {
+  assert.equal(markerPresent(["agent:in-progress", "agent:review", "agent:blocked"]), false);
+});
+
+test("a differently-suffixed label is a different label", () => {
+  assert.equal(markerPresent(["agent:local-only"]), false);
+});
+
+// — The decision: should CI advance stand down? —
+//
+// A pure function of (spec state, marker present). The merged PR's base branch names
+// the spec; the marker says whether an attended local run owns its sequencing.
+
+test("advance stands down while the spec carries the marker", () => {
+  const reason = advanceStandDown({ spec: 48, marker: true });
+  assert.ok(reason, "expected a stand-down reason");
+  assert.match(reason, /#48/);
+  assert.match(reason, /agent:local/);
+  // A refusal, not a failure — the distinction the message must carry.
+  assert.match(reason, /not a failure/);
+  // And the way out of a marker nobody owns.
+  assert.match(reason, /remove/);
+});
+
+test("advance proceeds when the spec does not carry the marker", () => {
+  assert.equal(advanceStandDown({ spec: 48, marker: false }), null);
+});
+
+// Advance already no-ops on a base that is not a spec branch; there is nothing to
+// stand down from, marker or not.
+test("advance does not stand down when the base is not a spec branch", () => {
+  assert.equal(advanceStandDown({ spec: null, marker: true }), null);
+  assert.equal(advanceStandDown({ spec: null, marker: false }), null);
+});
+
+// — The loop's side of the lifecycle —
+
+test("claiming the marker names the spec and what it suppresses", () => {
+  const line = markerAcquired({ spec: 48, reclaimed: false });
+  assert.match(line, /#48/);
+  assert.match(line, /agent:local/);
+  assert.match(line, /stands down/);
+  assert.doesNotMatch(line, /stale/);
+});
+
+// A crashed run leaves the marker behind, which would silently disable CI advance
+// for that spec forever. Holding the local lock proves no live local run owns it, so
+// the next run reclaims it rather than refusing to start.
+test("reclaiming a stale marker is reported as a reclaim, not a fresh claim", () => {
+  const line = markerAcquired({ spec: 48, reclaimed: true });
+  assert.match(line, /stale/);
+  assert.match(line, /#48/);
+});
+
+test("releasing the marker says the spec is CI's again", () => {
+  assert.match(markerReleased(48), /#48/);
+  assert.match(markerReleased(48), /released/);
+});
+
+// An unclaimed marker is not survivable: every merge this run makes would start CI
+// on the next slice. The halt must say so and must name the first merge as the line
+// it stops before.
+test("an unverified marker halts before the first merge", () => {
+  const reason = markerUnverified(48);
+  assert.match(reason, /#48/);
+  assert.match(reason, /before the first\s+merge/);
+});

@@ -51,18 +51,34 @@
 // pane to the slice being built and firing a notification on halt or completion.
 // Both are strictly best-effort: outside a Herdr pane nothing is emitted, and no
 // rename, notification, or log write ever fails or delays the run.
+//
+// A real run also holds the LOCAL-RUN MARKER (`agent:local`) on the spec issue for
+// its whole length. Merging a slice PR into the spec branch is precisely the event
+// unattended `advance` triggers on, so without the marker every local merge would
+// start CI on the next tracer-bullet — the slice this loop is about to build itself.
+// The marker makes that ownership explicit and CI advance stands down while it is
+// held; it is claimed before the first merge, released with the lock on every exit,
+// and reclaimed by the next run when a crash left it behind (`shared/spec-marker.mts`).
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "../shared/config.mts";
-import { listIssues, remoteBranches, type RawIssue } from "../shared/spec-tracker.mts";
+import { listIssues, remoteBranches, issueLabels, type RawIssue } from "../shared/spec-tracker.mts";
 import { tracerBullets } from "../shared/spec-graph.mts";
 import { specStep, type SpecAction } from "../shared/spec-step.mts";
 import { renderProgress } from "../shared/spec-report.mts";
 import { awaitChecks } from "../shared/poll-checks.mts";
-import { comment } from "../shared/github.mts";
+import { addLabel, comment, ensureLabel, removeLabel } from "../shared/github.mts";
+import {
+  LOCAL_RUN_LABEL,
+  LOCAL_RUN_LABEL_DESCRIPTION,
+  markerPresent,
+  markerAcquired,
+  markerReleased,
+  markerUnverified,
+} from "../shared/spec-marker.mts";
 import { slugify } from "../shared/text.mts";
 import {
   closeTracerBullet,
@@ -320,6 +336,67 @@ function elapsedSeconds(): number {
   return Math.round((Date.now() - runStart) / 1000);
 }
 
+// ── The local-run marker ────────────────────────────────────────────────────────
+//
+// The THIRD mutex, and the only one that reaches across to CI. The lock arbitrates
+// between two local terminals and `agent:in-progress` between entry points on one
+// issue; neither covers what this loop newly does — MERGE slice PRs into the spec
+// branch. That merge is exactly the event unattended `advance` triggers on, and
+// advance responds by labelling the next tracer-bullet `agent:implement`, so without
+// a marker CI starts building slice two while this loop is about to build it.
+//
+// The marker is held for the length of a real run and released with the lock, so a
+// crashed loop cannot silently disable CI advance for a spec forever: the next run
+// holds the lock (proving no live local run owns the marker) and RECLAIMS it. A DRY
+// RUN never merges, so it never fires advance and never takes the marker.
+let markerHeld = false;
+
+// The spec's labels, or null when they cannot be read (a `gh` hiccup) — the caller
+// treats null as "unknown", never as "absent".
+function readSpecLabels(): string[] | null {
+  try {
+    return issueLabels(specNum);
+  } catch {
+    return null;
+  }
+}
+
+// Claim the marker before the first merge. A marker already there is stale by
+// construction (this run holds the lock), so it is reclaimed rather than refused.
+// The claim is VERIFIED, unlike every other label edit in the fleet: an unapplied
+// marker means CI races every merge this run makes, so it halts before the first one.
+function acquireMarker(): void {
+  if (dryRun) return;
+  ensureLabel(LOCAL_RUN_LABEL, LOCAL_RUN_LABEL_DESCRIPTION);
+  const before = readSpecLabels();
+  const reclaimed = before !== null && markerPresent(before);
+  if (!reclaimed) addLabel("issue", specArg, LOCAL_RUN_LABEL);
+  const after = readSpecLabels();
+  if (after !== null && !markerPresent(after)) {
+    const reason = markerUnverified(specNum);
+    console.error(reason);
+    halted = {
+      slice: specNum,
+      reason: `\`${LOCAL_RUN_LABEL}\` could not be applied to the spec issue`,
+    };
+    finish(1);
+  }
+  markerHeld = true;
+  console.log(markerAcquired({ spec: specNum, reclaimed }));
+  record(null, "marker", reclaimed ? "reclaimed a stale marker" : "claimed");
+}
+
+// Release the marker — on completion, on every halt, and on abort, from the single
+// exit that already releases the lock. Idempotent and best-effort: a marker left by a
+// kill -9 is reclaimed by the next run instead.
+function releaseMarker(): void {
+  if (!markerHeld) return;
+  markerHeld = false;
+  removeLabel("issue", specArg, LOCAL_RUN_LABEL);
+  console.log(markerReleased(specNum));
+  record(null, "marker", "released");
+}
+
 // Settle the run: release the lock, print the summary, and exit. The worktree is
 // REMOVED only once the final spec PR opens — the run is complete and the spec
 // branch lives on the remote (issue #60). On every halt (a failure, an abort, a
@@ -327,6 +404,12 @@ function elapsedSeconds(): number {
 // accumulated spec branch and is exactly what the developer inspects, and resume
 // reuses it as-is.
 function finish(code: number, opts: { removeWorktree?: boolean } = {}): never {
+  // The marker goes back with the lock — one lifecycle, so success, failure, a
+  // graceful stop, a checkpoint decline, and a Ctrl-C abort all hand the spec back
+  // to CI. (A completed run releases it after the final PR is open, so an advance
+  // fired by the last merge that lands here late finds that PR already open —
+  // `openFinalPr` is idempotent.)
+  releaseMarker();
   releaseLock(lock);
   // Record the terminal transition (issue #62) and, best-effort, fire the Herdr
   // notification for it. This is the single exit, so every halt and every completion
@@ -407,6 +490,11 @@ if (config.bootstrap) {
     finish(interrupted || boot.signal ? 130 : boot.status || 1);
   }
 }
+
+// Claim the local-run marker before ANYTHING reaches the remote — well before the
+// first merge, which is the event that would otherwise start CI on the next slice.
+// A dry run skips this: it never merges, so it never fires advance.
+acquireMarker();
 
 // Cut and push the spec branch off the base if it does not exist yet — the same cut
 // the unattended kickoff does, so each slice's fetch-spec resolves it as the base to
