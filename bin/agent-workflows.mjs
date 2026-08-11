@@ -99,6 +99,9 @@ export function classifyInvocation(args) {
         noPause: rest.includes("--no-pause"),
         interactive: rest.includes("--interactive"),
         stop: rest.includes("--stop"),
+        // `--yes` pre-accepts the preview prompt. A non-interactive stdin declines it,
+        // so without this nothing but a human at a terminal can start a run.
+        yes: rest.includes("--yes"),
       };
     }
     // Forward the attended flags verbatim (the entry point parses their meaning):
@@ -165,18 +168,23 @@ function runAttended(verb, issue, force, finalize, interactive) {
 // under tsx. It creates one worktree on the spec branch, bootstraps it once, and
 // builds the spec's tracer-bullets one at a time — dispatching, gating, merging,
 // and confirming each slice from the terminal (issue #59).
-function runSpecLoop(spec, execute, dryRun, force, noPause, interactive, stop) {
+// Takes the classified invocation whole rather than one positional boolean per flag:
+// the flags travel together, and a list of same-typed positionals is the shape a
+// mis-ordered argument slips through unnoticed.
+function runSpecLoop(invocation) {
+  const { spec } = invocation;
   const runner = fileURLToPath(new URL("../src/sequencer/spec-loop-run.mts", import.meta.url));
   const require = createRequire(import.meta.url);
   const tsxCli = require.resolve("tsx/cli");
 
   const runnerArgs = [tsxCli, runner, spec];
-  if (execute) runnerArgs.push("--execute");
-  if (dryRun) runnerArgs.push("--dry-run");
-  if (force) runnerArgs.push("--force");
-  if (noPause) runnerArgs.push("--no-pause");
-  if (interactive) runnerArgs.push("--interactive");
-  if (stop) runnerArgs.push("--stop");
+  if (invocation.execute) runnerArgs.push("--execute");
+  if (invocation.dryRun) runnerArgs.push("--dry-run");
+  if (invocation.force) runnerArgs.push("--force");
+  if (invocation.noPause) runnerArgs.push("--no-pause");
+  if (invocation.interactive) runnerArgs.push("--interactive");
+  if (invocation.stop) runnerArgs.push("--stop");
+  if (invocation.yes) runnerArgs.push("--yes");
   const child = spawnSync(process.execPath, runnerArgs, {
     stdio: "inherit",
     env: process.env,
@@ -199,15 +207,7 @@ function main() {
     return;
   }
   if (invocation.kind === "spec-loop") {
-    runSpecLoop(
-      invocation.spec,
-      invocation.execute,
-      invocation.dryRun,
-      invocation.force,
-      invocation.noPause,
-      invocation.interactive,
-      invocation.stop,
-    );
+    runSpecLoop(invocation);
     return;
   }
   if (invocation.kind === "attended") {

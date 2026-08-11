@@ -59,6 +59,7 @@ Also added: an append-only **run log**, so a run that halts overnight leaves som
 
 ## Consequences
 
+- The preview and the checkpoints are gates on the *human's* attention, and both can be pre-accepted (`--yes`, `--no-pause`) — otherwise nothing without a terminal could ever start a run, since a non-interactive stdin declines. This does not weaken any of the decisions above: every CI gate, the merge read-back, the local lock, and the `agent:local` marker are unchanged, and the preview is still printed in full with the accepting flag named, so the bypass is recorded rather than silent. What it costs is the assumption used to reject automatic retry — that a human is present to see a halt — so a run started this way must be read from its log or its Herdr notification instead.
 - `advance.mts` splits: the `gh` dispatch call separates from the close/recompute/report logic the loop reuses. `spec-graph.mts` is untouched.
 - `advance` stops being unguarded: the reusable workflow runs the `implement-spec` guard for *both* modes, and in advance mode it reads the spec's `agent:local` marker. The decision ("should advance stand down?") is a pure function of the spec state and the marker, tested beside the other step-function decisions.
 - A local spec run and a CI spec run produce identical git history and identical tracker state. Either can resume the other.

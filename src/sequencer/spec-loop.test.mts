@@ -11,6 +11,7 @@ import {
   formatSliceFooter,
   formatSpecSummary,
   specFlagConflict,
+  previewGate,
   sliceDisposition,
   formatCheckpoint,
   checkpointPrompt,
@@ -234,6 +235,43 @@ test("specFlagConflict allows each flag on its own and neither", () => {
   assert.equal(specFlagConflict({ interactive: true, runThrough: false }), null);
   assert.equal(specFlagConflict({ interactive: false, runThrough: true }), null);
   assert.equal(specFlagConflict({ interactive: false, runThrough: false }), null);
+});
+
+// — previewGate: may the run start without a human at the prompt? —
+//
+// The preview's confirmation is what stands between a command and real merges into a
+// spec branch, and a non-interactive stdin DECLINES it — the safe default, but it also
+// means no script, launcher, or unattended resume can ever start a run. `--yes`
+// pre-accepts it. The property under test is that the bypass is never SILENT: the
+// preview still prints, and the notice names the flag that answered for the human.
+
+test("previewGate asks the human when --yes is absent", () => {
+  const gate = previewGate({ yes: false, dryRun: false });
+  assert.match(String(gate.prompt), /proceed with REAL merges\?/);
+  assert.equal(gate.notice, null);
+});
+
+test("previewGate skips the prompt when --yes is given", () => {
+  assert.equal(previewGate({ yes: true, dryRun: false }).prompt, null);
+});
+
+// The question and the notice are built from one blast-radius string, so they can
+// never drift into describing different things.
+test("previewGate's prompt and notice name the same blast radius", () => {
+  assert.match(String(previewGate({ yes: false, dryRun: true }).prompt), /this DRY RUN/);
+  assert.match(String(previewGate({ yes: true, dryRun: true }).notice), /this DRY RUN/);
+  assert.match(String(previewGate({ yes: false, dryRun: false }).prompt), /REAL merges/);
+  assert.match(String(previewGate({ yes: true, dryRun: false }).notice), /REAL merges/);
+});
+
+test("previewGate names the flag that answered, so the bypass is never silent", () => {
+  const notice = String(previewGate({ yes: true, dryRun: false }).notice);
+  assert.match(notice, /--yes/);
+});
+
+test("previewGate's notice states which blast radius was accepted", () => {
+  assert.match(String(previewGate({ yes: true, dryRun: false }).notice), /REAL merges/);
+  assert.match(String(previewGate({ yes: true, dryRun: true }).notice), /DRY RUN/);
 });
 
 // — sliceDisposition (issue #60): resume derives from the PR state alone —

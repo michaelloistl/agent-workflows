@@ -8,6 +8,11 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Add `--yes` to the attended spec loop: it pre-accepts the preview prompt so a run
+  can start with nothing at the terminal to answer it (a launcher script, an
+  unattended resume). The preview is still printed in full and the run logs which
+  flag accepted it. With `--no-pause`, a spec run is fully non-interactive.
+
 ## v1.2.2 — 2026-08-11
 
 - Fix attended-run defects surfaced by the spec-loop dogfood, so a locally
