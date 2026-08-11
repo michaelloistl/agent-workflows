@@ -1,4 +1,4 @@
-import { run } from "@ai-hero/sandcastle";
+import { run, interactive } from "@ai-hero/sandcastle";
 import {
   claudeAgent,
   hostSandbox,
@@ -30,24 +30,40 @@ const ISSUE_NUMBER = required("ISSUE_NUMBER");
 const ISSUE_TITLE = required("ISSUE_TITLE");
 // Written by the `implement-fetch-spec` hook; the prompt inlines it.
 const SPEC_FILE = required("SPEC_FILE");
+// Interactive mode (issue #58): an attended run sets this to hand the composed prompt
+// to a LIVE agent session in the terminal so the developer steers the work directly.
+// Unset on every unattended (CI) run, which always runs headless.
+const INTERACTIVE = process.env.INTERACTIVE === "true";
 
-const result = await run({
+// Shared shape both paths run: same agent, sandbox, prompt, branch strategy, and
+// placeholder args — so the composed prompt handed to a live session is identical to
+// the one a headless run works from.
+const common = {
   name: `issue-${ISSUE_NUMBER}`,
   agent: claudeAgent(),
   sandbox: hostSandbox(),
   promptFile: resolveAsset(import.meta.dirname, "prompt.md"),
-  maxIterations: 3,
-  completionSignal: COMPLETION_SIGNAL,
   branchStrategy: HEAD_STRATEGY,
-  // Stream the agent's output to the Actions step log (default is a file under
-  // .sandcastle/logs/, which vanishes on the ephemeral runner).
-  logging: { type: "stdout" },
   promptArgs: {
     ISSUE_NUMBER,
     ISSUE_TITLE,
     SPEC_FILE,
   },
-});
+};
+
+// Interactive hands the composed prompt to a live session the developer drives; when
+// it ends, sandcastle collects the commits exactly as `run()` does — so the no-commits
+// check below and the finalize tail behave the same for both paths. Headless runs the
+// bounded iteration loop and streams its output to the Actions step log (the default
+// log file lives under .sandcastle/logs/, which vanishes on the ephemeral runner).
+const result = INTERACTIVE
+  ? await interactive(common)
+  : await run({
+      ...common,
+      maxIterations: 3,
+      completionSignal: COMPLETION_SIGNAL,
+      logging: { type: "stdout" },
+    });
 
 // No commits → the agent did not implement anything. Exit non-zero so the
 // workflow's failure path marks the issue `agent:blocked` rather than pushing an

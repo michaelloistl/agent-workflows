@@ -212,6 +212,145 @@ To customize a hook, drop a single file at
 `.sandcastle/agent-workflows/<verb-dir>/<entry>.mts` (or `prompt.md`) — the
 dispatcher resolves it override-first, else the packaged default.
 
+**Optional: tune sequencer behaviour with a config file.** Values the sequencer
+itself acts on live in an optional `.sandcastle/agent-workflows/config.json`
+committed to the consuming repo — separate from the toolchain values (Ruby
+enablement, system packages, Node version, database URL) that stay `with:` inputs
+because only GitHub Actions can act on them. Every value resolves per-run override
+→ file → default, so absent the file behaviour is unchanged:
+
+```jsonc
+{
+  // Integration branch every verb bases on and targets (agent branch, PR base,
+  // PR-verb tooling ref, spec branch). Absent → the repository default branch. A
+  // tracer-bullet under a spec still bases on its spec branch.
+  "baseBranch": "develop",
+  // Model the fleet's agents run on. Absent → the packaged default.
+  "agentModel": "claude-opus-4-8",
+  // CI check-poll timings for the merge gates, in seconds (env overrides win:
+  // CHECKS_INTERVAL_SECONDS / CHECKS_TIMEOUT_SECONDS / CHECKS_GRACE_SECONDS).
+  "checks": { "intervalSeconds": 15, "timeoutSeconds": 1200, "graceSeconds": 180 },
+  // Attended local runs only (see below). Root the per-run worktree is created
+  // under (WORKTREE_ROOT overrides; absent → an OS-temp dir), and the opaque
+  // command that makes a fresh worktree runnable (BOOTSTRAP overrides; absent →
+  // no bootstrap step).
+  "worktreeRoot": "/Users/you/.agent-worktrees",
+  "bootstrap": "yarn install",
+  // Attended spec loop only. Ceiling on what one run may spend before you see it
+  // again — slices attempted, wall-clock (seconds), or both (env overrides win:
+  // RUN_CEILING_MAX_SLICES / RUN_CEILING_MAX_WALLCLOCK_SECONDS). Absent → no ceiling.
+  "runCeiling": { "maxSlices": 4, "maxWallClockSeconds": 3600 }
+}
+```
+
+**Attended runs — start a verb from your terminal.** Alongside the label-triggered
+fleet (the *unattended* path), you can run a verb on your own machine:
+
+```sh
+agent-workflows explore 55            # run `explore` locally against issue #55
+agent-workflows implement 57          # build issue #57 end to end (--finalize=ask|never)
+agent-workflows implement 57 --interactive   # steer a live agent session
+```
+
+Each run gets its own git **worktree** under `worktreeRoot` — never the checkout
+you are sitting in — created detached at the configured base branch. The
+`bootstrap` command runs on that fresh tree (a non-zero exit fails the run before
+the agent starts), the agent's output streams to your terminal, and Ctrl-C aborts.
+Credentials come from your already-authenticated `gh` and existing agent
+credentials — the sequencer reads and writes no secret material. A `read-only`
+run's clean worktree is removed on success; an `implement` worktree is **retained**
+(it is what you inspect), and every run retains its tree on failure or abort. Each
+verb runs the SAME sequence the unattended path hands the sequencer, so the two
+paths cannot drift.
+
+**Attended spec loop — build a whole spec from your terminal.** `implement-spec`
+with a spec issue number drives the entire spec as a **slice loop**: it builds the
+tracer-bullets one at a time, in topological order, on **one** worktree created on
+the spec branch and bootstrapped once — each slice branching inside it from the
+accumulated spec-branch HEAD (the stacked topology, setup paid once).
+
+```sh
+agent-workflows implement-spec 48              # DRY RUN (the default): preview + one pass
+agent-workflows implement-spec 48 --execute    # real merges into the spec branch
+agent-workflows implement-spec 48 --execute --force      # also overrule the local lock
+agent-workflows implement-spec 48 --execute --no-pause   # run straight through, no checkpoints
+agent-workflows implement-spec 48 --execute --interactive # steer a live session per slice
+agent-workflows implement-spec 48 --stop       # from a SECOND terminal: graceful stop
+```
+
+Before the first agent runs it prints a **preview** — the resolved slice list in
+topological order, the spec branch, the base branch, and whether this is a dry run
+— and does not begin until you accept it. A **dry run** (the safer default) runs the
+loop with every irreversible action suppressed, reports what a real run would do,
+and halts where it would first merge — leaving no merge, no closed issue, and no
+final PR behind; watch one pass before trusting it with real merges. An `--execute`
+run merges each slice into the spec branch exactly as CI does, then **reads the PR's
+merged state back from GitHub** before advancing — a queued, blocked, or stale merge
+halts the run rather than being mistaken for a landed slice. Both CI gates are kept
+(a slice cannot merge on red; the next slice cannot start on a red spec-branch tip),
+a failed slice halts the whole run with no skip and no retry, the spec issue's
+progress comment is posted each iteration, and the final spec→base PR opens when the
+last slice lands. A spec run this way produces the same git history and tracker
+state as the same spec run in CI.
+
+**Checkpoints, stopping, and resume (a long run made controllable).** The loop
+**pauses at a checkpoint between slices by default** — the moment to inspect the
+accumulated spec branch before the next slice stacks on it — and continues on
+confirmation. `--no-pause` runs the whole spec straight through for a well-understood
+spec; `--interactive` instead hands *each* slice's build to a live agent session, and
+because that is per-slice it is rejected together with `--no-pause` (one stops at
+every slice, the other never stops).
+
+There are **two ways to stop**, and they are different:
+
+- **Ctrl-C** in the running terminal **aborts immediately** — mid-slice it abandons a
+  half-built tracer-bullet, leaving work for resume to untangle.
+- **`agent-workflows implement-spec <spec> --stop`**, run from a **second terminal**
+  (the running one is occupied), asks for a **graceful stop**: the loop finishes the
+  slice it is on and halts at the next checkpoint, leaving a clean between-slices
+  boundary. It finds the live run through the pid its local lock records.
+
+**Run ceiling (a walk-away bound).** A slice loop over a whole spec is the longest,
+most expensive thing you can start, so you can cap what one run spends before it
+halts for you: `runCeiling.maxSlices`, `runCeiling.maxWallClockSeconds`, or both in
+the config file (env overrides `RUN_CEILING_MAX_SLICES` / `RUN_CEILING_MAX_WALLCLOCK_SECONDS`
+win per run). The ceiling is evaluated at each checkpoint, so a reached ceiling halts
+**cleanly between slices, never mid-slice** — the same clean stop as a graceful stop,
+reported distinctly from a failure, with what the run consumed against the ceiling
+printed in the exit summary. A ceiling-halted spec **resumes** on re-run just like any
+other clean halt. Absent configuration there is no ceiling — today's unbounded
+behaviour.
+
+**Resume derives entirely from the tracker and the branches — no local file is
+consulted.** Re-running the same command picks up where the run stopped: closed
+tracer-bullets are skipped, tracer-bullets **added after the run started** are picked
+up (the slice set is recomputed every iteration), and a slice whose branch has an
+**open unmerged PR resumes at its gate** — await checks, then merge — rather than
+re-running the agent (the most expensive mistake the loop could make). Because state
+is external, a spec interrupted under this local loop can be resumed by the unattended
+orchestrator, and the reverse. The **worktree is removed once the final spec PR
+opens** (the run is complete and the branch lives on the remote); every halt — a
+failure, a Ctrl-C abort, a graceful stop, a checkpoint decline, a dry run — **retains**
+it for inspection and resume.
+
+**Run log and Herdr progress (a long run made legible).** Two optional, independent
+surfaces make a run readable while it happens and after it ends — neither is a
+dependency and both are strictly best-effort. An **append-only run log** at
+`<worktreeRoot>/spec-<n>-run.log` records every transition the loop makes — slice,
+action, outcome, timestamp, tab-separated — so a spec that halts at 2am leaves
+something to read in the morning; the summary prints its path. It lives under the
+worktree *root* (not inside the per-spec worktree, which is removed on completion),
+so it survives both a halt and a completed run's cleanup. The log is **written, never
+consulted**: nothing reads it to decide what happens next, so resume still derives
+entirely from the tracker and the branches — it does not reintroduce local state.
+When the loop runs inside a **Herdr-managed pane** (detected by the `HERDR_PANE`
+environment variable Herdr sets), it also emits best-effort progress into the UI
+already on screen — it renames the pane to the slice being built and fires a
+notification on halt and on completion, via the `herdr` CLI. Outside a Herdr pane
+**nothing is emitted and no warning is printed**, and a failed rename, notification,
+or log write **never fails or delays the run** — the sequencer gains no required
+dependency and still runs unchanged in CI and a bare terminal.
+
 **3. Create the trigger labels** listed in [Labels](#labels) for each verb you
 enable (the state labels are created on first use by the hooks).
 

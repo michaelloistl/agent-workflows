@@ -3,14 +3,26 @@ name: Agent Implement PR (reusable)
 # Reusable, tracker-agnostic `implement-pr` workflow. A consuming repo's thin
 # caller triggers on a PR labelled `agent:implement` and `uses:` this file. The
 # agent reads the PR's diff and review comments, makes the requested changes, and
-# commits; this workflow pushes (plain git, never --force) and the repo's
+# commits; the sequence pushes (plain git, never --force) and the repo's
 # `implement-pr-finalize` hook posts threaded replies. ZERO tracker I/O here.
 #
-# Hook sequence (consuming repo provides each as a `yarn` script):
-#   implement-pr-guards    refuse on a closed PR; exit non-zero = refused
-#   implement-pr-status    report state (in-progress / done / blocked [reason])
-#   implement-pr           the agent run; commits onto the PR branch, writes $REPLIES_FILE
-#   implement-pr-finalize  post threaded replies + summary to the tracker
+# The PR branch may predate the agent tooling, so the run loads the DEFAULT
+# branch's tooling from a detached worktree while the agent commits against the PR
+# head. The whole sequence lives in the sequencer, not this YAML (issues #49–#51),
+# which hands the ordered sequence to one invocation from the PR head:
+#   "$TOOLING_DIR/node_modules/.bin/agent-workflows" implement-pr
+# which runs, in order and through the unchanged per-hook dispatcher:
+#   guards            preflight (closed PR); non-zero exit is a REFUSAL, not a failure
+#   status            report in-progress to the tracker (from the tooling worktree)
+#   run               the agent run against the PR head; commits, writes $REPLIES_FILE.
+#                     A no-op (nothing to commit) exits non-zero → blocked
+#   push-and-finalize plain `git push` of the PR head (never --force; a
+#                     non-fast-forward self-reports blocked), then post threaded
+#                     replies + summary and report done
+#
+# One deliberate exception to the collapse: the light guard job stays split (runs
+# the SAME sequencer in `--guards-only` mode from a plain default-branch checkout);
+# the main job is gated on its result.
 on:
   workflow_call:
     inputs:
@@ -32,6 +44,10 @@ on:
       agent-model:
         type: string
         default: ""
+      base-branch:
+        type: string
+        default: ""
+        description: Per-run override for the branch this verb bases on / targets. When empty, the config file's baseBranch (if set) then the repository default branch is used (issue #53).
       node-version:
         type: string
         default: ""
@@ -80,10 +96,12 @@ jobs:
           cache: yarn
       - name: Install JS dependencies
         run: yarn install --frozen-lockfile
-      - name: Run guards
+      - name: Run guards (guards-only sequence)
         id: guards
+        # The guards-only sequencer exits non-zero on a refusal, so the same
+        # exit-code branch as before decides whether the heavy job runs.
         run: |
-          if yarn --silent sandcastle:implement-pr-guards; then
+          if yarn --silent sandcastle:implement-pr-guards-sequence; then
             echo "refused=false" >> "$GITHUB_OUTPUT"
           else
             echo "refused=true" >> "$GITHUB_OUTPUT"
@@ -137,12 +155,20 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
 
-      - name: Set up default-branch tooling worktree
+      - name: Set up base-branch tooling worktree
         env:
+          BASE_BRANCH: ${{ inputs.base-branch }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           echo "TOOLING_DIR=$RUNNER_TEMP/agent-tooling" >> "$GITHUB_ENV"
-          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          # Base branch precedence (issue #53): the per-run override, then the config
+          # file's baseBranch (read with jq — the tooling is not installed yet), then
+          # the repository default. The tooling worktree tracks the base branch, so a
+          # repo whose integration branch is `develop` loads develop's tooling.
+          base="$BASE_BRANCH"
+          if [ -z "$base" ]; then base="$(jq -r '.baseBranch // empty' .sandcastle/agent-workflows/config.json 2>/dev/null || true)"; fi
+          if [ -z "$base" ]; then base="$DEFAULT_BRANCH"; fi
+          git fetch --no-tags origin "$base"
           git worktree add --detach "$RUNNER_TEMP/agent-tooling" FETCH_HEAD
 
       - name: Install system packages
@@ -186,9 +212,6 @@ jobs:
           git config user.name "${{ inputs.git-author-name }}"
           git config user.email "${{ inputs.git-author-email }}"
 
-      - name: Report in progress
-        run: yarn --cwd "$TOOLING_DIR" sandcastle:implement-pr-status in-progress
-
       - name: Prepare test database
         if: inputs.enable-ruby
         env:
@@ -197,7 +220,14 @@ jobs:
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
         run: bundle exec rails db:prepare
 
-      - name: Run agent
+      - name: Run implement-pr sequence
+        # ONE sequencer invocation runs the whole verb: status in-progress → run →
+        # push-and-finalize. The plan pins WHERE each step runs — tracker hooks
+        # from the tooling worktree, the agent run and the git push against the PR
+        # head — so this launches from the PR working tree via the tooling
+        # worktree's packaged dispatcher (the PR branch may predate the tooling). A
+        # no-op run or a genuine step failure exits non-zero and trips the blocked
+        # report below; a non-fast-forward push self-reports blocked inside the plan.
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           RAILS_ENV: test
@@ -205,21 +235,7 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
           AGENT_MODEL: ${{ inputs.agent-model }}
-        # Tooling worktree's packaged dispatcher, PR working tree as cwd, so the
-        # agent reads and commits the PR's app code.
-        run: '"$TOOLING_DIR/node_modules/.bin/agent-workflows" implement-pr run'
-
-      - name: Push and finalize
-        if: success()
-        run: |
-          # Plain push — never --force. A non-fast-forward means the branch advanced
-          # remotely during the run, so abort and report rather than overwrite it.
-          if git push origin "HEAD:$HEAD_REF"; then
-            yarn --cwd "$TOOLING_DIR" sandcastle:implement-pr-finalize
-            yarn --cwd "$TOOLING_DIR" sandcastle:implement-pr-status done
-          else
-            yarn --cwd "$TOOLING_DIR" sandcastle:implement-pr-status blocked "aborted — the branch could not be fast-forwarded onto its remote (it likely advanced during the run). Not force-pushing."
-          fi
+        run: '"$TOOLING_DIR/node_modules/.bin/agent-workflows" implement-pr'
 
       - name: Report blocked on failure
         if: failure()

@@ -1,14 +1,16 @@
 import { claudeCode } from "@ai-hero/sandcastle";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
+import { resolveConfig } from "./config.mts";
 
 // Claude-agent factory shared by the agent-workflow entrypoints. One place to
 // pin the model and the runner shape so the whole fleet moves together.
 
-// Model every agent workflow runs on. Standardized by default so the whole
-// fleet moves together on a package version bump; a consumer that needs a
-// different model sets the optional `agent-model` input on the reusable
-// workflow, which passes it through as AGENT_MODEL (issue #31).
-export const AGENT_MODEL = process.env.AGENT_MODEL || "claude-opus-4-8";
+// Model every agent workflow runs on. Standardized by default so the whole fleet
+// moves together on a package version bump; a consumer that needs a different
+// model sets it once in the config file (`agentModel`) or, per-run, via the
+// `agent-model` input the reusable workflow passes through as AGENT_MODEL — the
+// override winning over the file (issue #31, #53).
+export const AGENT_MODEL = resolveConfig().agentModel;
 
 // Completion signal the prompts emit to stop an iteration loop early. Matches
 // the `<promise>COMPLETE</promise>` the prompt files end with.

@@ -46,13 +46,180 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
   return { path: join(srcDir, rel), source: "packaged" };
 }
 
+// Classify the raw argv tail into an invocation kind. Three shapes are supported:
+//
+//   agent-workflows <verb>                → "verb": run the verb's whole sequence
+//                                           via the sequencer (issue #49).
+//   agent-workflows <verb> --guards-only  → "verb" in guards-only mode: run just
+//                                           the guard step, for the light guard
+//                                           job's cheap preflight (issue #50).
+//   agent-workflows <verb> <issue-number> [--force] [--finalize=auto|ask|never]
+//                                          [--interactive]
+//                                         → "attended": run the verb locally as an
+//                                           attended run against that issue, in its
+//                                           own git worktree (issue #55). A hook
+//                                           name is never all-digits, so a numeric
+//                                           second arg disambiguates cleanly. A
+//                                           trailing `--force` overrules a refusal
+//                                           and both concurrency mutexes (issue #56);
+//                                           `--finalize=<mode>` selects an `implement`
+//                                           run's finalize policy (issue #57);
+//                                           `--interactive` hands the composed prompt
+//                                           to a live agent session (issue #58). All
+//                                           are forwarded to the attended entry point.
+//   agent-workflows <verb> <hook>         → "hook": run one hook (the original
+//                                           form, unchanged — what consuming
+//                                           repos' `sandcastle:<verb>-<hook>`
+//                                           scripts call).
+//
+// Exported so the top-level dispatch is testable without spawning a child.
+export function classifyInvocation(args) {
+  const [verb, second, ...rest] = args;
+  if (!verb) return { kind: "usage" };
+  if (second === undefined) return { kind: "verb", verb };
+  if (second === "--guards-only") return { kind: "verb", verb, guardsOnly: true };
+  if (/^\d+$/.test(second)) {
+    // `implement-spec <spec-issue>` is the attended SPEC LOOP (issue #59): it drives
+    // a whole spec locally rather than running a single verb, so it routes to its
+    // own entry point. A dry run is the safer default; `--execute` opts into real
+    // merges and `--force` overrules the local lock and each slice's guards.
+    if (verb === "implement-spec") {
+      return {
+        kind: "spec-loop",
+        spec: second,
+        execute: rest.includes("--execute"),
+        dryRun: rest.includes("--dry-run"),
+        force: rest.includes("--force"),
+        // Issue #60: `--no-pause` runs the whole spec straight through (the loop
+        // otherwise pauses at a checkpoint between slices); `--interactive` hands
+        // each slice's implement run to a live agent session; `--stop` is the
+        // graceful-stop control command run from a second terminal.
+        noPause: rest.includes("--no-pause"),
+        interactive: rest.includes("--interactive"),
+        stop: rest.includes("--stop"),
+      };
+    }
+    // Forward the attended flags verbatim (the entry point parses their meaning):
+    // `--force` (issue #56), `--finalize=<mode>` (issue #57), and `--interactive`
+    // (issue #58). `finalize` carries the raw flag string so a typo surfaces at the
+    // entry point, not here.
+    return {
+      kind: "attended",
+      verb,
+      issue: second,
+      force: rest.includes("--force"),
+      finalize: rest.find((a) => a.startsWith("--finalize=")),
+      interactive: rest.includes("--interactive"),
+    };
+  }
+  return { kind: "hook", verb, hook: second, rest };
+}
+
+// Run a whole verb through the sequencer: spawn its bridge entrypoint under tsx.
+// The bridge (src/sequencer/run.mts) re-invokes THIS bin once per step in the
+// verb's plan, so every step still goes through the unchanged per-hook path.
+function runVerb(verb, guardsOnly) {
+  const runner = fileURLToPath(new URL("../src/sequencer/run.mts", import.meta.url));
+  const require = createRequire(import.meta.url);
+  const tsxCli = require.resolve("tsx/cli");
+
+  const runnerArgs = [tsxCli, runner, verb];
+  if (guardsOnly) runnerArgs.push("--guards-only");
+  const child = spawnSync(process.execPath, runnerArgs, {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (child.error) {
+    console.error(`agent-workflows: failed to run sequencer for "${verb}":`, child.error);
+    process.exit(1);
+  }
+  process.exit(child.status ?? 1);
+}
+
+// Run a verb locally as an attended run: spawn the attended sequencer entrypoint
+// under tsx. It creates a git worktree, bootstraps it, streams the run to the
+// terminal, and cleans up per the worktree policy (issue #55).
+function runAttended(verb, issue, force, finalize, interactive) {
+  const runner = fileURLToPath(new URL("../src/sequencer/attended.mts", import.meta.url));
+  const require = createRequire(import.meta.url);
+  const tsxCli = require.resolve("tsx/cli");
+
+  const runnerArgs = [tsxCli, runner, verb, issue];
+  if (force) runnerArgs.push("--force");
+  if (finalize) runnerArgs.push(finalize);
+  if (interactive) runnerArgs.push("--interactive");
+  const child = spawnSync(process.execPath, runnerArgs, {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (child.error) {
+    console.error(`agent-workflows: failed to run attended ${verb} #${issue}:`, child.error);
+    process.exit(1);
+  }
+  process.exit(child.status ?? 1);
+}
+
+// Run a whole spec locally as the attended spec loop: spawn the loop entrypoint
+// under tsx. It creates one worktree on the spec branch, bootstraps it once, and
+// builds the spec's tracer-bullets one at a time — dispatching, gating, merging,
+// and confirming each slice from the terminal (issue #59).
+function runSpecLoop(spec, execute, dryRun, force, noPause, interactive, stop) {
+  const runner = fileURLToPath(new URL("../src/sequencer/spec-loop-run.mts", import.meta.url));
+  const require = createRequire(import.meta.url);
+  const tsxCli = require.resolve("tsx/cli");
+
+  const runnerArgs = [tsxCli, runner, spec];
+  if (execute) runnerArgs.push("--execute");
+  if (dryRun) runnerArgs.push("--dry-run");
+  if (force) runnerArgs.push("--force");
+  if (noPause) runnerArgs.push("--no-pause");
+  if (interactive) runnerArgs.push("--interactive");
+  if (stop) runnerArgs.push("--stop");
+  const child = spawnSync(process.execPath, runnerArgs, {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (child.error) {
+    console.error(`agent-workflows: failed to run the spec loop for #${spec}:`, child.error);
+    process.exit(1);
+  }
+  process.exit(child.status ?? 1);
+}
+
 function main() {
-  const [verb, hook, ...rest] = process.argv.slice(2);
-  if (!verb || !hook) {
-    console.error("usage: agent-workflows <verb> <hook> [args...]");
+  const invocation = classifyInvocation(process.argv.slice(2));
+  if (invocation.kind === "usage") {
+    console.error("usage: agent-workflows <verb> [hook | issue-number] [args...]");
     process.exit(2);
   }
+  if (invocation.kind === "verb") {
+    runVerb(invocation.verb, invocation.guardsOnly);
+    return;
+  }
+  if (invocation.kind === "spec-loop") {
+    runSpecLoop(
+      invocation.spec,
+      invocation.execute,
+      invocation.dryRun,
+      invocation.force,
+      invocation.noPause,
+      invocation.interactive,
+      invocation.stop,
+    );
+    return;
+  }
+  if (invocation.kind === "attended") {
+    runAttended(
+      invocation.verb,
+      invocation.issue,
+      invocation.force,
+      invocation.finalize,
+      invocation.interactive,
+    );
+    return;
+  }
 
+  const { verb, hook, rest } = invocation;
   const srcDir = fileURLToPath(new URL("../src", import.meta.url));
   const { path: entry } = resolveEntry(verb, hook, {
     cwd: process.cwd(),

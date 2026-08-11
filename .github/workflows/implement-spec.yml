@@ -8,6 +8,11 @@ name: Agent Implement spec (reusable)
 # the `implement-spec-<mode>` hooks. Lightweight: node + `gh` only, no
 # postgres/redis/ruby (nothing to build).
 #
+# The sequence lives in the sequencer, not this YAML (issue #52). The run job hands
+# the mode to the sequencer, which runs the orchestrator's short plan — a single
+# `kickoff` or `advance` hook — through the unchanged per-hook dispatcher:
+#   SPEC_MODE=<mode> yarn sandcastle:implement-spec-sequence
+#
 #   kickoff  cut the spec branch, dispatch the topologically-first tracer-bullet
 #   advance  (added in #8) on a slice PR merge: close it, dispatch the next, or
 #            open the final spec→default PR
@@ -27,6 +32,10 @@ on:
         type: string
         default: ""
         description: Node version (e.g. "20", "lts/*"). When empty, .node-version in the consuming repo is used.
+      base-branch:
+        type: string
+        default: ""
+        description: Per-run override for the branch the spec branch is cut from and the final spec PR targets. When empty, the config file's baseBranch (if set) then the repository default branch is used (issue #53).
     # Declared explicitly (not `secrets: inherit`) so cross-owner callers can pass
     # it — `inherit` only works when caller and reusable workflow share an owner.
     # spec orchestration runs no agent and touches no DB, so only the PAT is needed.
@@ -106,6 +115,11 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       BASE_REF: ${{ github.event.pull_request.base.ref }}
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      # Base branch the orchestrator cuts the spec branch from and targets the final
+      # spec PR at: BASE_BRANCH (per-run override) → the config file's baseBranch →
+      # DEFAULT_BRANCH (the repository default). kickoff/advance resolve this (#53).
+      BASE_BRANCH: ${{ inputs.base-branch }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
       - name: Checkout default branch
         uses: actions/checkout@v6
@@ -127,4 +141,9 @@ jobs:
           git config user.name "${{ inputs.git-author-name }}"
           git config user.email "${{ inputs.git-author-email }}"
       - name: Orchestrate
-        run: yarn sandcastle:implement-spec-${{ inputs.mode }}
+        # ONE sequencer invocation runs the orchestrator's (short) sequence: the
+        # single `kickoff` or `advance` hook, selected by SPEC_MODE. No agent and no
+        # database services — the whole shape lives in the sequencer (issue #52).
+        env:
+          SPEC_MODE: ${{ inputs.mode }}
+        run: yarn sandcastle:implement-spec-sequence

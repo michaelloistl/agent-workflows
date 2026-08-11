@@ -2,17 +2,30 @@ name: Agent Implement (reusable)
 
 # Reusable, tracker-agnostic `implement` workflow. A consuming repo's thin caller
 # triggers on an issue labelled `agent:implement` and `uses:` this file. The agent
-# builds the issue on a fresh `agent/…` branch; this workflow pushes the branch
+# builds the issue on a fresh `agent/…` branch; the sequence pushes the branch
 # (plain git — Decision 7) and the repo's `implement-finalize` hook opens the
 # draft PR with the right cross-reference. ZERO tracker I/O lives here.
 #
-# Hook sequence (consuming repo provides each as a `yarn` script):
-#   implement-guards      preflight (spec / shape / blocked-by / existing-PR);
-#                         exit non-zero = refused (skip rest, not a failure)
-#   implement-status      report state to the tracker (in-progress / review / blocked)
-#   implement-fetch-spec  write the issue spec to $SPEC_FILE; output `branch`
-#   implement             the agent run; commits onto the branch
-#   implement-finalize    open the draft PR with the tracker cross-reference
+# The whole sequence lives in the sequencer, not this YAML (issues #49, #50). This
+# workflow keeps only what GitHub Actions alone can do — checkout, toolchain,
+# service containers — and hands the ordered sequence to the sequencer:
+#   yarn sandcastle:implement-sequence  → agent-workflows implement
+# which runs, in order and through the unchanged per-hook dispatcher:
+#   guards        preflight (spec / shape / blocked-by / existing-PR); a non-zero
+#                 exit is a REFUSAL (not a failure) — the sequencer stops and
+#                 exits 0, and the guard has cleared the trigger label already
+#   status        report in-progress to the tracker
+#   fetch-spec    write the issue spec to $SPEC_FILE; emit branch + base
+#   create-branch cut the `agent/…` branch from base (a spec branch for a stacked
+#                 tracer-bullet, else the default branch)
+#   run           the agent run; commits onto the branch
+#   boot-check    (Ruby only) verify a fresh-DB boot on the agent's output (#44)
+#   push          plain git push of the branch (Decision 7)
+#   finalize      open the PR with the cross-reference and apply the terminal label
+#
+# One deliberate exception to the collapse: the light guard job stays split, so a
+# refusal avoids paying for Ruby and Postgres. It runs the SAME sequencer in
+# guards-only mode (`--guards-only`), and the main job is gated on its result.
 on:
   workflow_call:
     inputs:
@@ -34,6 +47,10 @@ on:
       agent-model:
         type: string
         default: ""
+      base-branch:
+        type: string
+        default: ""
+        description: Per-run override for the branch this verb bases on / targets. When empty, the config file's baseBranch (if set) then the repository default branch is used (issue #53).
       node-version:
         type: string
         default: ""
@@ -56,9 +73,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Preflight guards. A refusal is NOT a failure: the hook removes the trigger
-  # label and comments why (never `agent:blocked`, reserved for stuck runs), then
-  # exits non-zero so the heavy `implement` job below is skipped.
+  # Preflight guards, run in guards-only mode so a refusal is caught before Ruby
+  # and Postgres are paid for. A refusal is NOT a failure: the guard hook removes
+  # the trigger label and comments why (never `agent:blocked`, reserved for stuck
+  # runs), and the guards-only sequencer propagates its non-zero exit so the heavy
+  # `implement` job below is skipped.
   guard:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -86,10 +105,12 @@ jobs:
           cache: yarn
       - name: Install JS dependencies
         run: yarn install --frozen-lockfile
-      - name: Run guards
+      - name: Run guards (guards-only sequence)
         id: guards
+        # The guards-only sequencer exits non-zero on a refusal, so the same
+        # exit-code branch as before decides whether the heavy job runs.
         run: |
-          if yarn --silent sandcastle:implement-guards; then
+          if yarn --silent sandcastle:implement-guards-sequence; then
             echo "refused=false" >> "$GITHUB_OUTPUT"
           else
             echo "refused=true" >> "$GITHUB_OUTPUT"
@@ -143,7 +164,7 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
-          # PAT so the later `git push` is authed to trigger downstream CI.
+          # PAT so the sequence's `git push` is authed to trigger downstream CI.
           token: ${{ secrets.AGENT_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Install system packages
@@ -184,52 +205,6 @@ jobs:
           git config user.name "${{ inputs.git-author-name }}"
           git config user.email "${{ inputs.git-author-email }}"
 
-      - name: Report in progress
-        run: yarn sandcastle:implement-status in-progress
-
-      - name: Fetch spec
-        id: spec
-        # The hook writes $SPEC_FILE and outputs `branch` (tracker-aware naming —
-        # issue number vs Linear id lives behind the hook, not here).
-        run: yarn sandcastle:implement-fetch-spec
-
-      - name: Create agent branch
-        # `base` is the fetch-spec-derived base (a live spec branch for a stacked
-        # tracer-bullet), falling back to the default branch for a standalone issue.
-        env:
-          BRANCH: ${{ steps.spec.outputs.branch }}
-          BASE: ${{ steps.spec.outputs.base || github.event.repository.default_branch }}
-        run: |
-          git fetch origin "$BASE"
-          git checkout -B "$BRANCH" "origin/$BASE"
-
-      # Re-invoke language setup after the working-branch checkout so
-      # `.ruby-version` / `.node-version` / `Gemfile.lock` resolve against the
-      # branch we're actually going to build on. The earlier invocations bind
-      # to the default branch's version files (needed so `Fetch spec` can run
-      # yarn); re-invoking here reconciles any pin the working branch bumped.
-      # Both actions are idempotent — a no-op when the version files match,
-      # a runtime swap + `bundle install` cache-restore keyed on the new
-      # lockfile hash when they differ. Supersedes a prior manual
-      # `bundle install` step: `bundler-cache: true` handles that here.
-      - name: Sync Ruby to working branch
-        if: inputs.enable-ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          bundler-cache: true
-
-      - name: Sync Node to working branch
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ inputs.node-version }}
-          node-version-file: ${{ inputs.node-version == '' && '.node-version' || '' }}
-          cache: yarn
-
-      - name: Sync JS dependencies to working branch
-        # setup-node handles Node + cache; install mirrors the pre-checkout
-        # step so node_modules matches the working branch's yarn.lock.
-        run: yarn install --frozen-lockfile
-
       - name: Prepare test database
         if: inputs.enable-ruby
         env:
@@ -238,7 +213,12 @@ jobs:
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
         run: bundle exec rails db:prepare
 
-      - name: Run agent
+      - name: Run implement sequence
+        # ONE sequencer invocation runs the whole verb: guards → status →
+        # fetch-spec → create-branch → run → boot-check (Ruby) → push → finalize.
+        # A guard refusal exits 0 here (not a failure); a genuine step failure
+        # exits non-zero and trips the blocked report below. DEFAULT_BRANCH is the
+        # base the produced PR falls back to; ENABLE_RUBY gates the boot check.
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           RAILS_ENV: test
@@ -246,45 +226,12 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
           AGENT_MODEL: ${{ inputs.agent-model }}
-        run: yarn sandcastle:implement
-
-      # Verify Rails boots against a fresh empty DB AFTER the agent's changes.
-      # The earlier `Prepare test database` step ran against pre-agent code, so
-      # any class-load-time DB query the agent introduces (e.g. via a DSL like
-      # `has_events`, `ActiveAdmin.register`, or a DB-touching initializer) would
-      # slip through and only surface on the NEXT tracer-bullet's `Prepare test
-      # database` step — after the buggy slice was already merged into the spec
-      # branch. This step catches it in the current run instead. See issue #44.
-      # Drops the DB out-of-band via psql so Rails env-load isn't required to
-      # reset state (the very thing we're testing).
-      - name: Verify fresh-DB boot on agent output
-        if: inputs.enable-ruby
-        env:
-          RAILS_ENV: test
-          DATABASE_URL: ${{ inputs.database-url }}
-          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
-          PGHOST: localhost
-          PGPORT: "5432"
-          PGUSER: postgres
-          PGPASSWORD: postgres
-        run: |
-          psql -d postgres -c 'DROP DATABASE IF EXISTS test'
-          psql -d postgres -c 'CREATE DATABASE test'
-          bundle exec rails db:prepare
-
-      - name: Push branch and finalize
-        if: success()
-        env:
-          BRANCH: ${{ steps.spec.outputs.branch }}
-          BASE: ${{ steps.spec.outputs.base || github.event.repository.default_branch }}
-        run: |
-          # Plain git push (Decision 7). PR *creation* is the finalize hook's job
-          # because the cross-reference (`Closes #N` vs a Linear ref) and the base
-          # (a spec branch for a stacked tracer-bullet) are tracker-aware.
-          git push -u origin "$BRANCH"
-          # finalize opens the PR AND applies the terminal label (`agent:review`
-          # standalone, `agent:review-pr` under a spec), so it owns the state here.
-          yarn sandcastle:implement-finalize
+          ENABLE_RUBY: ${{ inputs.enable-ruby }}
+          # Base branch precedence (issue #53): BASE_BRANCH (per-run override) →
+          # the config file's baseBranch → DEFAULT_BRANCH (the repository default).
+          BASE_BRANCH: ${{ inputs.base-branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: yarn sandcastle:implement-sequence
 
       - name: Report blocked on failure
         if: failure()

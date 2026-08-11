@@ -15,8 +15,14 @@ export type Kind = "issue" | "pr";
 // leaves no state label (a clean success).
 export type State = "in-progress" | "review" | "blocked" | "done";
 
+// The `agent:in-progress` state label. Exported because it is also the mutex
+// BETWEEN entry points (issue #56): an attended run refuses to start on an issue
+// already carrying it, since another entry point (the unattended workflow) is
+// mid-run there.
+export const IN_PROGRESS_LABEL = "agent:in-progress";
+
 const STATE_LABEL = {
-  "in-progress": "agent:in-progress",
+  "in-progress": IN_PROGRESS_LABEL,
   review: "agent:review",
   blocked: "agent:blocked",
 } as const;
@@ -121,16 +127,33 @@ export function runStatus(args: {
   });
 }
 
+// Whether a guard refusal should be ANNOUNCED on the tracker (retire the trigger
+// label + comment why) or only surfaced to the terminal. The unattended workflow
+// announces; an attended local run sets `ANNOUNCE_REFUSALS=false`, because there
+// may be no trigger label to retire and a refusal comment on an issue the
+// developer is watching is noise. Only the exact string `"false"` suppresses, so
+// a mistyped value never silently swallows a tracker refusal. This is the sole
+// addition to the hook contract in issue #56 (see docs/hook-contract.md).
+export function announceRefusals(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.ANNOUNCE_REFUSALS !== "false";
+}
+
 // A guard refusal: retire the trigger label, post the explanation, and exit
 // non-zero so the central workflow skips the rest (NOT a failure — never
 // `agent:blocked`). The hook owns its own feedback; the YAML only reads the exit.
+// When announcement is suppressed (an attended run), the reason prints to the
+// terminal and nothing is written to the tracker.
 export function refuse(
   kind: Kind,
   number: string,
   triggerLabel: string,
   message: string,
 ): never {
-  removeLabel(kind, number, triggerLabel);
-  comment(kind, number, message);
+  if (announceRefusals()) {
+    removeLabel(kind, number, triggerLabel);
+    comment(kind, number, message);
+  } else {
+    console.error(message);
+  }
   process.exit(1);
 }
