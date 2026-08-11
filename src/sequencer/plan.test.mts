@@ -163,6 +163,45 @@ test("planVerb guards-only mode returns just the guard step", () => {
   }
 });
 
+// A forced run (issue #56) overrules a guard refusal: the guards step still runs
+// (its reason prints to the terminal), but its non-zero exit becomes `tolerated`
+// so the executor continues the sequence instead of stopping. Every other step's
+// disposition is untouched. This is the single force flag overruling a refusal.
+test("planVerb with force tolerates a guard refusal", () => {
+  const plan = planVerb("explore", { force: true });
+
+  assert.deepEqual(plan.map(shape), [
+    { kind: "hook", hook: "guards", args: [], onNonZero: "tolerated", cwd: undefined },
+    { kind: "hook", hook: "status", args: ["in-progress"], onNonZero: "failure", cwd: undefined },
+    { kind: "hook", hook: "fetch-spec", args: [], onNonZero: "failure", cwd: undefined },
+    { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: undefined },
+    { kind: "hook", hook: "finalize", args: [], onNonZero: "failure", cwd: undefined },
+    { kind: "hook", hook: "status", args: ["done"], onNonZero: "failure", cwd: undefined },
+  ]);
+});
+
+// Force flips the guard step for the PR verbs too (which guard from the tooling
+// worktree), and leaves everything else — including the `cwd` split — intact.
+test("planVerb with force tolerates the guard refusal on the PR verbs", () => {
+  const plan = planVerb("review-pr", { force: true });
+
+  assert.equal(plan[0].kind, "hook");
+  assert.deepEqual(shape(plan[0]), {
+    kind: "hook",
+    hook: "guards",
+    args: [],
+    onNonZero: "tolerated",
+    cwd: "tooling",
+  });
+});
+
+// Without force the guard stays a `refusal` — the default (and only) unattended
+// behaviour, so a refusal halts the run.
+test("planVerb without force leaves the guard as a refusal", () => {
+  const plan = planVerb("explore", {});
+  assert.equal((plan[0] as { onNonZero: string }).onNonZero, "refusal");
+});
+
 test("planVerb produces steps with an env map and is pure (no I/O)", () => {
   const plan = planVerb("implement", { enableRuby: true });
   for (const step of plan) {

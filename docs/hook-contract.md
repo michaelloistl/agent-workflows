@@ -37,7 +37,7 @@ override-dir-resolvable entrypoint.)
 
 | Script | Called when | Must do | Exit semantics |
 |---|---|---|---|
-| `sandcastle:<verb>-guards` | first, in a lightweight guard job | preflight; on refusal retire the trigger label + comment why | `0` = proceed, non-zero = **refused** (skip the run; NOT a failure, never `agent:blocked`) |
+| `sandcastle:<verb>-guards` | first, in a lightweight guard job | preflight; on refusal retire the trigger label + comment why — unless `ANNOUNCE_REFUSALS=false` (below), when it prints the reason to the terminal and writes nothing to the tracker | `0` = proceed, non-zero = **refused** (skip the run; NOT a failure, never `agent:blocked`) |
 | `sandcastle:<verb>-status <state> [reason]` | start, success, failure | apply the tracker state (see states below) | non-zero fails the step |
 | `sandcastle:<verb>-fetch-spec` | issue verbs only (`explore`, `implement`) | write the spec to `$SPEC_FILE`; `implement` also emits `branch=…` to `$GITHUB_OUTPUT` | non-zero fails the run |
 | `sandcastle:<verb>` | the agent run | do the work; write the verb's output file (below); exit non-zero if it produced nothing | non-zero → `blocked` |
@@ -60,9 +60,22 @@ all `agent:*` state-label hygiene and is idempotent about clearing
 | `done` | clean success, no lingering state | remove `agent:in-progress` |
 | `blocked` `[reason]` | run failed / aborted | remove `agent:in-progress`; add `agent:blocked`; comment the reason + run URL |
 
+## Refusal announcement
+
+By default a guard refusal is **announced** on the tracker: it retires the
+trigger label and comments why. An **attended** local run (a developer invoking
+a verb on their own machine) sets `ANNOUNCE_REFUSALS=false`; the guard then
+prints its reason to the terminal and writes **nothing** to the tracker —
+there may be no trigger label to retire, and a refusal comment on an issue the
+developer is watching is noise. The flag suppresses only the refusal
+announcement; the `<verb>-status` state labels are still written normally. Only
+the exact string `false` suppresses, so a mistyped value never silently swallows
+a tracker refusal.
+
 ## Environment the central workflow provides
 
-Common: `GH_TOKEN`, `GH_REPO`, `RUN_URL`.
+Common: `GH_TOKEN`, `GH_REPO`, `RUN_URL`. Optional `ANNOUNCE_REFUSALS` (default
+announce; `false` suppresses a guard refusal's tracker announcement — see above).
 Issue verbs: `ISSUE_NUMBER`, `ISSUE_TITLE`, `SPEC_FILE`. `implement` finalize also
 gets `BRANCH`.
 PR verbs: `PR_NUMBER`, `PR_TITLE`; plus `HEAD_REF`/`BASE_REF` where relevant, and

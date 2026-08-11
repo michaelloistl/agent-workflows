@@ -87,6 +87,18 @@ test("classifyInvocation treats a verb + issue number as an attended local run",
     kind: "attended",
     verb: "explore",
     issue: "55",
+    force: false,
+  });
+});
+
+// A trailing `--force` on an attended run sets the force flag the entry point
+// uses to overrule a refusal and both concurrency mutexes (issue #56).
+test("classifyInvocation reads a trailing --force on an attended run", () => {
+  assert.deepEqual(classifyInvocation(["explore", "55", "--force"]), {
+    kind: "attended",
+    verb: "explore",
+    issue: "55",
+    force: true,
   });
 });
 

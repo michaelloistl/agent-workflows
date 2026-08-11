@@ -44,6 +44,9 @@ const context: RunContext = {
   // Which orchestrator entry point to sequence — `implement-spec` reads this;
   // every other verb ignores it (issue #52).
   specMode: process.env.SPEC_MODE,
+  // A forced run overrules a guard refusal (the guards step is tolerated). Set by
+  // the attended entry point's `--force`; unattended never sets it (issue #56).
+  force: process.env.FORCE === "true",
 };
 const plan = planVerb(verb, context);
 
