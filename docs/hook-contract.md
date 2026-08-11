@@ -101,10 +101,13 @@ Output files the agent run writes (path supplied by the workflow):
 - **PR verbs** run the agent against the PR head, but the PR branch may predate
   the tooling — so the workflow checks out the PR head as the working tree and the
   **default branch's** tooling into a detached worktree (`$TOOLING_DIR`). The
-  agent run is invoked by absolute path to the packaged bin —
-  `"$TOOLING_DIR/node_modules/.bin/agent-workflows" <verb> run` — with the PR
-  working tree as cwd. This splits **tooling location** (`$TOOLING_DIR`) from
-  **cwd** (PR head), which `yarn --cwd` cannot express. The tracker-only hooks
+  sequence is invoked by absolute path to the packaged bin —
+  `"$AGENT_WORKFLOWS_BIN" <verb>` — with the PR working tree as cwd. That bin is
+  resolved once per run to `$TOOLING_DIR/node_modules/.bin/agent-workflows`, the
+  symlink yarn creates wherever `agent-workflows` is a dependency; failing that
+  (the central repo is the package, so it never installs itself) it falls back to
+  `$TOOLING_DIR/bin/agent-workflows.mjs`. This splits **tooling location**
+  (`$TOOLING_DIR`) from **cwd** (PR head), which `yarn --cwd` cannot express. The tracker-only hooks
   (guards/status/finalize) run as `yarn --cwd "$TOOLING_DIR"
   sandcastle:<verb>-<hook>` (cwd is irrelevant — they act on the tracker via
   `PR_NUMBER`).

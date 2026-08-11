@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
+import { statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { resolveEntryRelPath, resolveEntry, classifyInvocation } from "./agent-workflows.mjs";
 
 test("resolveEntryRelPath maps the run hook to the verb's own entry", () => {
@@ -269,4 +271,15 @@ test("resolveEntry falls back to the packaged src/ entry when no override exists
 
   assert.equal(result.source, "packaged");
   assert.equal(result.path, join("/pkg/src", "review", "review.mts"));
+});
+
+// The PR-verb workflows now fall back to invoking THIS file directly when the
+// `node_modules/.bin` symlink is absent (the central repo is the package, so it never
+// installs itself). That fallback execs the file, so the executable bit is load-bearing
+// in a way nothing else checks: lose it and the workflows fail with a message about a
+// missing dispatcher, pointing at the wrong thing entirely.
+test("the dispatcher bin is executable, so the workflow fallback can exec it", () => {
+  const bin = fileURLToPath(new URL("agent-workflows.mjs", import.meta.url));
+  const mode = statSync(bin).mode;
+  assert.ok(mode & 0o100, `expected owner-executable, got mode ${(mode & 0o777).toString(8)}`);
 });

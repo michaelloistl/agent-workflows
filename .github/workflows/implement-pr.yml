@@ -10,7 +10,7 @@ name: Agent Implement PR (reusable)
 # branch's tooling from a detached worktree while the agent commits against the PR
 # head. The whole sequence lives in the sequencer, not this YAML (issues #49–#51),
 # which hands the ordered sequence to one invocation from the PR head:
-#   "$TOOLING_DIR/node_modules/.bin/agent-workflows" implement-pr
+#   "$AGENT_WORKFLOWS_BIN" implement-pr   # resolved from $TOOLING_DIR below
 # which runs, in order and through the unchanged per-hook dispatcher:
 #   guards            preflight (closed PR); non-zero exit is a REFUSAL, not a failure
 #   status            report in-progress to the tracker (from the tooling worktree)
@@ -194,6 +194,24 @@ jobs:
       - name: Install tooling dependencies
         run: yarn --cwd "$TOOLING_DIR" install --frozen-lockfile
 
+      - name: Resolve the tooling dispatcher
+        # `node_modules/.bin/agent-workflows` is the symlink yarn creates when
+        # `agent-workflows` is installed as a DEPENDENCY — every consuming repo has it,
+        # and it stays the path used there. The CENTRAL repo is the package itself, so
+        # it never installs itself and the symlink is absent — which killed the AGENT
+        # RUN step below with a bare `exit 127`. So this falls back to the package's own
+        # `bin/`, letting the central repo run the PR verbs on its own pull requests.
+        # Neither present fails HERE with a message naming both paths, rather than as a
+        # "No such file or directory" several steps later.
+        run: |
+          bin="$TOOLING_DIR/node_modules/.bin/agent-workflows"
+          if [ ! -x "$bin" ]; then bin="$TOOLING_DIR/bin/agent-workflows.mjs"; fi
+          if [ ! -x "$bin" ]; then
+            echo "no agent-workflows dispatcher under $TOOLING_DIR (looked in node_modules/.bin and bin/)" >&2
+            exit 1
+          fi
+          echo "AGENT_WORKFLOWS_BIN=$bin" >> "$GITHUB_ENV"
+
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
 
@@ -235,7 +253,7 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
           AGENT_MODEL: ${{ inputs.agent-model }}
-        run: '"$TOOLING_DIR/node_modules/.bin/agent-workflows" implement-pr'
+        run: '"$AGENT_WORKFLOWS_BIN" implement-pr'
 
       - name: Report blocked on failure
         if: failure()
