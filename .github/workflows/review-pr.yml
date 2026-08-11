@@ -9,11 +9,24 @@ name: Agent Review PR (reusable)
 # DEFAULT branch's tooling from a detached worktree, with the PR working tree as
 # cwd. Tracker-only hooks (guards/status/finalize) run from the tooling dir.
 #
-# Hook sequence (consuming repo provides each as a `yarn` script):
-#   review-pr-guards     refuse on a closed PR; exit non-zero = refused
-#   review-pr-status     report state to the tracker (in-progress / done / blocked)
-#   review-pr            the read-only agent run; writes $REVIEW_FILE
-#   review-pr-finalize   post the review (inline + summary) to the tracker
+# The whole sequence lives in the sequencer, not this YAML (issues #49–#51). This
+# workflow keeps only what GitHub Actions alone can do — checkout, the tooling
+# worktree, toolchain, service containers — and hands the ordered sequence to one
+# sequencer invocation from the PR head:
+#   "$TOOLING_DIR/node_modules/.bin/agent-workflows" review-pr
+# which runs, in order and through the unchanged per-hook dispatcher, each hook in
+# the checkout the plan pins — tracker hooks from the tooling worktree, the agent
+# run against the PR head:
+#   guards      preflight (closed PR); a non-zero exit is a REFUSAL (not a failure)
+#   status      report in-progress to the tracker (from the tooling worktree)
+#   run         the read-only agent run against the PR head; writes $REVIEW_FILE
+#   finalize    post the review (inline + summary) to the tracker
+#   status      report done to the tracker
+#
+# One deliberate exception to the collapse: the light guard job stays split, so a
+# refusal avoids paying for Ruby and Postgres. It runs the SAME sequencer in
+# guards-only mode (`--guards-only`) from a plain default-branch checkout, and the
+# main job is gated on its result.
 on:
   workflow_call:
     inputs:
@@ -80,10 +93,12 @@ jobs:
           cache: yarn
       - name: Install JS dependencies
         run: yarn install --frozen-lockfile
-      - name: Run guards
+      - name: Run guards (guards-only sequence)
         id: guards
+        # The guards-only sequencer exits non-zero on a refusal, so the same
+        # exit-code branch as before decides whether the heavy job runs.
         run: |
-          if yarn --silent sandcastle:review-pr-guards; then
+          if yarn --silent sandcastle:review-pr-guards-sequence; then
             echo "refused=false" >> "$GITHUB_OUTPUT"
           else
             echo "refused=true" >> "$GITHUB_OUTPUT"
@@ -181,9 +196,6 @@ jobs:
           }
           JSON
 
-      - name: Report in progress
-        run: yarn --cwd "$TOOLING_DIR" sandcastle:review-pr-status in-progress
-
       - name: Prepare test database
         if: inputs.enable-ruby
         env:
@@ -192,7 +204,13 @@ jobs:
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
         run: bundle exec rails db:prepare
 
-      - name: Run agent
+      - name: Run review-pr sequence
+        # ONE sequencer invocation runs the whole verb: status in-progress → run →
+        # finalize → status done. The plan pins WHERE each step runs — tracker
+        # hooks from the tooling worktree, the agent run against the PR head — so
+        # this launches from the PR working tree via the tooling worktree's
+        # packaged dispatcher (the PR branch may predate the tooling). A genuine
+        # step failure exits non-zero and trips the blocked report below.
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           RAILS_ENV: test
@@ -200,17 +218,7 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
           AGENT_MODEL: ${{ inputs.agent-model }}
-        # Run the tooling worktree's packaged dispatcher with the PR working tree
-        # as cwd so the agent reviews the PR's code. The dispatcher resolves the
-        # entrypoint (override-first, else the packaged src/) and its prompt files
-        # relative to the package, so it works from the worktree.
-        run: '"$TOOLING_DIR/node_modules/.bin/agent-workflows" review-pr run'
-
-      - name: Finalize (post review)
-        if: success()
-        run: |
-          yarn --cwd "$TOOLING_DIR" sandcastle:review-pr-finalize
-          yarn --cwd "$TOOLING_DIR" sandcastle:review-pr-status done
+        run: '"$TOOLING_DIR/node_modules/.bin/agent-workflows" review-pr'
 
       - name: Report blocked on failure
         if: failure()
