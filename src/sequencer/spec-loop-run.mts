@@ -41,6 +41,16 @@
 // reached ceiling halts CLEANLY between slices (never mid-slice) — the same clean
 // stop as a graceful stop, distinct from a failure, and resume picks it up. Absent
 // configuration there is no ceiling; the run reports what it consumed on exit.
+//
+// Issue #62 makes a long run legible while it happens and after it ends, with two
+// independent, optional pieces. An append-only RUN LOG under the worktree root
+// records every transition (slice, action, outcome, timestamp); it is WRITTEN, never
+// consulted — resume still derives entirely from the tracker and the branches, so it
+// does not reintroduce local state. And when the loop runs inside a HERDR-managed
+// pane it emits best-effort progress into the UI already on screen — renaming the
+// pane to the slice being built and firing a notification on halt or completion.
+// Both are strictly best-effort: outside a Herdr pane nothing is emitted, and no
+// rename, notification, or log write ever fails or delays the run.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -63,6 +73,8 @@ import {
   specBranchHaltMessage,
 } from "../shared/spec-advance.mts";
 import { acquireLock, lockPath, readLockOwner, releaseLock } from "./lock.mts";
+import { runLogPath, appendRunLine } from "./run-log.mts";
+import { createHerdrSurface } from "./herdr.mts";
 import {
   resolveOrder,
   formatPreview,
@@ -179,6 +191,28 @@ const lock = lockPath(root, `implement-spec-${specNum}`);
 // resolves under $RUNNER_TEMP. Reused across slices; each slice overwrites it.
 const specFile = join(tmpdir(), `agent-workflows-spec-loop-${process.pid}-spec.md`);
 
+// The append-only run log (issue #62): every transition the loop makes is appended
+// here — slice, action, outcome, timestamp — so a run that halts at 2am leaves
+// something to read in the morning. It lives under the worktree ROOT (not inside the
+// per-spec worktree, which is removed on completion), so it survives both a halt and
+// a completed run's cleanup. It is WRITTEN, never consulted: nothing reads it to
+// decide what happens next, so it does not reintroduce local state.
+const runLog = runLogPath(root, specNum);
+function record(slice: number | null, action: string, outcome: string): void {
+  appendRunLine(runLog, { timestamp: new Date().toISOString(), slice, action, outcome });
+}
+
+// The optional Herdr progress surface (issue #62): when the loop runs inside a
+// Herdr-managed pane, it renames the pane to the slice being built and fires a
+// notification on halt or completion. Strictly best-effort — outside a pane it is a
+// silent no-op, and every emit swallows all errors (including the `herdr` CLI being
+// absent), so no rename or notification can ever fail or delay the run. No new
+// required dependency: detection is a plain env read and emission only shells out
+// when the environment says a pane is present.
+const herdr = createHerdrSurface(process.env, (file, args) =>
+  spawnSync(file, [...args], { stdio: "ignore" }),
+);
+
 // `--stop` (issue #60): the graceful-stop control command. Run from a SECOND
 // terminal, it finds the live loop through the pid the lock records and delivers a
 // SIGTERM — the running loop finishes its current slice and halts at the next
@@ -294,6 +328,17 @@ function elapsedSeconds(): number {
 // reuses it as-is.
 function finish(code: number, opts: { removeWorktree?: boolean } = {}): never {
   releaseLock(lock);
+  // Record the terminal transition (issue #62) and, best-effort, fire the Herdr
+  // notification for it. This is the single exit, so every halt and every completion
+  // is captured here once. A dry run's halt-before-merge and the deadlocked "done"
+  // exit are captured too; only a completion (final PR opened) notifies success.
+  if (halted) {
+    record(halted.slice, "halt", halted.reason);
+    herdr.notifyHalt({ spec: specNum, reason: halted.reason });
+  } else if (finalPrOpened) {
+    record(null, "complete", "final PR opened");
+    herdr.notifyComplete({ spec: specNum });
+  }
   console.log("");
   console.log(
     formatSpecSummary({
@@ -313,6 +358,8 @@ function finish(code: number, opts: { removeWorktree?: boolean } = {}): never {
             maxWallClockSeconds: ceiling.maxWallClockSeconds,
           }
         : null,
+      // Surface the run log so it is discoverable from the summary (issue #62).
+      runLog,
     }),
   );
   if (opts.removeWorktree && existsSync(tree)) {
@@ -332,6 +379,7 @@ function finish(code: number, opts: { removeWorktree?: boolean } = {}): never {
 // it ONCE. A pre-existing tree (a re-run) is reused as-is.
 if (existsSync(tree)) {
   console.log(`spec-loop: reusing existing worktree at ${tree}`);
+  record(null, "worktree", `reused ${tree}`);
 } else {
   console.log(`spec-loop: creating worktree at ${tree} (detached at ${base || "HEAD"})`);
   if (base) {
@@ -347,6 +395,7 @@ if (existsSync(tree)) {
     halted = { slice: specNum, reason: "the worktree could not be created" };
     finish(1);
   }
+  record(null, "worktree", `created ${tree}`);
 }
 
 if (config.bootstrap) {
@@ -367,13 +416,16 @@ if (config.bootstrap) {
 if (!remoteBranches().includes(specBranch)) {
   if (dryRun) {
     console.log(dryRunSuppressed(`cut and push the spec branch ${specBranch} off ${base || "the default branch"}`));
+    record(null, "spec-branch", "cut suppressed (dry run)");
   } else if (base) {
     capture("git", ["fetch", "origin", base]);
     capture("git", ["checkout", "-B", specBranch, `origin/${base}`]);
     capture("git", ["push", "-u", "origin", specBranch]);
+    record(null, "spec-branch", `cut off ${base}`);
   } else {
     capture("git", ["checkout", "-B", specBranch]);
     capture("git", ["push", "-u", "origin", specBranch]);
+    record(null, "spec-branch", "cut off the default branch");
   }
 }
 
@@ -423,6 +475,7 @@ function landSlice(slice: number, sliceBranch: string): void {
   closeTracerBullet(slice, specBranch);
   built.push(slice);
   console.log(formatSliceFooter({ slice, outcome: "merged" }));
+  record(slice, "merge", `merged into ${specBranch}`);
   lastMerged = slice;
   phase = "advance";
 }
@@ -506,6 +559,11 @@ async function drive(): Promise<never> {
     ).title as string;
     const sliceBranch = `agent/issue-${slice}-${slugify(sliceTitle)}`;
 
+    // Rename the Herdr pane to the slice now in hand (issue #62) — best-effort, a
+    // silent no-op outside a Herdr pane. Done before the disposition branches so the
+    // pane reflects the current slice whether it is built, resumed, or caught up.
+    herdr.renameToSlice({ spec: specNum, slice, position, total: order.length });
+
     // Resume disposition (issue #60): read the slice's PR state back from GitHub
     // BEFORE running the agent. An already-merged slice is pure catch-up on resume —
     // advance without work, and without a checkpoint (there is nothing new to
@@ -514,6 +572,7 @@ async function drive(): Promise<never> {
     const disposition = dryRun ? "build" : sliceDisposition(existing, specBranch);
     if (disposition === "already-merged" && existing) {
       console.log(formatAlreadyMerged({ slice, pr: existing.number, specBranch }));
+      record(slice, "resume", "already merged — advancing without rebuilding");
       landSlice(slice, sliceBranch);
       continue;
     }
@@ -556,6 +615,7 @@ async function drive(): Promise<never> {
     // be the most expensive mistake the loop could make.
     if (disposition === "resume-gate" && existing) {
       console.log(formatResumeGate({ slice, pr: existing.number, specBranch }));
+      record(slice, "resume-gate", `awaiting checks on the already-open PR #${existing.number}`);
       const passed = await awaitChecks(() => fetchSlicePrChecks(existing.number));
       if (!passed) {
         const reason =
@@ -603,6 +663,7 @@ async function drive(): Promise<never> {
     // session so the developer steers it. Per-slice by design — and mutually
     // exclusive with --no-pause, rejected up front.
     if (interactive) buildEnv.INTERACTIVE = "true";
+    record(slice, "build", "running the implement sequence");
     const build = run("yarn", ["sandcastle:implement-sequence"], tree, buildEnv);
 
     // Rely on the existing zero-commit exit-code check (implement.mts exits non-zero
@@ -628,6 +689,7 @@ async function drive(): Promise<never> {
         console.log(dryRunSuppressed(`open the final ${specBranch} → ${base || "default"} PR`));
       }
       console.log(formatSliceFooter({ slice, outcome: "would-merge" }));
+      record(slice, "build", "built (dry run — merge suppressed)");
       built.push(slice);
       halted = { slice, reason: "dry run — stopped before the first real merge" };
       finish(0);
