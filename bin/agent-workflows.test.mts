@@ -93,6 +93,40 @@ test("classifyInvocation treats a verb + issue number as an attended local run",
   });
 });
 
+// `implement-spec <spec-issue>` is the attended SPEC LOOP, not a single-verb
+// attended run (issue #59): it routes to its own kind so the bin spawns the loop
+// entry point. A dry run is the default; `--execute` and `--force` ride along.
+test("classifyInvocation treats implement-spec + issue number as the spec loop", () => {
+  assert.deepEqual(classifyInvocation(["implement-spec", "48"]), {
+    kind: "spec-loop",
+    spec: "48",
+    execute: false,
+    dryRun: false,
+    force: false,
+  });
+});
+
+test("classifyInvocation reads --execute / --force on the spec loop", () => {
+  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--execute", "--force"]), {
+    kind: "spec-loop",
+    spec: "48",
+    execute: true,
+    dryRun: false,
+    force: true,
+  });
+});
+
+// The spec loop's non-numeric hooks (`kickoff`, `advance`) stay per-hook runs — only
+// a numeric second arg is the loop, mirroring the attended-run rule.
+test("classifyInvocation keeps implement-spec + hook as a per-hook run", () => {
+  assert.deepEqual(classifyInvocation(["implement-spec", "advance"]), {
+    kind: "hook",
+    verb: "implement-spec",
+    hook: "advance",
+    rest: [],
+  });
+});
+
 // A trailing `--force` on an attended run sets the force flag the entry point
 // uses to overrule a refusal and both concurrency mutexes (issue #56).
 test("classifyInvocation reads a trailing --force on an attended run", () => {

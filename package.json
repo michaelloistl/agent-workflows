@@ -44,7 +44,8 @@
     "sandcastle:implement-spec-sequence": "node bin/agent-workflows.mjs implement-spec",
     "sandcastle:implement-spec-guards": "node bin/agent-workflows.mjs implement-spec guards",
     "sandcastle:implement-spec-kickoff": "node bin/agent-workflows.mjs implement-spec kickoff",
-    "sandcastle:implement-spec-advance": "node bin/agent-workflows.mjs implement-spec advance"
+    "sandcastle:implement-spec-advance": "node bin/agent-workflows.mjs implement-spec advance",
+    "sandcastle:implement-spec-loop": "node bin/agent-workflows.mjs implement-spec"
   },
   "dependencies": {
     "@ai-hero/sandcastle": "^0.7.0",
