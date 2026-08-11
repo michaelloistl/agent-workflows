@@ -10,6 +10,14 @@ import {
   formatSliceHeader,
   formatSliceFooter,
   formatSpecSummary,
+  specFlagConflict,
+  sliceDisposition,
+  formatCheckpoint,
+  checkpointPrompt,
+  gracefulStopAcknowledged,
+  gracefulStopHaltReason,
+  formatResumeGate,
+  formatAlreadyMerged,
   type SpecPlan,
 } from "./spec-loop.mts";
 import type { TracerBullet } from "../shared/spec-graph.mts";
@@ -206,4 +214,95 @@ test("formatSpecSummary reports a dry run as previewed", () => {
   });
   assert.match(out, /dry run halted/);
   assert.match(out, /slices previewed : #4/);
+});
+
+// — specFlagConflict (issue #60) —
+
+test("specFlagConflict rejects --interactive together with run-straight-through", () => {
+  const msg = specFlagConflict({ interactive: true, runThrough: true });
+  assert.match(String(msg), /mutually exclusive/);
+  assert.match(String(msg), /--interactive/);
+  assert.match(String(msg), /--no-pause/);
+});
+
+test("specFlagConflict allows each flag on its own and neither", () => {
+  assert.equal(specFlagConflict({ interactive: true, runThrough: false }), null);
+  assert.equal(specFlagConflict({ interactive: false, runThrough: true }), null);
+  assert.equal(specFlagConflict({ interactive: false, runThrough: false }), null);
+});
+
+// — sliceDisposition (issue #60): resume derives from the PR state alone —
+
+const MERGED = {
+  number: 12,
+  state: "MERGED",
+  mergedAt: "2026-08-11T00:00:00Z",
+  baseRefName: "agent/spec-3-x",
+};
+const OPEN = { number: 12, state: "OPEN", mergedAt: null, baseRefName: "agent/spec-3-x" };
+
+test("sliceDisposition treats a PR merged into the spec branch as already-merged", () => {
+  assert.equal(sliceDisposition(MERGED, "agent/spec-3-x"), "already-merged");
+});
+
+test("sliceDisposition resumes at the gate for an open PR into the spec branch", () => {
+  assert.equal(sliceDisposition(OPEN, "agent/spec-3-x"), "resume-gate");
+});
+
+test("sliceDisposition builds when there is no PR", () => {
+  assert.equal(sliceDisposition(null, "agent/spec-3-x"), "build");
+});
+
+test("sliceDisposition builds for a closed-but-not-merged PR (a superseded slice)", () => {
+  assert.equal(
+    sliceDisposition(
+      { number: 12, state: "CLOSED", mergedAt: null, baseRefName: "agent/spec-3-x" },
+      "agent/spec-3-x",
+    ),
+    "build",
+  );
+});
+
+test("sliceDisposition builds when an open PR targets a different base (a stale head)", () => {
+  assert.equal(sliceDisposition({ ...OPEN, baseRefName: "main" }, "agent/spec-3-x"), "build");
+});
+
+// — checkpoint framing (issue #60) —
+
+test("formatCheckpoint names the merged slice, the spec branch, and the next slice", () => {
+  const out = formatCheckpoint({ lastMerged: 4, next: 5, specBranch: "agent/spec-3-x" });
+  assert.match(out, /checkpoint: slice #4 is merged into `agent\/spec-3-x`/);
+  assert.match(out, /next slice \(#5\)/);
+});
+
+test("checkpointPrompt asks whether to continue to the next slice", () => {
+  assert.match(checkpointPrompt(5), /continue to slice #5\? \[y\/N\]/);
+});
+
+// — graceful stop (issue #60) —
+
+test("gracefulStopAcknowledged explains the finish-then-halt behaviour and contrasts Ctrl-C", () => {
+  const out = gracefulStopAcknowledged();
+  assert.match(out, /finishing the current slice/);
+  assert.match(out, /next checkpoint/);
+  assert.match(out, /Ctrl-C/);
+});
+
+test("gracefulStopHaltReason names the last merged slice, or none", () => {
+  assert.match(gracefulStopHaltReason(4), /graceful stop after slice #4 merged — re-run to resume/);
+  assert.match(gracefulStopHaltReason(null), /before any slice merged/);
+});
+
+// — resume notes (issue #60) —
+
+test("formatResumeGate says it resumes the gate and does NOT re-run the agent", () => {
+  const out = formatResumeGate({ slice: 5, pr: 12, specBranch: "agent/spec-3-x" });
+  assert.match(out, /PR #12 into `agent\/spec-3-x` is already open/);
+  assert.match(out, /NOT re-running the agent/);
+});
+
+test("formatAlreadyMerged says it advances without rebuilding", () => {
+  const out = formatAlreadyMerged({ slice: 5, pr: 12, specBranch: "agent/spec-3-x" });
+  assert.match(out, /PR #12 is already merged/);
+  assert.match(out, /advancing without rebuilding/);
 });

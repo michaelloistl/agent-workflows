@@ -24,6 +24,16 @@
 //
 // Credentials come from the developer's already-authenticated `gh` and existing
 // agent credentials; this loop neither reads nor writes any secret material.
+//
+// Issue #60 makes a long run controllable, stoppable, and restartable. The loop
+// PAUSES at a checkpoint between slices by default (inspect the accumulated spec
+// branch before the next stacks); `--no-pause` runs straight through and
+// `--interactive` steers each slice, the two being mutually exclusive. A GRACEFUL
+// stop from a second terminal (`--stop`, delivered as SIGTERM) finishes the current
+// slice and halts at the next checkpoint, distinct from Ctrl-C's immediate abort.
+// RESUME derives entirely from the tracker and the branches — no local file: a slice
+// whose PR is already open resumes at its gate rather than re-running the agent, and
+// the worktree is removed only once the final spec PR opens (retained on every halt).
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -41,9 +51,11 @@ import {
   closeTracerBullet,
   openFinalPr,
   fetchSpecChecks,
+  fetchSlicePrChecks,
+  mergeSlicePr,
   specBranchHaltMessage,
 } from "../shared/spec-advance.mts";
-import { acquireLock, lockPath, releaseLock } from "./lock.mts";
+import { acquireLock, lockPath, readLockOwner, releaseLock } from "./lock.mts";
 import {
   resolveOrder,
   formatPreview,
@@ -54,13 +66,23 @@ import {
   mergeConfirmed,
   mergeHaltReason,
   dryRunSuppressed,
+  specFlagConflict,
+  sliceDisposition,
+  formatCheckpoint,
+  checkpointPrompt,
+  gracefulStopAcknowledged,
+  gracefulStopHaltReason,
+  formatResumeGate,
+  formatAlreadyMerged,
+  type PrMergeView,
   type SpecPlan,
 } from "./spec-loop.mts";
 
 const specArg = process.argv[2];
 if (!specArg || !/^\d+$/.test(specArg)) {
   console.error(
-    "spec-loop: usage: agent-workflows implement-spec <spec-issue> [--execute] [--force]",
+    "spec-loop: usage: agent-workflows implement-spec <spec-issue> " +
+      "[--execute] [--force] [--no-pause] [--interactive] [--stop]",
   );
   process.exit(2);
 }
@@ -73,6 +95,24 @@ const dryRun = !execute;
 // `--force` overrules the local lock (the mutex between two terminals) and is
 // threaded to each slice's guards so a preflight refusal is overruled too.
 const force = process.argv.includes("--force");
+// Checkpoints (issue #60): the loop pauses between slices by DEFAULT — the
+// checkpoint where the developer inspects the accumulated spec branch before the
+// next slice stacks on it. `--no-pause` runs the whole spec straight through.
+const runThrough = process.argv.includes("--no-pause");
+// `--interactive` hands each slice's implement run to a LIVE agent session (issue
+// #58, per-slice here) so the developer steers every slice. It is mutually exclusive
+// with `--no-pause` — one stops at every slice, the other never stops.
+const interactive = process.argv.includes("--interactive");
+// `--stop` is the graceful-stop CONTROL command, run from a SECOND terminal (the
+// running one is occupied): it signals the live loop to finish its current slice and
+// halt at the next checkpoint, rather than starting a run of its own.
+const stop = process.argv.includes("--stop");
+
+const flagConflict = specFlagConflict({ interactive, runThrough });
+if (flagConflict) {
+  console.error(flagConflict);
+  process.exit(2);
+}
 
 function run(file: string, args: readonly string[], cwd?: string, env?: Record<string, string>) {
   return spawnSync(file, [...args], { stdio: "inherit", cwd, env: { ...process.env, ...env } });
@@ -124,11 +164,54 @@ const lock = lockPath(root, `implement-spec-${specNum}`);
 // resolves under $RUNNER_TEMP. Reused across slices; each slice overwrites it.
 const specFile = join(tmpdir(), `agent-workflows-spec-loop-${process.pid}-spec.md`);
 
+// `--stop` (issue #60): the graceful-stop control command. Run from a SECOND
+// terminal, it finds the live loop through the pid the lock records and delivers a
+// SIGTERM — the running loop finishes its current slice and halts at the next
+// checkpoint. It starts no run of its own, so it returns before any worktree, lock,
+// or tracker work. (Ctrl-C in the running terminal is the immediate abort instead.)
+if (stop) {
+  const owner = readLockOwner(lock);
+  if (owner === null) {
+    console.error(
+      `spec-loop: no running spec loop found for #${specNum} (no lock at ${lock}). ` +
+        `Nothing to stop.`,
+    );
+    process.exit(1);
+  }
+  try {
+    process.kill(owner, "SIGTERM");
+    console.log(
+      `spec-loop: graceful stop requested for #${specNum} (pid ${owner}) — it will finish ` +
+        `the current slice and halt at the next checkpoint.`,
+    );
+    process.exit(0);
+  } catch (err) {
+    console.error(
+      `spec-loop: could not signal the running loop (pid ${owner}): ${(err as Error).message}`,
+    );
+    process.exit(1);
+  }
+}
+
 // Ctrl-C: survive the signal so the loop can print its summary and leave the
-// worktree on disk (the child in the same process group still dies).
+// worktree on disk (the child in the same process group still dies). This is the
+// IMMEDIATE abort — mid-slice it abandons a half-built tracer-bullet for resume to
+// untangle.
 let interrupted = false;
 process.on("SIGINT", () => {
   interrupted = true;
+});
+
+// SIGTERM is the GRACEFUL stop (issue #60), delivered by a second terminal's
+// `--stop`. It is signalled at THIS process only (not the child's process group), so
+// the current slice's build runs to completion; the loop reads the flag at its next
+// checkpoint and halts there cleanly, leaving a resumable between-slices boundary.
+let gracefulStop = false;
+process.on("SIGTERM", () => {
+  if (!gracefulStop) {
+    gracefulStop = true;
+    console.log(gracefulStopAcknowledged());
+  }
 });
 
 // The spec's title (for the spec-branch name) and its tracer-bullets, resolved from
@@ -178,9 +261,12 @@ let halted: { slice: number; reason: string } | null = null;
 let finalPrOpened = false;
 
 // Settle the run: release the lock, print the summary, and exit. The worktree is
-// ALWAYS retained — it holds the accumulated spec branch and is exactly what the
-// developer inspects (as an `implement` worktree is), so it is never removed here.
-function finish(code: number): never {
+// REMOVED only once the final spec PR opens — the run is complete and the spec
+// branch lives on the remote (issue #60). On every halt (a failure, an abort, a
+// graceful stop, a checkpoint decline, a dry run) it is RETAINED: it holds the
+// accumulated spec branch and is exactly what the developer inspects, and resume
+// reuses it as-is.
+function finish(code: number, opts: { removeWorktree?: boolean } = {}): never {
   releaseLock(lock);
   console.log("");
   console.log(
@@ -193,7 +279,16 @@ function finish(code: number): never {
       finalPrOpened,
     }),
   );
-  if (existsSync(tree)) console.log(`worktree: retained at ${tree}`);
+  if (opts.removeWorktree && existsSync(tree)) {
+    try {
+      capture("git", ["worktree", "remove", "--force", tree]);
+      console.log(`worktree: removed ${tree} (the final spec PR is open).`);
+    } catch {
+      console.log(`worktree: retained at ${tree} (could not remove it automatically).`);
+    }
+  } else if (existsSync(tree)) {
+    console.log(`worktree: retained at ${tree}`);
+  }
   process.exit(code);
 }
 
@@ -254,6 +349,48 @@ if (!remoteBranches().includes(specBranch)) {
 let phase: "kickoff" | "advance" = "kickoff";
 let lastMerged: number | null = null;
 
+// Read the slice PR's merged/open state back from GitHub — the SOLE resume signal
+// (issue #60), preferring a merged PR when several share the head. No local file is
+// consulted, so a spec interrupted under either entry point resumes identically.
+function readSlicePr(sliceBranch: string): PrMergeView | null {
+  return parseMergeView(
+    capture("gh", [
+      "pr",
+      "list",
+      "--head",
+      sliceBranch,
+      "--base",
+      specBranch,
+      "--state",
+      "all",
+      "--json",
+      "number,state,mergedAt,baseRefName",
+    ]),
+  );
+}
+
+// CONFIRM the slice's merge from GitHub, then close the tracer-bullet and advance —
+// the shared tail of building a slice, resuming its gate, and picking up an
+// already-merged one. The PR's own merged state into the spec branch is the signal
+// (closing is failure-tolerant); a queued, blocked, or stale merge halts the run.
+function landSlice(slice: number, sliceBranch: string): void {
+  const pr = readSlicePr(sliceBranch);
+  if (!mergeConfirmed(pr, specBranch)) {
+    const reason = mergeHaltReason(pr, slice, specBranch);
+    comment("issue", specArg, reason);
+    console.error(reason);
+    halted = { slice, reason: "the merge was not confirmed on GitHub" };
+    console.log(formatSliceFooter({ slice, outcome: "built" }));
+    finish(1);
+  }
+  // The merge into a non-default base did not auto-close the tracer-bullet.
+  closeTracerBullet(slice, specBranch);
+  built.push(slice);
+  console.log(formatSliceFooter({ slice, outcome: "merged" }));
+  lastMerged = slice;
+  phase = "advance";
+}
+
 async function drive(): Promise<never> {
   for (;;) {
     if (interrupted) {
@@ -293,17 +430,20 @@ async function drive(): Promise<never> {
     if (action.type === "open-final-pr") {
       if (dryRun) {
         console.log(dryRunSuppressed(`open the final ${specBranch} → ${base || "default"} PR`));
-      } else {
-        openFinalPr(specNum, specBranch);
-        finalPrOpened = true;
-        comment(
-          "issue",
-          specArg,
-          renderProgress({ branch: specBranch, bullets: bulletsN, closed: closedN, dispatched: null }),
-        );
-        console.log(`spec-loop: all slices merged — opened the final PR for ${specBranch}.`);
+        finish(0);
       }
-      finish(0);
+      openFinalPr(specNum, specBranch);
+      finalPrOpened = true;
+      comment(
+        "issue",
+        specArg,
+        renderProgress({ branch: specBranch, bullets: bulletsN, closed: closedN, dispatched: null }),
+      );
+      console.log(`spec-loop: all slices merged — opened the final PR for ${specBranch}.`);
+      // The run is complete and the spec branch lives on the remote, so the worktree
+      // is removed here (issue #60) — the only exit that removes it; every halt
+      // retains it for inspection and resume.
+      finish(0, { removeWorktree: true });
     }
     if (action.type === "done") {
       // No ready slice and not complete — the remainder deadlocked on a cycle. Not a
@@ -320,7 +460,7 @@ async function drive(): Promise<never> {
       finish(1);
     }
 
-    // action.type === "run-slice": build this slice.
+    // action.type === "run-slice": build (or resume) this slice.
     const slice = action.slice;
     const position = built.length + 1;
     console.log(formatSliceHeader({ position, total: order.length, slice, specBranch }));
@@ -329,6 +469,58 @@ async function drive(): Promise<never> {
       capture("gh", ["issue", "view", String(slice), "--json", "title"]),
     ).title as string;
     const sliceBranch = `agent/issue-${slice}-${slugify(sliceTitle)}`;
+
+    // Resume disposition (issue #60): read the slice's PR state back from GitHub
+    // BEFORE running the agent. An already-merged slice is pure catch-up on resume —
+    // advance without work, and without a checkpoint (there is nothing new to
+    // inspect). A dry run never inspects or merges; it always builds.
+    const existing = dryRun ? null : readSlicePr(sliceBranch);
+    const disposition = dryRun ? "build" : sliceDisposition(existing, specBranch);
+    if (disposition === "already-merged" && existing) {
+      console.log(formatAlreadyMerged({ slice, pr: existing.number, specBranch }));
+      landSlice(slice, sliceBranch);
+      continue;
+    }
+
+    // Checkpoint before genuinely NEW work stacks on the spec branch (issue #60) — a
+    // build or a resumed gate merge, not an already-merged catch-up. The developer
+    // inspects the accumulated branch here before the next slice stacks — the control
+    // that makes a parity finalize acceptable. The first slice never pauses (the
+    // preview already gated the start). A graceful stop halts here even under
+    // --no-pause; --no-pause otherwise runs straight through. A dry run halts at the
+    // first merge, so it never reaches a between-slices checkpoint.
+    if (built.length > 0) {
+      console.log(formatCheckpoint({ lastMerged: lastMerged ?? slice, next: slice, specBranch }));
+      if (gracefulStop) {
+        halted = { slice: lastMerged ?? slice, reason: gracefulStopHaltReason(lastMerged) };
+        finish(0);
+      }
+      if (!runThrough && !confirm(checkpointPrompt(slice))) {
+        halted = { slice, reason: "paused at a checkpoint — re-run to resume" };
+        finish(0);
+      }
+    }
+
+    // Resume at the gate (issue #60): a slice whose PR is already open is merged here
+    // — await its checks, then merge — rather than re-running the agent, which would
+    // be the most expensive mistake the loop could make.
+    if (disposition === "resume-gate" && existing) {
+      console.log(formatResumeGate({ slice, pr: existing.number, specBranch }));
+      const passed = await awaitChecks(() => fetchSlicePrChecks(existing.number));
+      if (!passed) {
+        const reason =
+          `⛔ slice #${slice}: the resumed PR #${existing.number} CI did not pass — not merged ` +
+          `into \`${specBranch}\`. Halting; the next slice is NOT built.`;
+        comment("issue", specArg, reason);
+        console.error(reason);
+        halted = { slice, reason: "the resumed slice PR CI did not pass" };
+        console.log(formatSliceFooter({ slice, outcome: "built" }));
+        finish(1);
+      }
+      mergeSlicePr(existing.number);
+      landSlice(slice, sliceBranch);
+      continue;
+    }
 
     // The progress comment, posted each iteration so the spec does not read as
     // abandoned. A DRY RUN reports it as suppressed rather than posting.
@@ -354,6 +546,10 @@ async function drive(): Promise<never> {
     };
     if (force) buildEnv.FORCE = "true";
     if (dryRun) buildEnv.FINALIZE_MODE = "never";
+    // `--interactive` (issue #60): each slice's implement run hands over a live agent
+    // session so the developer steers it. Per-slice by design — and mutually
+    // exclusive with --no-pause, rejected up front.
+    if (interactive) buildEnv.INTERACTIVE = "true";
     const build = run("yarn", ["sandcastle:implement-sequence"], tree, buildEnv);
 
     // Rely on the existing zero-commit exit-code check (implement.mts exits non-zero
@@ -384,39 +580,9 @@ async function drive(): Promise<never> {
       finish(0);
     }
 
-    // Real run: CONFIRM the merge from GitHub before advancing. The tracer-bullet's
-    // closed state is NOT the signal (closing is failure-tolerant); the PR's own
-    // merged state into the spec branch is. A queued, blocked, or stale merge halts.
-    const pr = parseMergeView(
-      capture("gh", [
-        "pr",
-        "list",
-        "--head",
-        sliceBranch,
-        "--base",
-        specBranch,
-        "--state",
-        "all",
-        "--json",
-        "number,state,mergedAt,baseRefName",
-      ]),
-    );
-    if (!mergeConfirmed(pr, specBranch)) {
-      const reason = mergeHaltReason(pr, slice, specBranch);
-      comment("issue", specArg, reason);
-      console.error(reason);
-      halted = { slice, reason: "the merge was not confirmed on GitHub" };
-      console.log(formatSliceFooter({ slice, outcome: "built" }));
-      finish(1);
-    }
-
-    // The slice landed. Close the tracer-bullet (the merge into a non-default base
-    // did not auto-close it), record it, and advance to the next slice.
-    closeTracerBullet(slice, specBranch);
-    built.push(slice);
-    console.log(formatSliceFooter({ slice, outcome: "merged" }));
-    lastMerged = slice;
-    phase = "advance";
+    // Real run: the finalize opened the slice PR, gated its own CI, and merged it —
+    // now CONFIRM that merge from GitHub, close the tracer-bullet, and advance.
+    landSlice(slice, sliceBranch);
   }
 }
 

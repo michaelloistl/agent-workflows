@@ -103,6 +103,9 @@ test("classifyInvocation treats implement-spec + issue number as the spec loop",
     execute: false,
     dryRun: false,
     force: false,
+    noPause: false,
+    interactive: false,
+    stop: false,
   });
 });
 
@@ -113,6 +116,53 @@ test("classifyInvocation reads --execute / --force on the spec loop", () => {
     execute: true,
     dryRun: false,
     force: true,
+    noPause: false,
+    interactive: false,
+    stop: false,
+  });
+});
+
+// Issue #60: `--no-pause` (run straight through), `--interactive` (steer each slice),
+// and `--stop` (the graceful-stop control command) ride along on the spec loop.
+test("classifyInvocation reads --no-pause / --interactive on the spec loop", () => {
+  assert.deepEqual(
+    classifyInvocation(["implement-spec", "48", "--execute", "--no-pause"]),
+    {
+      kind: "spec-loop",
+      spec: "48",
+      execute: true,
+      dryRun: false,
+      force: false,
+      noPause: true,
+      interactive: false,
+      stop: false,
+    },
+  );
+  assert.deepEqual(
+    classifyInvocation(["implement-spec", "48", "--execute", "--interactive"]),
+    {
+      kind: "spec-loop",
+      spec: "48",
+      execute: true,
+      dryRun: false,
+      force: false,
+      noPause: false,
+      interactive: true,
+      stop: false,
+    },
+  );
+});
+
+test("classifyInvocation reads --stop as the graceful-stop control on the spec loop", () => {
+  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--stop"]), {
+    kind: "spec-loop",
+    spec: "48",
+    execute: false,
+    dryRun: false,
+    force: false,
+    noPause: false,
+    interactive: false,
+    stop: true,
   });
 });
 
