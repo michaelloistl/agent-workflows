@@ -10,6 +10,7 @@ import {
   resolveCheckTimings,
   resolveWorktreeRoot,
   resolveBootstrap,
+  resolveRunCeiling,
   resolveConfig,
   effectiveBase,
   DEFAULT_AGENT_MODEL,
@@ -122,9 +123,47 @@ test("resolveBootstrap: override beats file beats empty", () => {
   assert.equal(resolveBootstrap({ env: {}, file: {} }), "");
 });
 
+// The run ceiling (issue #61): the most a single attended spec run may spend before
+// a human sees it again — slices attempted, wall-clock, or both. Per field, env
+// override → file → unset. Absent all → no ceiling ({}), preserving today's
+// unbounded behaviour.
+test("resolveRunCeiling: env beats file, per field", () => {
+  const file: ConfigFile = { runCeiling: { maxSlices: 4, maxWallClockSeconds: 3600 } };
+  assert.deepEqual(
+    resolveRunCeiling({ env: { RUN_CEILING_MAX_SLICES: "2" }, file }),
+    { maxSlices: 2, maxWallClockSeconds: 3600 },
+  );
+  assert.deepEqual(
+    resolveRunCeiling({ env: { RUN_CEILING_MAX_WALLCLOCK_SECONDS: "600" }, file }),
+    { maxSlices: 4, maxWallClockSeconds: 600 },
+  );
+});
+
+test("resolveRunCeiling is empty (no ceiling) when nothing is configured", () => {
+  assert.deepEqual(resolveRunCeiling({ env: {}, file: {} }), {});
+});
+
+test("resolveRunCeiling carries only the limits that are set", () => {
+  assert.deepEqual(resolveRunCeiling({ env: {}, file: { runCeiling: { maxSlices: 3 } } }), {
+    maxSlices: 3,
+  });
+  assert.deepEqual(
+    resolveRunCeiling({ env: { RUN_CEILING_MAX_WALLCLOCK_SECONDS: "300" }, file: {} }),
+    { maxWallClockSeconds: 300 },
+  );
+});
+
+test("resolveRunCeiling ignores non-positive and non-numeric limits (a fat-finger is no ceiling)", () => {
+  assert.deepEqual(
+    resolveRunCeiling({ env: { RUN_CEILING_MAX_SLICES: "0" }, file: { runCeiling: { maxWallClockSeconds: -5 } } }),
+    {},
+  );
+  assert.deepEqual(resolveRunCeiling({ env: { RUN_CEILING_MAX_SLICES: "nope" }, file: {} }), {});
+});
+
 test("resolveConfig combines the resolvers over env and file", () => {
   const cfg = resolveConfig(
-    { DEFAULT_BRANCH: "main", AGENT_MODEL: "" },
+    { DEFAULT_BRANCH: "main", AGENT_MODEL: "", RUN_CEILING_MAX_SLICES: "3" },
     { baseBranch: "develop", checks: { timeoutSeconds: 900 }, bootstrap: "yarn install" },
   );
   assert.equal(cfg.baseBranch, "develop");
@@ -133,4 +172,5 @@ test("resolveConfig combines the resolvers over env and file", () => {
   assert.equal(cfg.checks.intervalSeconds, 15);
   assert.equal(cfg.worktreeRoot, DEFAULT_WORKTREE_ROOT);
   assert.equal(cfg.bootstrap, "yarn install");
+  assert.deepEqual(cfg.runCeiling, { maxSlices: 3 });
 });

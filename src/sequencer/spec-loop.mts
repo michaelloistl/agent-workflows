@@ -14,6 +14,7 @@
 // DRY-RUN reporting of every action a real run would take irreversibly.
 
 import { topologicalOrder, type TracerBullet } from "../shared/spec-graph.mts";
+import type { RunCeiling } from "../shared/config.mts";
 
 // The resolved, immutable shape of a spec run the loop is about to drive. Computed
 // once for the preview; the loop itself recomputes the live slice set each
@@ -259,6 +260,77 @@ export function formatAlreadyMerged(o: { slice: number; pr: number; specBranch: 
   return `✔ slice #${o.slice}: PR #${o.pr} is already merged into \`${o.specBranch}\` — advancing without rebuilding.`;
 }
 
+// ── Run ceiling (issue #61) ──────────────────────────────────────────────────────
+//
+// A ceiling bounds what one spec run may spend before a human sees it again — slices
+// attempted, total wall-clock, or both. It is evaluated as a decision in the loop's
+// step: at each checkpoint (a between-slices boundary), before the next slice is
+// built, the loop asks whether the ceiling is reached and, if so, halts CLEANLY there
+// — the same clean stop as a graceful stop, distinct from a failure, and resume picks
+// it up. Absent configuration there is no ceiling and today's unbounded behaviour is
+// unchanged.
+
+// What the run has consumed so far, read at a checkpoint. `slicesAttempted` counts
+// only slices this run genuinely built or gated — an already-merged slice caught up
+// on resume spends nothing and is not counted, so resume always makes progress rather
+// than immediately re-halting on a ceiling it already reached.
+export interface RunConsumption {
+  readonly slicesAttempted: number;
+  readonly elapsedSeconds: number;
+}
+
+// Evaluate the ceiling: the halt reason when the run has reached a configured limit
+// at this checkpoint, or null when it may continue. Each limit is optional and an
+// absent limit never trips; with neither set (no ceiling) it is always null — today's
+// behaviour. Slices are checked before wall-clock so the reported reason names the
+// simpler, likelier-deliberate limit when both trip at once.
+export function ceilingReached(ceiling: RunCeiling, consumed: RunConsumption): string | null {
+  if (ceiling.maxSlices !== undefined && consumed.slicesAttempted >= ceiling.maxSlices) {
+    return (
+      `run ceiling reached: ${consumed.slicesAttempted}/${ceiling.maxSlices} slices attempted this run. ` +
+      `Halting cleanly at this checkpoint — re-run to resume.`
+    );
+  }
+  if (
+    ceiling.maxWallClockSeconds !== undefined &&
+    consumed.elapsedSeconds >= ceiling.maxWallClockSeconds
+  ) {
+    return (
+      `run ceiling reached: ${consumed.elapsedSeconds}s/${ceiling.maxWallClockSeconds}s wall-clock this run. ` +
+      `Halting cleanly at this checkpoint — re-run to resume.`
+    );
+  }
+  return null;
+}
+
+// Whether any ceiling limit is configured. When false the run is unbounded and the
+// summary omits the consumption line, preserving today's output exactly.
+export function hasCeiling(ceiling: RunCeiling): boolean {
+  return ceiling.maxSlices !== undefined || ceiling.maxWallClockSeconds !== undefined;
+}
+
+// What a run consumed against its ceiling, reported on exit (issue #61).
+export interface CeilingReport {
+  readonly slicesAttempted: number;
+  readonly maxSlices?: number;
+  readonly elapsedSeconds: number;
+  readonly maxWallClockSeconds?: number;
+}
+
+// The one-line consumption report: each limit shown as consumed/limit when set, or as
+// a bare consumed figure when that limit is unconfigured.
+export function formatCeilingConsumption(r: CeilingReport): string {
+  const slices =
+    r.maxSlices !== undefined
+      ? `${r.slicesAttempted}/${r.maxSlices} slices`
+      : `${r.slicesAttempted} slices`;
+  const wall =
+    r.maxWallClockSeconds !== undefined
+      ? `${r.elapsedSeconds}s/${r.maxWallClockSeconds}s wall-clock`
+      : `${r.elapsedSeconds}s wall-clock`;
+  return `consumed : ${slices}, ${wall}`;
+}
+
 // The end-of-run summary the loop prints on exit, so the outcome is legible without
 // scrolling back through a long multi-slice run.
 export interface SpecRunSummary {
@@ -272,6 +344,10 @@ export interface SpecRunSummary {
   readonly halted: { slice: number; reason: string } | null;
   // Whether the final spec→base PR was opened (only a completed real run does this).
   readonly finalPrOpened: boolean;
+  // What the run consumed against its ceiling (issue #61), or null/absent when no
+  // ceiling was configured — then the summary omits the line, preserving today's
+  // output exactly.
+  readonly ceiling?: CeilingReport | null;
 }
 
 // Render the summary as a compact block. Pure — the driver prints it.
@@ -285,6 +361,7 @@ export function formatSpecSummary(s: SpecRunSummary): string {
     `slices ${s.dryRun ? "previewed" : "merged"} : ${slices}`,
   ];
   if (s.halted) lines.push(`halted at #${s.halted.slice}: ${s.halted.reason}`);
+  if (s.ceiling) lines.push(formatCeilingConsumption(s.ceiling));
   if (s.finalPrOpened) lines.push(`final PR : opened for ${s.specBranch}`);
   else if (!s.dryRun && !s.halted) lines.push("final PR : (none opened)");
   return lines.join("\n");

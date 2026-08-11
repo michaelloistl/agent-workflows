@@ -40,6 +40,14 @@ export interface ConfigFile {
   // runnable (issue #55) — e.g. "yarn install". Treated as opaque; a non-zero exit
   // fails the run before the agent starts. Absent/empty → no bootstrap step.
   readonly bootstrap?: string;
+  // Run ceiling for the attended spec loop (issue #61): the most a single run may
+  // spend before a human sees it again — slices attempted, total wall-clock
+  // (seconds), or both. A halted run resumes on re-run. An absent field (or absent
+  // section) is no ceiling for that limit — today's unbounded behaviour.
+  readonly runCeiling?: {
+    readonly maxSlices?: number;
+    readonly maxWallClockSeconds?: number;
+  };
 }
 
 // The model default lives here (not agent.mts) so the file/override resolution and
@@ -125,6 +133,29 @@ export function resolveBootstrap({ env, file }: ResolveInputs): string {
   return firstNonEmpty(env.BOOTSTRAP, file.bootstrap) ?? "";
 }
 
+// The resolved run ceiling (issue #61). Each limit is optional; an undefined limit
+// never trips. Both undefined ({}) means no ceiling at all — today's behaviour.
+export interface RunCeiling {
+  readonly maxSlices?: number;
+  readonly maxWallClockSeconds?: number;
+}
+
+// The run ceiling: per field, env override (RUN_CEILING_MAX_SLICES /
+// RUN_CEILING_MAX_WALLCLOCK_SECONDS) → file (`runCeiling`) → unset. A limit must be
+// a POSITIVE finite number; a non-positive, non-numeric, or absent value is ignored
+// at each tier and falls through, so a fat-fingered ceiling collapses to "no ceiling"
+// rather than halting the run before it makes any progress. Only the limits that
+// resolve are carried, so an unset limit stays absent (never a spurious 0).
+export function resolveRunCeiling({ env, file }: ResolveInputs): RunCeiling {
+  const rc = file.runCeiling ?? {};
+  const maxSlices = pickPositive(env.RUN_CEILING_MAX_SLICES, rc.maxSlices);
+  const maxWallClockSeconds = pickPositive(env.RUN_CEILING_MAX_WALLCLOCK_SECONDS, rc.maxWallClockSeconds);
+  const ceiling: { maxSlices?: number; maxWallClockSeconds?: number } = {};
+  if (maxSlices !== null) ceiling.maxSlices = maxSlices;
+  if (maxWallClockSeconds !== null) ceiling.maxWallClockSeconds = maxWallClockSeconds;
+  return ceiling;
+}
+
 export interface CheckTimings {
   readonly intervalSeconds: number;
   readonly timeoutSeconds: number;
@@ -150,6 +181,7 @@ export interface ResolvedConfig {
   readonly checks: CheckTimings;
   readonly worktreeRoot: string;
   readonly bootstrap: string;
+  readonly runCeiling: RunCeiling;
 }
 
 // The whole resolved config in one call — what the entrypoints use. Reads the file
@@ -164,6 +196,7 @@ export function resolveConfig(
     checks: resolveCheckTimings({ env, file }),
     worktreeRoot: resolveWorktreeRoot({ env, file }),
     bootstrap: resolveBootstrap({ env, file }),
+    runCeiling: resolveRunCeiling({ env, file }),
   };
 }
 
@@ -192,4 +225,22 @@ function fileSeconds(value: number | undefined): number | null {
 
 function pickSeconds(envRaw: string | undefined, fileVal: number | undefined, fallback: number): number {
   return envSeconds(envRaw) ?? fileSeconds(fileVal) ?? fallback;
+}
+
+// A POSITIVE finite value from the env raw string, or null when unset or invalid.
+// Positive-only: a ceiling of 0 (or negative) would halt the run before it makes any
+// progress, which is never what a config author means — so it falls through instead.
+function envPositive(raw: string | undefined): number | null {
+  if (raw === undefined || raw === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// A positive finite file value, or null when absent or invalid.
+function filePositive(value: number | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function pickPositive(envRaw: string | undefined, fileVal: number | undefined): number | null {
+  return envPositive(envRaw) ?? filePositive(fileVal);
 }
