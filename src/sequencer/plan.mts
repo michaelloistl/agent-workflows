@@ -78,6 +78,10 @@ export interface RunContext {
   // plan in this mode so a refusal is caught before Ruby and Postgres are paid
   // for; the main job runs the full plan (issue #50, spec #48 story 26).
   readonly guardsOnly?: boolean;
+  // The `implement-spec` orchestrator's entry point — `"kickoff"` (label the spec
+  // issue) or `"advance"` (a tracer-bullet PR merged). Selects which single-step
+  // orchestrator plan to return; ignored by every other verb (issue #52).
+  readonly specMode?: string;
 }
 
 function hook(
@@ -227,6 +231,21 @@ function updateBranchPlan(): readonly Step[] {
   ];
 }
 
+// `implement-spec`: the spec ORCHESTRATOR (CONTEXT.md) — it runs NO agent, so its
+// plan is a single tracker/`gh`-only step: the `kickoff` or `advance` hook, chosen
+// by `context.specMode`. Both entry points delegate their whole sequence here so
+// they share one pinned shape. A non-zero exit is a genuine `failure` (the hook
+// never refuses — the separate kickoff guard job owns refusals; and advance exits
+// non-zero to halt on a red spec branch, which must fail the job). No `cwd` split
+// and no fetch-spec: the orchestrator works the issue graph from one checkout.
+function implementSpecPlan(context: RunContext): readonly Step[] {
+  const mode = context.specMode;
+  if (mode !== "kickoff" && mode !== "advance") {
+    throw new Error(`sequencer: implement-spec unknown mode "${mode}"`);
+  }
+  return [hook(mode, "failure")];
+}
+
 function fullPlan(verb: string, context: RunContext): readonly Step[] {
   switch (verb) {
     case "explore":
@@ -239,6 +258,8 @@ function fullPlan(verb: string, context: RunContext): readonly Step[] {
       return implementPrPlan();
     case "update-branch":
       return updateBranchPlan();
+    case "implement-spec":
+      return implementSpecPlan(context);
     default:
       throw new Error(`sequencer: no plan for verb "${verb}"`);
   }
