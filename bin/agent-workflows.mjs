@@ -46,31 +46,38 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
   return { path: join(srcDir, rel), source: "packaged" };
 }
 
-// Classify the raw argv tail into an invocation kind. Two shapes are supported:
+// Classify the raw argv tail into an invocation kind. Three shapes are supported:
 //
-//   agent-workflows <verb>          → "verb": run the verb's whole sequence via
-//                                     the sequencer (issue #49).
-//   agent-workflows <verb> <hook>   → "hook": run one hook (the original form,
-//                                     unchanged — this is what consuming repos'
-//                                     `sandcastle:<verb>-<hook>` scripts call).
+//   agent-workflows <verb>                → "verb": run the verb's whole sequence
+//                                           via the sequencer (issue #49).
+//   agent-workflows <verb> --guards-only  → "verb" in guards-only mode: run just
+//                                           the guard step, for the light guard
+//                                           job's cheap preflight (issue #50).
+//   agent-workflows <verb> <hook>         → "hook": run one hook (the original
+//                                           form, unchanged — what consuming
+//                                           repos' `sandcastle:<verb>-<hook>`
+//                                           scripts call).
 //
 // Exported so the top-level dispatch is testable without spawning a child.
 export function classifyInvocation(args) {
-  const [verb, hook, ...rest] = args;
+  const [verb, second, ...rest] = args;
   if (!verb) return { kind: "usage" };
-  if (!hook) return { kind: "verb", verb };
-  return { kind: "hook", verb, hook, rest };
+  if (second === undefined) return { kind: "verb", verb };
+  if (second === "--guards-only") return { kind: "verb", verb, guardsOnly: true };
+  return { kind: "hook", verb, hook: second, rest };
 }
 
 // Run a whole verb through the sequencer: spawn its bridge entrypoint under tsx.
 // The bridge (src/sequencer/run.mts) re-invokes THIS bin once per step in the
 // verb's plan, so every step still goes through the unchanged per-hook path.
-function runVerb(verb) {
+function runVerb(verb, guardsOnly) {
   const runner = fileURLToPath(new URL("../src/sequencer/run.mts", import.meta.url));
   const require = createRequire(import.meta.url);
   const tsxCli = require.resolve("tsx/cli");
 
-  const child = spawnSync(process.execPath, [tsxCli, runner, verb], {
+  const runnerArgs = [tsxCli, runner, verb];
+  if (guardsOnly) runnerArgs.push("--guards-only");
+  const child = spawnSync(process.execPath, runnerArgs, {
     stdio: "inherit",
     env: process.env,
   });
@@ -88,7 +95,7 @@ function main() {
     process.exit(2);
   }
   if (invocation.kind === "verb") {
-    runVerb(invocation.verb);
+    runVerb(invocation.verb, invocation.guardsOnly);
     return;
   }
 

@@ -82,6 +82,14 @@ test("classifyInvocation treats verb + hook as the unchanged per-hook run", () =
   });
 });
 
+test("classifyInvocation treats --guards-only as a guards-only whole-verb run", () => {
+  assert.deepEqual(classifyInvocation(["implement", "--guards-only"]), {
+    kind: "verb",
+    verb: "implement",
+    guardsOnly: true,
+  });
+});
+
 test("classifyInvocation reports usage when no verb is given", () => {
   assert.deepEqual(classifyInvocation([]), { kind: "usage" });
 });
