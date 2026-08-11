@@ -20,7 +20,9 @@ import { existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { worktreePath, retainWorktree, type LocalOutcome } from "./plan.mts";
+import { acquireLock, lockPath, releaseLock } from "./lock.mts";
 import { resolveConfig } from "../shared/config.mts";
+import { IN_PROGRESS_LABEL } from "../shared/github.mts";
 
 // Only the read-only `explore` verb is delivered for attended runs so far (the
 // entry point cannot push anything). The other verbs collapse onto this path once
@@ -29,8 +31,12 @@ const ATTENDED_VERBS = new Set(["explore"]);
 
 const verb = process.argv[2];
 const issue = process.argv[3];
+// `--force` overrules a guard refusal AND both concurrency mutexes (issue #56):
+// the `agent:in-progress` label and the local lock. The single flag a developer
+// uses to start a run they know is safe despite a preflight or a mutex saying no.
+const force = process.argv.includes("--force");
 if (!verb || !issue) {
-  console.error("attended: usage: agent-workflows <verb> <issue-number>");
+  console.error("attended: usage: agent-workflows <verb> <issue-number> [--force]");
   process.exit(2);
 }
 if (!ATTENDED_VERBS.has(verb)) {
@@ -74,10 +80,31 @@ const config = resolveConfig();
 const base = resolveBase(config.baseBranch);
 const root = config.worktreeRoot;
 const tree = worktreePath(root, verb, issue);
+// The local lock (mutex between two terminals) lives beside the worktree under the
+// same root, keyed by the run identity so two different issues/specs never collide.
+const lock = lockPath(root, `${verb}-${issue}`);
 
-// Fetch the issue title the run's prompt needs, up front, using the developer's own
-// authenticated `gh` (no token is read from or written to disk here).
-const issueTitle = capture("gh", ["issue", "view", issue, "--json", "title", "--jq", ".title"]);
+// Fetch the issue title (the run's prompt needs it) and labels (the in-progress
+// mutex check) up front, in one call, using the developer's own authenticated `gh`
+// (no token is read from or written to disk here).
+const issueInfo = JSON.parse(
+  capture("gh", ["issue", "view", issue, "--json", "title,labels"]),
+) as { title: string; labels: Array<{ name: string }> };
+const issueTitle = issueInfo.title;
+const issueLabels = issueInfo.labels.map((l) => l.name);
+
+// Mutex 1 — `agent:in-progress` between entry points. If the issue already carries
+// it, the unattended workflow (or another attended run past its status step) is
+// mid-run; refuse rather than trample it. `--force` overrules this. The reason
+// prints to the terminal and nothing is posted to the tracker — a refusal on an
+// issue the developer is watching is noise.
+if (issueLabels.includes(IN_PROGRESS_LABEL) && !force) {
+  console.error(
+    `attended: #${issue} already carries \`${IN_PROGRESS_LABEL}\` — another run is in progress. ` +
+      `Re-run with --force to start anyway.`,
+  );
+  process.exit(1);
+}
 
 // The two scratch files the explore sequence's hooks exchange (fetch-spec writes
 // the spec, the run writes the comment finalize posts) — the local stand-in for the
@@ -94,9 +121,28 @@ process.on("SIGINT", () => {
   interrupted = true;
 });
 
+mkdirSync(root, { recursive: true });
+
+// Mutex 2 — the local lock between two terminals. The `agent:in-progress` label
+// cannot cover this: two terminals started together would each only ever observe
+// their own not-yet-written label. Acquisition is a single atomic directory create
+// (never a check-then-create, which would race). A stale lock left by a killed
+// process is cleared automatically; `--force` overrules a live holder.
+const acquired = acquireLock(lock, process.pid, { force });
+if (!acquired.acquired) {
+  console.error(
+    `attended: another local run holds the lock at ${lock}` +
+      (acquired.heldBy ? ` (pid ${acquired.heldBy})` : "") +
+      `. Re-run with --force to take it over.`,
+  );
+  process.exit(1);
+}
+if (acquired.clearedStale) {
+  console.log(`attended: cleared a stale lock at ${lock} (its owner was gone).`);
+}
+
 // Create the worktree under the configured root — never the developer's checkout.
 // A pre-existing tree (a retried command after a retained failure) is reused as-is.
-mkdirSync(root, { recursive: true });
 if (existsSync(tree)) {
   console.log(`attended: reusing existing worktree at ${tree}`);
 } else {
@@ -104,6 +150,7 @@ if (existsSync(tree)) {
   const added = run("git", ["worktree", "add", "--detach", tree, base]);
   if (added.status !== 0) {
     console.error(`attended: could not create the worktree (git exited ${added.status}).`);
+    releaseLock(lock);
     process.exit(1);
   }
 }
@@ -118,8 +165,11 @@ function outcomeOf(status: number | null, signal: NodeJS.Signals | null): LocalO
 }
 
 // Remove the worktree on a clean end; retain it on failure or abort so the
-// developer can open exactly what the run produced.
+// developer can open exactly what the run produced. The lock is ALWAYS released —
+// on success, failure, and abort alike — so a retained failure tree never wedges
+// the key for the next run.
 function cleanup(outcome: LocalOutcome): void {
+  releaseLock(lock);
   if (retainWorktree(outcome)) {
     console.log(`attended: ${verb} #${issue} ${outcome} — worktree retained at ${tree}`);
     return;
@@ -148,12 +198,19 @@ if (config.bootstrap) {
 // command the reusable workflow runs — so the attended run posts the same
 // exploration comment as the unattended path. The issue context and scratch-file
 // paths are threaded through the environment the hooks read.
-const runEnv = {
+//
+// Two attended-only signals ride along: `ANNOUNCE_REFUSALS=false` tells a guard
+// refusal to print its reason to the terminal and post NOTHING to the tracker
+// (state labels are still written normally); `FORCE` relaxes the guards step to
+// tolerated so a refusal is overruled rather than halting the run.
+const runEnv: Record<string, string> = {
   ISSUE_NUMBER: issue,
   ISSUE_TITLE: issueTitle,
   SPEC_FILE: specFile,
   COMMENT_FILE: commentFile,
+  ANNOUNCE_REFUSALS: "false",
 };
+if (force) runEnv.FORCE = "true";
 const child = spawnSync("yarn", [`sandcastle:${verb}-sequence`], {
   stdio: "inherit",
   cwd: tree,

@@ -84,6 +84,11 @@ export interface RunContext {
   // issue) or `"advance"` (a tracer-bullet PR merged). Selects which single-step
   // orchestrator plan to return; ignored by every other verb (issue #52).
   readonly specMode?: string;
+  // A forced run (issue #56): overrule a guard refusal. The guards step still
+  // runs (its reason prints), but its non-zero exit is `tolerated` so the sequence
+  // continues. Set only by the attended entry point's `--force`; unattended never
+  // forces, so its guards stay a `refusal`.
+  readonly force?: boolean;
 }
 
 function hook(
@@ -290,11 +295,24 @@ export function retainWorktree(outcome: LocalOutcome): boolean {
   return outcome === "failed" || outcome === "aborted";
 }
 
-// Return the ordered step list for `verb` under `context`. Pure — no I/O. In
-// guards-only mode only the guard step is returned, so the light guard job pays
-// nothing for the rest of the sequence.
+// The guards step of a plan, with its non-zero disposition relaxed to `tolerated`
+// so a refusal no longer stops the sequence — how a forced run overrules a guard
+// refusal (issue #56). Every other step is returned unchanged.
+function tolerateGuards(plan: readonly Step[]): readonly Step[] {
+  return plan.map((step) =>
+    step.kind === "hook" && step.hook === "guards"
+      ? { ...step, onNonZero: "tolerated" as const }
+      : step,
+  );
+}
+
+// Return the ordered step list for `verb` under `context`. Pure — no I/O. A forced
+// run relaxes the guard step to `tolerated` (a refusal is overruled). In guards-only
+// mode only the guard step is returned, so the light guard job pays nothing for the
+// rest of the sequence.
 export function planVerb(verb: string, context: RunContext): readonly Step[] {
-  const plan = fullPlan(verb, context);
+  let plan = fullPlan(verb, context);
+  if (context.force) plan = tolerateGuards(plan);
   if (context.guardsOnly) {
     return plan.filter((s) => s.kind === "hook" && s.hook === "guards");
   }

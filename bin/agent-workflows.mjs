@@ -53,11 +53,14 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
 //   agent-workflows <verb> --guards-only  → "verb" in guards-only mode: run just
 //                                           the guard step, for the light guard
 //                                           job's cheap preflight (issue #50).
-//   agent-workflows <verb> <issue-number> → "attended": run the verb locally as an
+//   agent-workflows <verb> <issue-number> [--force]
+//                                         → "attended": run the verb locally as an
 //                                           attended run against that issue, in its
 //                                           own git worktree (issue #55). A hook
 //                                           name is never all-digits, so a numeric
-//                                           second arg disambiguates cleanly.
+//                                           second arg disambiguates cleanly. A
+//                                           trailing `--force` overrules a refusal
+//                                           and both concurrency mutexes (issue #56).
 //   agent-workflows <verb> <hook>         → "hook": run one hook (the original
 //                                           form, unchanged — what consuming
 //                                           repos' `sandcastle:<verb>-<hook>`
@@ -69,7 +72,9 @@ export function classifyInvocation(args) {
   if (!verb) return { kind: "usage" };
   if (second === undefined) return { kind: "verb", verb };
   if (second === "--guards-only") return { kind: "verb", verb, guardsOnly: true };
-  if (/^\d+$/.test(second)) return { kind: "attended", verb, issue: second };
+  if (/^\d+$/.test(second)) {
+    return { kind: "attended", verb, issue: second, force: rest.includes("--force") };
+  }
   return { kind: "hook", verb, hook: second, rest };
 }
 
@@ -97,12 +102,14 @@ function runVerb(verb, guardsOnly) {
 // Run a verb locally as an attended run: spawn the attended sequencer entrypoint
 // under tsx. It creates a git worktree, bootstraps it, streams the run to the
 // terminal, and cleans up per the worktree policy (issue #55).
-function runAttended(verb, issue) {
+function runAttended(verb, issue, force) {
   const runner = fileURLToPath(new URL("../src/sequencer/attended.mts", import.meta.url));
   const require = createRequire(import.meta.url);
   const tsxCli = require.resolve("tsx/cli");
 
-  const child = spawnSync(process.execPath, [tsxCli, runner, verb, issue], {
+  const runnerArgs = [tsxCli, runner, verb, issue];
+  if (force) runnerArgs.push("--force");
+  const child = spawnSync(process.execPath, runnerArgs, {
     stdio: "inherit",
     env: process.env,
   });
@@ -124,7 +131,7 @@ function main() {
     return;
   }
   if (invocation.kind === "attended") {
-    runAttended(invocation.verb, invocation.issue);
+    runAttended(invocation.verb, invocation.issue, invocation.force);
     return;
   }
 
