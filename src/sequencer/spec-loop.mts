@@ -73,6 +73,46 @@ export function formatPreview(plan: SpecPlan): string {
   return lines.join("\n");
 }
 
+// ── Cutting the spec branch ─────────────────────────────────────────────────────
+//
+// One git command with its working directory, so the argv AND the cwd are asserted
+// rather than assumed. The cwd is the point: every git command the loop issues must
+// run in the RUN'S OWN WORKTREE, never in the checkout the developer is sitting in.
+// A cut issued in the ambient cwd silently moves the developer's HEAD onto the spec
+// branch — and worse, git then refuses to check that branch out in the worktree
+// where the slices are actually built, because a branch cannot be checked out twice.
+export interface GitCommand {
+  readonly file: "git";
+  readonly args: readonly string[];
+  // Always the worktree path. Explicit (never optional) so a caller cannot omit it
+  // and fall back to the ambient process cwd, which is the bug this shape prevents.
+  readonly cwd: string;
+}
+
+// The commands that cut the spec branch off the base and publish it — the same cut
+// the unattended kickoff does, so each slice's fetch-spec resolves it as the base to
+// stack on. With a base: fetch it, branch off `origin/<base>`, push with upstream.
+// Without one (no resolvable default): branch off the worktree's current HEAD, which
+// is already detached at the base, and push.
+export function specBranchCutCommands(o: {
+  specBranch: string;
+  base: string;
+  tree: string;
+}): GitCommand[] {
+  const at = (args: string[]): GitCommand => ({ file: "git", args, cwd: o.tree });
+  if (!o.base) {
+    return [
+      at(["checkout", "-B", o.specBranch]),
+      at(["push", "-u", "origin", o.specBranch]),
+    ];
+  }
+  return [
+    at(["fetch", "origin", o.base]),
+    at(["checkout", "-B", o.specBranch, `origin/${o.base}`]),
+    at(["push", "-u", "origin", o.specBranch]),
+  ];
+}
+
 // A slice PR's merged state as read back from GitHub (`gh pr list --json
 // number,state,mergedAt,baseRefName`). The loop reads this AFTER the slice's
 // implement run merged its PR, to prove the slice actually landed before advancing

@@ -49,6 +49,42 @@ export function removeLabel(kind: Kind, number: string, label: string): void {
   tryEdit(kind, number, ["--remove-label", label]);
 }
 
+// The `owner/name` slug in a git remote URL, or null when the URL is not one this
+// understands. Pure — the parsing half of `resolveRepoSlug`. Handles the three forms
+// a GitHub remote takes: scp-style ssh (`git@host:owner/name.git`), an ssh:// URL,
+// and https, with or without the `.git` suffix.
+export function repoFromRemoteUrl(url: string): string | null {
+  const trimmed = url.trim().replace(/\.git$/, "");
+  if (!trimmed) return null;
+  const scp = /^[^@]+@[^:]+:(?<slug>[^/]+\/[^/]+)$/.exec(trimmed);
+  if (scp?.groups) return scp.groups.slug;
+  const uri = /^(?:ssh|https?):\/\/(?:[^@/]+@)?[^/]+\/(?<slug>[^/]+\/[^/]+)$/.exec(trimmed);
+  if (uri?.groups) return uri.groups.slug;
+  return null;
+}
+
+// The `owner/name` the hooks read from `GH_REPO`. In CI the workflow supplies it
+// (`github.repository`); an ATTENDED run has no workflow, so it is derived here from
+// the checkout's own `origin` remote — otherwise every hook that calls
+// `required("GH_REPO")` refuses, which reads downstream as an unexplained guard
+// refusal. Local git first (instant, offline), then `gh` as the fallback for a
+// remote shape the parser does not know. Empty when nothing resolves; the caller
+// then leaves the variable unset rather than setting a blank one.
+export function resolveRepoSlug(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.GH_REPO) return env.GH_REPO;
+  try {
+    const slug = repoFromRemoteUrl(capture("git", ["remote", "get-url", "origin"]));
+    if (slug) return slug;
+  } catch {
+    /* no origin remote, or not a git checkout */
+  }
+  try {
+    return capture("gh", ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).trim();
+  } catch {
+    return "";
+  }
+}
+
 // Create a label in the repo if it is not there yet. `gh issue edit --add-label`
 // fails on a label the repo does not have, and label edits are best-effort (they
 // swallow that failure), so a label the fleet applies itself — rather than one a

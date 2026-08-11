@@ -70,7 +70,7 @@ import { tracerBullets } from "../shared/spec-graph.mts";
 import { specStep, type SpecAction } from "../shared/spec-step.mts";
 import { renderProgress } from "../shared/spec-report.mts";
 import { awaitChecks } from "../shared/poll-checks.mts";
-import { addLabel, comment, ensureLabel, removeLabel } from "../shared/github.mts";
+import { addLabel, comment, ensureLabel, removeLabel, resolveRepoSlug } from "../shared/github.mts";
 import {
   LOCAL_RUN_LABEL,
   LOCAL_RUN_LABEL_DESCRIPTION,
@@ -101,6 +101,7 @@ import {
   mergeConfirmed,
   mergeHaltReason,
   dryRunSuppressed,
+  specBranchCutCommands,
   specFlagConflict,
   sliceDisposition,
   formatCheckpoint,
@@ -155,8 +156,12 @@ function run(file: string, args: readonly string[], cwd?: string, env?: Record<s
   return spawnSync(file, [...args], { stdio: "inherit", cwd, env: { ...process.env, ...env } });
 }
 
-function capture(file: string, args: readonly string[]): string {
-  const child = spawnSync(file, [...args], { encoding: "utf8" });
+// `cwd` is explicit for every git command that WRITES: a write issued in the ambient
+// cwd lands in the developer's own checkout, which is the one place this loop
+// promises never to touch. Reads (`git rev-parse origin/HEAD`) and the worktree
+// removal must run in the main checkout, so the parameter is optional, not forced.
+function capture(file: string, args: readonly string[], cwd?: string): string {
+  const child = spawnSync(file, [...args], { encoding: "utf8", cwd });
   if (child.status !== 0) {
     throw new Error(`${file} ${args.join(" ")} exited ${child.status ?? "with a signal"}`);
   }
@@ -192,6 +197,9 @@ function resolveBase(configured: string): string {
 }
 
 const config = resolveConfig();
+// `owner/name` for the hooks each slice runs (GH_REPO). Resolved once, from the env
+// or the checkout's origin remote.
+const repoSlug = resolveRepoSlug();
 // The run ceiling (issue #61): the most this run may spend before a human sees it
 // again — slices attempted, wall-clock, or both. Resolved by the standard precedence
 // (env override → config file → unset); absent all, it is empty ({}) and the loop is
@@ -505,15 +513,14 @@ if (!remoteBranches().includes(specBranch)) {
   if (dryRun) {
     console.log(dryRunSuppressed(`cut and push the spec branch ${specBranch} off ${base || "the default branch"}`));
     record(null, "spec-branch", "cut suppressed (dry run)");
-  } else if (base) {
-    capture("git", ["fetch", "origin", base]);
-    capture("git", ["checkout", "-B", specBranch, `origin/${base}`]);
-    capture("git", ["push", "-u", "origin", specBranch]);
-    record(null, "spec-branch", `cut off ${base}`);
   } else {
-    capture("git", ["checkout", "-B", specBranch]);
-    capture("git", ["push", "-u", "origin", specBranch]);
-    record(null, "spec-branch", "cut off the default branch");
+    // Every command runs IN THE WORKTREE (see `specBranchCutCommands`): issued in the
+    // ambient cwd they would move the developer's own checkout onto the spec branch,
+    // and git would then refuse to check that branch out here, where the slices build.
+    for (const cmd of specBranchCutCommands({ specBranch, base, tree })) {
+      capture(cmd.file, cmd.args, cmd.cwd);
+    }
+    record(null, "spec-branch", `cut off ${base || "the default branch"}`);
   }
 }
 
@@ -745,6 +752,11 @@ async function drive(): Promise<never> {
       SPEC_FILE: specFile,
       ANNOUNCE_REFUSALS: "false",
     };
+    // The hooks require GH_REPO; in CI the workflow supplies `github.repository`,
+    // and an attended run has no workflow — so it is derived from the checkout's
+    // own origin remote. Without it the slice's FIRST hook refuses, which surfaces
+    // here as an unconfirmed merge rather than as the missing variable it is.
+    if (repoSlug) buildEnv.GH_REPO = repoSlug;
     if (force) buildEnv.FORCE = "true";
     if (dryRun) buildEnv.FINALIZE_MODE = "never";
     // `--interactive` (issue #60): each slice's implement run hands over a live agent

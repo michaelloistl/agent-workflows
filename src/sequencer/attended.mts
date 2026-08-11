@@ -36,7 +36,7 @@ import {
 } from "./plan.mts";
 import { acquireLock, lockPath, releaseLock } from "./lock.mts";
 import { resolveConfig } from "../shared/config.mts";
-import { IN_PROGRESS_LABEL } from "../shared/github.mts";
+import { IN_PROGRESS_LABEL, resolveRepoSlug } from "../shared/github.mts";
 
 // The verbs delivered for attended runs. `explore` (read-only) came first; issue
 // #57 adds `implement`, which builds an issue end to end on the developer's machine
@@ -316,6 +316,12 @@ const runEnv: Record<string, string> = {
   COMMENT_FILE: commentFile,
   ANNOUNCE_REFUSALS: "false",
 };
+// The hooks require GH_REPO; in CI the workflow supplies `github.repository`, and an
+// attended run has no workflow — so it is derived from the checkout's own origin
+// remote. Without it the FIRST hook refuses with a missing-variable message, which
+// reads as an unexplained guard refusal.
+const repoSlug = resolveRepoSlug();
+if (repoSlug) runEnv.GH_REPO = repoSlug;
 if (force) runEnv.FORCE = "true";
 if (interactive) runEnv.INTERACTIVE = "true";
 if (verb === "implement" && finalizeMode !== "auto") runEnv.FINALIZE_MODE = finalizeMode;

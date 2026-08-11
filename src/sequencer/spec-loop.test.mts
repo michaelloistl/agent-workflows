@@ -21,6 +21,7 @@ import {
   ceilingReached,
   hasCeiling,
   formatCeilingConsumption,
+  specBranchCutCommands,
   type SpecPlan,
 } from "./spec-loop.mts";
 import type { TracerBullet } from "../shared/spec-graph.mts";
@@ -416,4 +417,40 @@ test("formatSpecSummary omits the consumed line when no ceiling was configured",
     finalPrOpened: true,
   });
   assert.doesNotMatch(out, /consumed :/);
+});
+
+// — Cutting the spec branch —
+//
+// The cwd carries the whole point of these tests. A cut issued without one runs in
+// the developer's own checkout: it moves their HEAD onto the spec branch, and git
+// then refuses to check that branch out in the worktree where the slices are built.
+
+test("every spec-branch cut command runs in the run's worktree, never the ambient cwd", () => {
+  const cmds = specBranchCutCommands({
+    specBranch: "agent/spec-3-x",
+    base: "main",
+    tree: "/tmp/worktrees/spec-3",
+  });
+  assert.ok(cmds.length > 0);
+  for (const c of cmds) assert.equal(c.cwd, "/tmp/worktrees/spec-3");
+});
+
+test("with a base, the cut fetches it, branches off origin/<base>, and pushes upstream", () => {
+  assert.deepEqual(
+    specBranchCutCommands({ specBranch: "agent/spec-3-x", base: "develop", tree: "/w" }),
+    [
+      { file: "git", args: ["fetch", "origin", "develop"], cwd: "/w" },
+      { file: "git", args: ["checkout", "-B", "agent/spec-3-x", "origin/develop"], cwd: "/w" },
+      { file: "git", args: ["push", "-u", "origin", "agent/spec-3-x"], cwd: "/w" },
+    ],
+  );
+});
+
+// No resolvable base: the worktree is already detached AT the base, so branching off
+// its HEAD is the same cut — and there is nothing to fetch.
+test("with no base, the cut branches off the worktree's HEAD and pushes", () => {
+  assert.deepEqual(specBranchCutCommands({ specBranch: "agent/spec-3-x", base: "", tree: "/w" }), [
+    { file: "git", args: ["checkout", "-B", "agent/spec-3-x"], cwd: "/w" },
+    { file: "git", args: ["push", "-u", "origin", "agent/spec-3-x"], cwd: "/w" },
+  ]);
 });
