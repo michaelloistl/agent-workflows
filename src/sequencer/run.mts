@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planVerb, type RunContext, type Step } from "./plan.mts";
 import { runPlan } from "./executor.mts";
+import { resolveConfig, effectiveBase } from "../shared/config.mts";
 
 const verb = process.argv[2];
 if (!verb) {
@@ -36,7 +37,10 @@ const outFile = join(tmpdir(), `agent-workflows-seq-${process.pid}.out`);
 const context: RunContext = {
   guardsOnly,
   enableRuby: process.env.ENABLE_RUBY === "true",
-  baseBranch: process.env.DEFAULT_BRANCH || "",
+  // Base branch the produced branch/PR falls back to: per-run override → config
+  // file → repository default (issue #53). Absent a config file this is just
+  // DEFAULT_BRANCH, so behaviour is unchanged.
+  baseBranch: resolveConfig().baseBranch,
   // Which orchestrator entry point to sequence — `implement-spec` reads this;
   // every other verb ignores it (issue #52).
   specMode: process.env.SPEC_MODE,
@@ -47,14 +51,16 @@ const plan = planVerb(verb, context);
 const outputs: Record<string, string> = {};
 
 // Ambient env for a step, with fetch-spec's outputs threaded in as the `BRANCH`
-// and `BASE` the git steps and finalize read. `BASE` falls back to the base
-// branch when the issue is not a spec tracer-bullet, mirroring the workflow's
-// `steps.spec.outputs.base || github.event.repository.default_branch`.
+// and `BASE` the git steps and finalize read. `BASE` falls back to the resolved
+// base branch (per-run override → config file → repository default, issue #53)
+// when the issue is not a spec tracer-bullet.
 function envForStep(step: Step): NodeJS.ProcessEnv {
   const threaded: Record<string, string> = {};
   if (outputs.branch !== undefined) {
     threaded.BRANCH = outputs.branch;
-    threaded.BASE = outputs.base || context.baseBranch || "";
+    // A spec tracer-bullet's own spec branch (fetch-spec's `base`) overrides the
+    // configured base; a standalone issue falls back to it (issue #53).
+    threaded.BASE = effectiveBase(outputs.base, context.baseBranch || "");
   }
   return { ...process.env, ...threaded, ...step.env };
 }

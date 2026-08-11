@@ -212,6 +212,27 @@ To customize a hook, drop a single file at
 `.sandcastle/agent-workflows/<verb-dir>/<entry>.mts` (or `prompt.md`) — the
 dispatcher resolves it override-first, else the packaged default.
 
+**Optional: tune sequencer behaviour with a config file.** Values the sequencer
+itself acts on live in an optional `.sandcastle/agent-workflows/config.json`
+committed to the consuming repo — separate from the toolchain values (Ruby
+enablement, system packages, Node version, database URL) that stay `with:` inputs
+because only GitHub Actions can act on them. Every value resolves per-run override
+→ file → default, so absent the file behaviour is unchanged:
+
+```jsonc
+{
+  // Integration branch every verb bases on and targets (agent branch, PR base,
+  // PR-verb tooling ref, spec branch). Absent → the repository default branch. A
+  // tracer-bullet under a spec still bases on its spec branch.
+  "baseBranch": "develop",
+  // Model the fleet's agents run on. Absent → the packaged default.
+  "agentModel": "claude-opus-4-8",
+  // CI check-poll timings for the merge gates, in seconds (env overrides win:
+  // CHECKS_INTERVAL_SECONDS / CHECKS_TIMEOUT_SECONDS / CHECKS_GRACE_SECONDS).
+  "checks": { "intervalSeconds": 15, "timeoutSeconds": 1200, "graceSeconds": 180 }
+}
+```
+
 **3. Create the trigger labels** listed in [Labels](#labels) for each verb you
 enable (the state labels are created on first use by the hooks).
 

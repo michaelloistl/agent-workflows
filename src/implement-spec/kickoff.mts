@@ -8,6 +8,7 @@ import { addLabel, removeLabel, comment } from "../shared/github.mts";
 import { tracerBullets, nextSlice } from "../shared/spec-graph.mts";
 import { renderProgress } from "../shared/spec-report.mts";
 import { listIssues } from "../shared/spec-tracker.mts";
+import { resolveConfig } from "../shared/config.mts";
 import { slugify } from "../shared/text.mts";
 
 const TRIGGER = "agent:implement-spec";
@@ -15,11 +16,18 @@ const number = required("ISSUE_NUMBER");
 const title = required("ISSUE_TITLE");
 const spec = Number(number);
 
-// 1. Cut + push the spec branch off the default branch (the checked-out HEAD). No
+// 1. Cut + push the spec branch off the configured base branch (issue #53) — the
+// default branch when no config file sets one, matching the checked-out HEAD. No
 // commit, so no identity needed; it just gives the tracer-bullets a base to stack
 // on. Naming parallels the tracer-bullet branch and is a parsed contract.
 const branch = `agent/spec-${spec}-${slugify(title)}`;
-capture("git", ["checkout", "-B", branch]);
+const base = resolveConfig().baseBranch;
+if (base) {
+  capture("git", ["fetch", "origin", base]);
+  capture("git", ["checkout", "-B", branch, `origin/${base}`]);
+} else {
+  capture("git", ["checkout", "-B", branch]);
+}
 capture("git", ["push", "-u", "origin", branch]);
 
 // 2. Discover + order the tracer-bullets, and which are already closed.

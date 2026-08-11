@@ -13,6 +13,7 @@ import { listIssues } from "../shared/spec-tracker.mts";
 import { specNumberFromBranch, issueNumberFromBranch } from "../shared/spec-context.mts";
 import { parseCommitCheckRuns, type CheckRun } from "../shared/checks.mts";
 import { awaitChecks } from "../shared/poll-checks.mts";
+import { resolveConfig } from "../shared/config.mts";
 
 const baseRef = required("BASE_REF");
 const headRef = required("HEAD_REF");
@@ -76,11 +77,13 @@ console.log(
   }.`,
 );
 
-// The single human-review gate: a draft PR from the spec branch to the default
-// branch with `Closes #<spec>` (base IS default, so the merge auto-closes the spec).
-// Idempotent — never opens a second final PR.
+// The single human-review gate: a draft PR from the spec branch to the configured
+// base branch with `Closes #<spec>` (base IS where the spec lands, so the merge
+// auto-closes the spec). The base is the configured base branch (issue #53),
+// falling back to the repository default when no config file sets one — matching
+// where kickoff cut the spec branch from. Idempotent — never opens a second final PR.
 function openFinalPr(specNumber: number, specBranch: string): void {
-  const defaultBranch = capture("gh", [
+  const base = resolveConfig().baseBranch || capture("gh", [
     "repo",
     "view",
     "--json",
@@ -94,7 +97,7 @@ function openFinalPr(specNumber: number, specBranch: string): void {
     "--head",
     specBranch,
     "--base",
-    defaultBranch,
+    base,
     "--state",
     "open",
     "--json",
@@ -113,7 +116,7 @@ function openFinalPr(specNumber: number, specBranch: string): void {
     "create",
     "--draft",
     "--base",
-    defaultBranch,
+    base,
     "--head",
     specBranch,
     "--title",
