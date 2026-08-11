@@ -5,7 +5,8 @@
 // `spec-graph` brain.
 import { required, capture } from "../shared/process.mts";
 import { addLabel, removeLabel, comment } from "../shared/github.mts";
-import { tracerBullets, nextSlice } from "../shared/spec-graph.mts";
+import { tracerBullets } from "../shared/spec-graph.mts";
+import { specStep } from "../shared/spec-step.mts";
 import { renderProgress } from "../shared/spec-report.mts";
 import { listIssues } from "../shared/spec-tracker.mts";
 import { resolveConfig } from "../shared/config.mts";
@@ -37,10 +38,12 @@ const closed = new Set(
   issues.filter((i) => i.state === "CLOSED").map((i) => i.number),
 );
 
-// 3. Dispatch the next single slice (topologically-first ready one). Labelling it
-// `agent:implement` triggers the implement verb, whose fetch-spec derives its base
-// as this spec branch (#5).
-const next = nextSlice(bullets, closed);
+// 3. Ask the step function what happens next, then dispatch it. At kickoff that is
+// either `run-slice` (label the topologically-first ready slice) or `done` (nothing
+// ready). Labelling `agent:implement` triggers the implement verb, whose fetch-spec
+// derives its base as this spec branch (#5).
+const action = specStep({ phase: "kickoff", bullets, closed });
+const next = action.type === "run-slice" ? action.slice : null;
 if (next !== null) addLabel("issue", String(next), "agent:implement");
 
 // 4. Post the progress dashboard on the spec issue and retire the trigger label.
