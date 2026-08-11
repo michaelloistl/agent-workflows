@@ -22,6 +22,7 @@ import {
   hasCeiling,
   formatCeilingConsumption,
   specBranchCutCommands,
+  sliceRefusedHaltReason,
   type SpecPlan,
 } from "./spec-loop.mts";
 import type { TracerBullet } from "../shared/spec-graph.mts";
@@ -453,4 +454,31 @@ test("with no base, the cut branches off the worktree's HEAD and pushes", () => 
     { file: "git", args: ["checkout", "-B", "agent/spec-3-x"], cwd: "/w" },
     { file: "git", args: ["push", "-u", "origin", "agent/spec-3-x"], cwd: "/w" },
   ]);
+});
+
+// — A refused slice —
+//
+// A guard refusal exits 0 by design (CI must stay green), so before the outcome seam
+// the loop saw "the sequence succeeded", found no merged PR, and blamed the merge.
+// The reason must name the step that refused, because that is the thing to go and fix.
+
+test("sliceRefusedHaltReason names the slice and the step that refused", () => {
+  const r = sliceRefusedHaltReason({ slice: 81, step: "guards" });
+  assert.match(r, /#81/);
+  assert.match(r, /guards/);
+  // Not a failure, and explicitly not a merge problem.
+  assert.match(r, /refused/);
+  assert.doesNotMatch(r, /merge/i);
+});
+
+test("sliceRefusedHaltReason copes with an unnamed step", () => {
+  assert.match(sliceRefusedHaltReason({ slice: 81, step: "" }), /#81/);
+});
+
+// A refused slice built nothing at all, so the footer must not say "built" — that is
+// the same lie the halt reason was fixed to stop telling, one line further down.
+test("formatSliceFooter distinguishes a refused slice from a built one", () => {
+  const refused = formatSliceFooter({ slice: 81, outcome: "refused" });
+  assert.match(refused, /refused/);
+  assert.notEqual(refused, formatSliceFooter({ slice: 81, outcome: "built" }));
 });

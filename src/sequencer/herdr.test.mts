@@ -55,7 +55,7 @@ test("renameCommand builds a herdr pane rename with the id positional", () => {
 // `herdr notification show <title>` — session-scoped; there is no per-pane notify,
 // so the message itself carries the spec.
 test("notifyCommand builds a herdr notification show", () => {
-  assert.deepEqual(notifyCommand({ pane: "wR:p2" }, "done"), {
+  assert.deepEqual(notifyCommand("done"), {
     file: "herdr",
     args: ["notification", "show", "done"],
   });

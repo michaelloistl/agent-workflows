@@ -91,9 +91,14 @@ export function resolveRepoSlug(env: NodeJS.ProcessEnv = process.env): string {
 // human created by hand — has to be ensured before it is added. Tolerant: an
 // already-existing label makes `gh label create` exit non-zero, which is the
 // expected case, not an error.
+// Quiet, because the EXPECTED path is failure: on the second and every later run the
+// label exists and `gh` writes "label with name … already exists" to stderr, which
+// would otherwise print on every run of a loop that is behaving perfectly. Silencing
+// it costs no diagnosis here — the caller that needs the label to exist (the spec
+// loop's marker claim) verifies it afterwards and halts with its own message.
 export function ensureLabel(name: string, description: string): void {
   try {
-    gh(["label", "create", name, "--description", description]);
+    capture("gh", ["label", "create", name, "--description", description], { quiet: true });
   } catch {
     /* already exists (the common case), or the token cannot create labels */
   }

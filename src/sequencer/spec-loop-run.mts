@@ -61,7 +61,7 @@
 // and reclaimed by the next run when a crash left it behind (`shared/spec-marker.mts`).
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "../shared/config.mts";
@@ -90,6 +90,7 @@ import {
 } from "../shared/spec-advance.mts";
 import { acquireLock, lockPath, readLockOwner, releaseLock } from "./lock.mts";
 import { runLogPath, appendRunLine } from "./run-log.mts";
+import { parseSequenceState, type SequenceState } from "./sequence-state.mts";
 import { createHerdrSurface } from "./herdr.mts";
 import {
   resolveOrder,
@@ -102,6 +103,7 @@ import {
   mergeHaltReason,
   dryRunSuppressed,
   specBranchCutCommands,
+  sliceRefusedHaltReason,
   specFlagConflict,
   sliceDisposition,
   formatCheckpoint,
@@ -181,6 +183,17 @@ function confirm(question: string): boolean {
   return answer === "y" || answer === "yes";
 }
 
+// The outcome the slice's sequence just reported. An unreadable or absent file means
+// "nothing reported" — an empty state, never a refusal, so a missing file can only
+// make the loop proceed as it did before, not invent a halt.
+function readSliceState(): SequenceState {
+  try {
+    return parseSequenceState(readFileSync(sliceStateFile, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
 function closedSet(issues: RawIssue[]): Set<number> {
   return new Set(issues.filter((i) => i.state === "CLOSED").map((i) => i.number));
 }
@@ -214,6 +227,10 @@ const lock = lockPath(root, `implement-spec-${specNum}`);
 // fetch-spec requires it) — the local stand-in for the path the reusable workflow
 // resolves under $RUNNER_TEMP. Reused across slices; each slice overwrites it.
 const specFile = join(tmpdir(), `agent-workflows-spec-loop-${process.pid}-spec.md`);
+// Where each slice's sequence reports its outcome back to this loop. Reused across
+// slices; each slice overwrites it, and it is read immediately after that slice's
+// sequence exits.
+const sliceStateFile = join(tmpdir(), `agent-workflows-spec-loop-${process.pid}-state`);
 
 // The append-only run log (issue #62): every transition the loop makes is appended
 // here — slice, action, outcome, timestamp — so a run that halts at 2am leaves
@@ -763,6 +780,16 @@ async function drive(): Promise<never> {
     // session so the developer steers it. Per-slice by design — and mutually
     // exclusive with --no-pause, rejected up front.
     if (interactive) buildEnv.INTERACTIVE = "true";
+    // Ask the sequence to report its OUTCOME back here. A guard refusal exits 0 (a
+    // refusal must leave CI green), so the exit code alone cannot distinguish
+    // "refused, built nothing" from "ran and succeeded" — and the loop would then
+    // blame the merge for a decision taken at the sequence's first step.
+    buildEnv.SEQUENCE_STATE_FILE = sliceStateFile;
+    // Clear it first: the file is reused across slices, and a sequence that exits 0
+    // WITHOUT writing one — a worktree whose packaged sequencer predates this seam is
+    // the realistic case, since the worktree runs the checked-out commit's code, not
+    // this one — would otherwise leave the loop reading the PREVIOUS slice's outcome.
+    rmSync(sliceStateFile, { force: true });
     record(slice, "build", "running the implement sequence");
     const build = run("yarn", ["sandcastle:implement-sequence"], tree, buildEnv);
 
@@ -777,6 +804,18 @@ async function drive(): Promise<never> {
       };
       console.log(formatSliceFooter({ slice, outcome: "built" }));
       finish(interrupted || build.signal ? 130 : build.status || 1);
+    }
+
+    // A REFUSED sequence exited 0 having built nothing. Halt on the refusal itself,
+    // naming the step that declined — not on the merge that could never have happened.
+    const sliceState = readSliceState();
+    if (sliceState.outcome === "refused") {
+      const reason = sliceRefusedHaltReason({ slice, step: sliceState.step ?? "" });
+      console.error(reason);
+      halted = { slice, reason: `the implement sequence refused at \`${sliceState.step ?? "?"}\`` };
+      record(slice, "refused", `the sequence refused at ${sliceState.step ?? "?"}`);
+      console.log(formatSliceFooter({ slice, outcome: "refused" }));
+      finish(1);
     }
 
     if (dryRun) {

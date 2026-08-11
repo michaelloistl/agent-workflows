@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planVerb, type FinalizeMode, type RunContext, type Step } from "./plan.mts";
 import { runPlan } from "./executor.mts";
+import { renderSequenceState } from "./sequence-state.mts";
 import { resolveConfig, effectiveBase } from "../shared/config.mts";
 
 const verb = process.argv[2];
@@ -143,15 +144,38 @@ function label(step: Step | undefined): string {
 
 const result = runPlan(plan, runStep);
 
-// When the attended entry point wants the branch/base this sequence resolved (its
-// `ask` path drops the finalize tail, then runs a tail-only slice that needs them),
-// mirror fetch-spec's outputs to $SEQUENCE_STATE_FILE — the effective base (a spec
-// tracer-bullet's spec branch, else the configured base), so the caller threads the
-// exact same values the tail would have seen (issue #57).
+// Report back to an attended entry point through $SEQUENCE_STATE_FILE, when one asked
+// for it. Two things ride in the file:
+//
+//   - The OUTCOME and the step it stopped at. A refusal exits 0 on purpose (a refusal
+//     must leave CI green and never report `blocked`), which leaves an attended caller
+//     unable to tell a refusal from a clean run — the spec loop consequently reported
+//     a refused slice as an unconfirmed merge. The exit code keeps its CI meaning; the
+//     outcome travels beside it.
+//   - The branch/base this sequence resolved (issue #57): the `ask` path drops the
+//     finalize tail, then runs a tail-only slice that must thread the exact values the
+//     tail would have seen — the effective base (a tracer-bullet's spec branch, else
+//     the configured base).
+//
+// Written whenever the caller set the variable, even when the sequence stopped before
+// fetch-spec resolved a branch — a reader learns *why* nothing was produced, and the
+// file is never absent when its reader expects it.
 const stateFile = process.env.SEQUENCE_STATE_FILE;
-if (stateFile && outputs.branch !== undefined) {
-  const effBase = effectiveBase(outputs.base ?? "", context.baseBranch || "");
-  writeFileSync(stateFile, `branch=${outputs.branch}\nbase=${effBase}\n`);
+if (stateFile) {
+  const resolved =
+    outputs.branch === undefined
+      ? {}
+      : {
+          branch: outputs.branch,
+          base: effectiveBase(outputs.base ?? "", context.baseBranch || ""),
+        };
+  // The step is reported only when there IS one (a success stopped nowhere), so a
+  // reader never sees a placeholder it has to interpret.
+  const stopped = result.step ? { step: label(result.step) } : {};
+  writeFileSync(
+    stateFile,
+    renderSequenceState({ outcome: result.outcome, ...stopped, ...resolved }),
+  );
 }
 
 // Guards-only mode is the light guard job's cheap preflight: propagate the exit

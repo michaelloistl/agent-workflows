@@ -65,9 +65,9 @@ export function renameCommand(ctx: HerdrContext, title: string): { file: string;
 }
 
 // The `herdr` CLI invocation that fires a notification: `herdr notification show
-// <title> [--body TEXT]`. Session-scoped rather than pane-addressed — the CLI has no
-// per-pane notify — so the message carries the spec number itself.
-export function notifyCommand(_ctx: HerdrContext, message: string): { file: string; args: string[] } {
+// <title> [--body TEXT]`. Session-scoped, NOT pane-addressed — the CLI has no per-pane
+// notify — so it takes no context and the message carries the spec number itself.
+export function notifyCommand(message: string): { file: string; args: string[] } {
   return { file: "herdr", args: ["notification", "show", message] };
 }
 
@@ -105,10 +105,10 @@ export function createHerdrSurface(env: NodeJS.ProcessEnv, spawn: Spawn): HerdrS
       if (ctx) emit(renameCommand(ctx, sliceTitle(o)));
     },
     notifyHalt(o) {
-      if (ctx) emit(notifyCommand(ctx, haltNotice(o)));
+      if (ctx) emit(notifyCommand(haltNotice(o)));
     },
     notifyComplete(o) {
-      if (ctx) emit(notifyCommand(ctx, completeNotice(o)));
+      if (ctx) emit(notifyCommand(completeNotice(o)));
     },
   };
 }
