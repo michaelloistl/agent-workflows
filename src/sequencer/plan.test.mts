@@ -3,12 +3,16 @@ import assert from "node:assert/strict";
 import { planVerb, type Step } from "./plan.mts";
 
 // Normalize a step to its pinned identity: a hook by name/args, a shell step by
-// its label. The exact shell command strings are deliberately not pinned — the
-// sequence (which steps, in what order, with which disposition) is the contract.
+// its label, plus its `cwd` split. The exact shell command strings are
+// deliberately not pinned — the sequence (which steps, in what order, with which
+// disposition, and where each runs) is the contract. `cwd` is `undefined` for the
+// issue verbs (a single checkout, no split) and set on the PR verbs, which run
+// tracker hooks from the tooling worktree and the agent/git against the PR head.
 function shape(s: Step) {
+  const base = { kind: s.kind, onNonZero: s.onNonZero, cwd: s.cwd };
   return s.kind === "hook"
-    ? { kind: s.kind, hook: s.hook, args: s.args, onNonZero: s.onNonZero }
-    : { kind: s.kind, name: s.name, onNonZero: s.onNonZero };
+    ? { ...base, hook: s.hook, args: s.args }
+    : { ...base, name: s.name };
 }
 
 // Pin `explore`'s plan to the exact sequence the reusable workflow performs
@@ -19,12 +23,12 @@ test("planVerb('explore') pins the workflow's sequence", () => {
   const plan = planVerb("explore", {});
 
   assert.deepEqual(plan.map(shape), [
-    { kind: "hook", hook: "guards", args: [], onNonZero: "refusal" },
-    { kind: "hook", hook: "status", args: ["in-progress"], onNonZero: "failure" },
-    { kind: "hook", hook: "fetch-spec", args: [], onNonZero: "failure" },
-    { kind: "hook", hook: "run", args: [], onNonZero: "failure" },
-    { kind: "hook", hook: "finalize", args: [], onNonZero: "failure" },
-    { kind: "hook", hook: "status", args: ["done"], onNonZero: "failure" },
+    { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: undefined },
+    { kind: "hook", hook: "status", args: ["in-progress"], onNonZero: "failure", cwd: undefined },
+    { kind: "hook", hook: "fetch-spec", args: [], onNonZero: "failure", cwd: undefined },
+    { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: undefined },
+    { kind: "hook", hook: "finalize", args: [], onNonZero: "failure", cwd: undefined },
+    { kind: "hook", hook: "status", args: ["done"], onNonZero: "failure", cwd: undefined },
   ]);
 });
 
@@ -36,14 +40,14 @@ test("planVerb('implement') pins the workflow's sequence (Ruby enabled)", () => 
   const plan = planVerb("implement", { enableRuby: true });
 
   assert.deepEqual(plan.map(shape), [
-    { kind: "hook", hook: "guards", args: [], onNonZero: "refusal" },
-    { kind: "hook", hook: "status", args: ["in-progress"], onNonZero: "failure" },
-    { kind: "hook", hook: "fetch-spec", args: [], onNonZero: "failure" },
-    { kind: "shell", name: "create-branch", onNonZero: "failure" },
-    { kind: "hook", hook: "run", args: [], onNonZero: "failure" },
-    { kind: "shell", name: "boot-check", onNonZero: "failure" },
-    { kind: "shell", name: "push", onNonZero: "failure" },
-    { kind: "hook", hook: "finalize", args: [], onNonZero: "failure" },
+    { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: undefined },
+    { kind: "hook", hook: "status", args: ["in-progress"], onNonZero: "failure", cwd: undefined },
+    { kind: "hook", hook: "fetch-spec", args: [], onNonZero: "failure", cwd: undefined },
+    { kind: "shell", name: "create-branch", onNonZero: "failure", cwd: undefined },
+    { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: undefined },
+    { kind: "shell", name: "boot-check", onNonZero: "failure", cwd: undefined },
+    { kind: "shell", name: "push", onNonZero: "failure", cwd: undefined },
+    { kind: "hook", hook: "finalize", args: [], onNonZero: "failure", cwd: undefined },
   ]);
 });
 
@@ -59,14 +63,71 @@ test("planVerb('implement') omits the boot check when Ruby is disabled", () => {
   );
 });
 
+// Pin `review-pr`'s plan to the sequence the reusable workflow performs today:
+// guards → report in-progress → the read-only agent run → post the review →
+// report done. The tracker hooks (guards/status/finalize) run from the tooling
+// worktree (`cwd: "tooling"`); the agent `run` runs against the PR head
+// (`cwd: "work"`). There is no fetch-spec — the run gathers its own PR context.
+test("planVerb('review-pr') pins the workflow's sequence", () => {
+  const plan = planVerb("review-pr", {});
+
+  assert.deepEqual(plan.map(shape), [
+    { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: "tooling" },
+    { kind: "hook", hook: "status", args: ["in-progress"], onNonZero: "failure", cwd: "tooling" },
+    { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: "work" },
+    { kind: "hook", hook: "finalize", args: [], onNonZero: "failure", cwd: "tooling" },
+    { kind: "hook", hook: "status", args: ["done"], onNonZero: "failure", cwd: "tooling" },
+  ]);
+});
+
+// Pin `implement-pr`'s plan: guards → report in-progress → the agent run (commits
+// onto the PR head) → push-and-finalize. The agent run exits non-zero on a no-op
+// (`failure`), so nothing to commit reports blocked. Unlike review-pr, the push
+// is conditional (a non-fast-forward self-reports blocked, no force) and finalize
+// only runs after a successful push — so both live in one work-tree shell step.
+test("planVerb('implement-pr') pins the workflow's sequence", () => {
+  const plan = planVerb("implement-pr", {});
+
+  assert.deepEqual(plan.map(shape), [
+    { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: "tooling" },
+    { kind: "hook", hook: "status", args: ["in-progress"], onNonZero: "failure", cwd: "tooling" },
+    { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: "work" },
+    { kind: "shell", name: "push-and-finalize", onNonZero: "failure", cwd: "work" },
+  ]);
+});
+
+// Pin `update-branch`'s plan: guards → report in-progress → the agent run (merges
+// the base into the PR head) → push-and-finalize. Like implement-pr the push is
+// conditional (an up-to-date run pushes nothing but still finalizes; a merged run
+// pushes without force) and finalize is bundled with it in one work-tree step.
+test("planVerb('update-branch') pins the workflow's sequence", () => {
+  const plan = planVerb("update-branch", {});
+
+  assert.deepEqual(plan.map(shape), [
+    { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: "tooling" },
+    { kind: "hook", hook: "status", args: ["in-progress"], onNonZero: "failure", cwd: "tooling" },
+    { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: "work" },
+    { kind: "shell", name: "push-and-finalize", onNonZero: "failure", cwd: "work" },
+  ]);
+});
+
 // Guards-only mode returns just the guard step, so the light guard job catches a
 // refusal before Ruby and Postgres are paid for (spec #48 story 26). enable-ruby
-// must not leak the boot check into a guards-only plan.
+// must not leak the boot check into a guards-only plan. The issue verbs guard in
+// a single checkout (`cwd: undefined`); the PR verbs guard from the tooling
+// worktree (`cwd: "tooling"`) — set here even though the light guard job runs in
+// a plain default-branch checkout with no TOOLING_DIR (the bridge no-ops it there).
 test("planVerb guards-only mode returns just the guard step", () => {
   for (const verb of ["explore", "implement"]) {
     const plan = planVerb(verb, { guardsOnly: true, enableRuby: true });
     assert.deepEqual(plan.map(shape), [
-      { kind: "hook", hook: "guards", args: [], onNonZero: "refusal" },
+      { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: undefined },
+    ]);
+  }
+  for (const verb of ["review-pr", "implement-pr", "update-branch"]) {
+    const plan = planVerb(verb, { guardsOnly: true });
+    assert.deepEqual(plan.map(shape), [
+      { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: "tooling" },
     ]);
   }
 });

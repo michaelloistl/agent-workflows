@@ -56,6 +56,21 @@ function envForStep(step: Step): NodeJS.ProcessEnv {
   return { ...process.env, ...threaded, ...step.env };
 }
 
+// Which directory a step runs in. A `"tooling"` step (a PR verb's tracker hook)
+// runs in the detached default-branch worktree at $TOOLING_DIR, so it uses the
+// CURRENT packaged logic even when the PR head predates the tooling — mirroring
+// the collapsed YAML's `yarn --cwd "$TOOLING_DIR" …`. Everything else (the issue
+// verbs' single checkout, and the PR verbs' `"work"` run/push) inherits the
+// bridge's cwd, which the workflow launched from the PR head. When TOOLING_DIR is
+// unset (the light guard job runs guards from a plain default-branch checkout),
+// even a `"tooling"` step falls back to the ambient cwd.
+function cwdForStep(step: Step): string | undefined {
+  if (step.cwd === "tooling" && process.env.TOOLING_DIR) {
+    return process.env.TOOLING_DIR;
+  }
+  return undefined;
+}
+
 function captureOutputs(): void {
   let text: string;
   try {
@@ -71,6 +86,7 @@ function captureOutputs(): void {
 
 function runStep(step: Step): number {
   const env = envForStep(step);
+  const cwd = cwdForStep(step);
 
   if (step.kind === "shell") {
     // Match GitHub Actions' default bash flags (`-e -o pipefail`) so a failing
@@ -78,6 +94,7 @@ function runStep(step: Step): number {
     const child = spawnSync("bash", ["-eo", "pipefail", "-c", step.run], {
       stdio: "inherit",
       env,
+      cwd,
     });
     if (child.error) {
       console.error(`sequencer: failed to run ${verb} ${step.name}:`, child.error);
@@ -90,6 +107,7 @@ function runStep(step: Step): number {
   const child = spawnSync(process.execPath, [binPath, verb, step.hook, ...step.args], {
     stdio: "inherit",
     env: { ...env, GITHUB_OUTPUT: outFile },
+    cwd,
   });
   if (child.error) {
     console.error(`sequencer: failed to run ${verb} ${step.hook}:`, child.error);

@@ -8,6 +8,20 @@
 // anything. It only describes what should run; the executor (executor.mts) runs
 // it and the bin's whole-verb bridge (run.mts) wires the two together.
 
+// Where a step runs — the split the PR verbs need and the issue verbs do not.
+// A PR verb runs the agent against the PR head while loading its tracker tooling
+// from a detached worktree checked out at the default branch (the PR branch may
+// predate the tooling):
+//
+// - `"tooling"` — the detached default-branch worktree ($TOOLING_DIR): guards,
+//                 status, and finalize run their CURRENT packaged logic there.
+// - `"work"`    — the PR head working tree: the agent run and the git push act on
+//                 the PR's own code.
+//
+// Absent means the single checkout the issue verbs use — no split, so the
+// executor runs the step in the ambient working directory.
+export type Cwd = "tooling" | "work";
+
 // What a non-zero exit from a step means to the sequencer:
 //
 // - `refusal`  — a guard declined to run. It has already posted its own
@@ -27,6 +41,9 @@ interface StepBase {
   readonly env: Readonly<Record<string, string>>;
   // How the executor interprets a non-zero exit from this step.
   readonly onNonZero: Disposition;
+  // Which checkout the step runs in (see `Cwd`). Absent for the issue verbs,
+  // which have no tooling/working-directory split.
+  readonly cwd?: Cwd;
 }
 
 export interface HookStep extends StepBase {
@@ -68,8 +85,9 @@ function hook(
   onNonZero: Disposition,
   args: readonly string[] = [],
   env: Readonly<Record<string, string>> = {},
+  cwd?: Cwd,
 ): HookStep {
-  return { kind: "hook", hook: name, args, env, onNonZero };
+  return { kind: "hook", hook: name, args, env, onNonZero, cwd };
 }
 
 function shell(
@@ -77,8 +95,9 @@ function shell(
   run: string,
   onNonZero: Disposition,
   env: Readonly<Record<string, string>> = {},
+  cwd?: Cwd,
 ): ShellStep {
-  return { kind: "shell", name, run, env, onNonZero };
+  return { kind: "shell", name, run, env, onNonZero, cwd };
 }
 
 // `explore`: the narrowest verb that still exercises guards, fetch-spec, status,
@@ -139,12 +158,87 @@ function implementPlan(context: RunContext): readonly Step[] {
   return steps;
 }
 
+// The three PR verbs share a prefix: guard the PR, report in-progress, then run
+// the agent. The tracker hooks load their CURRENT logic from the tooling worktree
+// (`"tooling"`); the agent run acts on the PR head (`"work"`). There is NO
+// fetch-spec — a PR verb gathers its own PR context inside the run. The agent run
+// is a `failure` step, so a no-op (nothing to commit) reports blocked.
+function prPrefix(): Step[] {
+  return [
+    hook("guards", "refusal", [], {}, "tooling"),
+    hook("status", "failure", ["in-progress"], {}, "tooling"),
+    hook("run", "failure", [], {}, "work"),
+  ];
+}
+
+// `implement-pr` and `update-branch` end with a work-tree shell step that pushes
+// and finalizes. The push never force-pushes: a non-fast-forward means the branch
+// advanced remotely during the run, so it self-reports blocked (a specific
+// message, not a failure) rather than overwrite it. finalize runs only after a
+// successful push, so it is bundled here rather than being a separate hook step;
+// the hooks it calls still run from the tooling worktree via `--cwd`.
+const IMPLEMENT_PR_PUSH_AND_FINALIZE = `if git push origin "HEAD:$HEAD_REF"; then
+  yarn --cwd "$TOOLING_DIR" sandcastle:implement-pr-finalize
+  yarn --cwd "$TOOLING_DIR" sandcastle:implement-pr-status done
+else
+  yarn --cwd "$TOOLING_DIR" sandcastle:implement-pr-status blocked "aborted — the branch could not be fast-forwarded onto its remote (it likely advanced during the run). Not force-pushing."
+fi`;
+
+// `update-branch` reads $STATUS_FILE (a plain file the run wrote): `up-to-date`
+// pushes nothing but still finalizes the "already up to date" comment; `merged`
+// pushes without force. Same non-fast-forward self-report as implement-pr.
+const UPDATE_BRANCH_PUSH_AND_FINALIZE = `status=$(cat "$STATUS_FILE" 2>/dev/null || echo "")
+if [ "$status" = "up-to-date" ]; then
+  yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-finalize
+  yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-status done
+  exit 0
+fi
+if git push origin "HEAD:$HEAD_REF"; then
+  yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-finalize
+  yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-status done
+else
+  yarn --cwd "$TOOLING_DIR" sandcastle:update-branch-status blocked "aborted — the branch could not be fast-forwarded onto its remote (it likely advanced during the run). Not force-pushing."
+fi`;
+
+// `review-pr`: read-only, so it never pushes. After the run it posts the review
+// (inline comments + summary) and reports done — both tracker hooks from the
+// tooling worktree, exactly as explore's tail but split across the two checkouts.
+function reviewPrPlan(): readonly Step[] {
+  return [
+    ...prPrefix(),
+    hook("finalize", "failure", [], {}, "tooling"),
+    hook("status", "failure", ["done"], {}, "tooling"),
+  ];
+}
+
+// `implement-pr`: the agent commits onto the PR head, then push-and-finalize.
+function implementPrPlan(): readonly Step[] {
+  return [
+    ...prPrefix(),
+    shell("push-and-finalize", IMPLEMENT_PR_PUSH_AND_FINALIZE, "failure", {}, "work"),
+  ];
+}
+
+// `update-branch`: the agent merges the base into the PR head, then push-and-finalize.
+function updateBranchPlan(): readonly Step[] {
+  return [
+    ...prPrefix(),
+    shell("push-and-finalize", UPDATE_BRANCH_PUSH_AND_FINALIZE, "failure", {}, "work"),
+  ];
+}
+
 function fullPlan(verb: string, context: RunContext): readonly Step[] {
   switch (verb) {
     case "explore":
       return explorePlan();
     case "implement":
       return implementPlan(context);
+    case "review-pr":
+      return reviewPrPlan();
+    case "implement-pr":
+      return implementPrPlan();
+    case "update-branch":
+      return updateBranchPlan();
     default:
       throw new Error(`sequencer: no plan for verb "${verb}"`);
   }
