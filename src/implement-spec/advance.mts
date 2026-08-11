@@ -7,7 +7,8 @@
 // (ADR-0003): exactly one slice is dispatched per advance.
 import { required, capture } from "../shared/process.mts";
 import { addLabel, comment } from "../shared/github.mts";
-import { tracerBullets, nextSlice, isComplete } from "../shared/spec-graph.mts";
+import { tracerBullets } from "../shared/spec-graph.mts";
+import { specStep } from "../shared/spec-step.mts";
 import { renderProgress } from "../shared/spec-report.mts";
 import { listIssues } from "../shared/spec-tracker.mts";
 import { specNumberFromBranch, issueNumberFromBranch } from "../shared/spec-context.mts";
@@ -40,38 +41,47 @@ const bullets = tracerBullets(spec, issues);
 const closed = new Set(issues.filter((i) => i.state === "CLOSED").map((i) => i.number));
 if (merged !== null) closed.add(merged); // guard against issue-list lag
 
-// 3. Dispatch the next single slice, or open the final PR when complete.
-const next = nextSlice(bullets, closed);
-if (next !== null) {
-  // Gate on the spec branch's OWN CI before begetting the next tracer (issue #44,
-  // fix 2). The tracer just merged into `baseRef`; a red tip must not spawn the
-  // next slice stacked on top of the breakage. Belt-and-braces behind fix 1's
-  // per-PR gate: this catches consuming-repo checks that only run on push to the
-  // spec branch (full suite, rubocop, …) and breakage that predates fix 1. If CI
-  // is red (or never goes green in time) we do NOT dispatch — halt with a comment
-  // on the spec issue and exit non-zero so a human decides (fix the branch or roll
-  // back the last merge).
+// 3. Ask the step function what happens next. When it wants the next slice it
+// first tells us to `await-checks`: gate on the spec branch's OWN CI before
+// begetting the next tracer (issue #44, fix 2). The tracer just merged into
+// `baseRef`; a red tip must not spawn the next slice stacked on top of the
+// breakage. Belt-and-braces behind fix 1's per-PR gate: this catches consuming-repo
+// checks that only run on push to the spec branch (full suite, rubocop, …) and
+// breakage that predates fix 1. We re-invoke the step with the verdict, which then
+// resolves to `run-slice` (green) or `halt` (red).
+let action = specStep({ phase: "advance", bullets, closed });
+if (action.type === "await-checks") {
   const passed = await awaitChecks(() => fetchSpecChecks(baseRef));
-  if (!passed) {
-    comment("issue", String(spec), haltMessage(baseRef, next));
-    console.error(
-      `spec #${spec}: spec-branch \`${baseRef}\` CI did not pass — halting; #${next} NOT dispatched.`,
-    );
-    process.exit(1);
-  }
-  addLabel("issue", String(next), "agent:implement");
-} else if (isComplete(bullets, closed)) {
+  action = specStep({ phase: "advance", bullets, closed, checksPassed: passed });
+}
+
+// 4. Dispatch the resolved action. On `halt` (a red spec branch) we do NOT
+// dispatch — comment on the spec issue and exit non-zero so a human decides (fix
+// the branch or roll back the last merge). `run-slice` labels the next tracer;
+// `open-final-pr` opens the spec→base PR; `done` is a no-op (deadlock, surfaced by
+// the progress comment below).
+if (action.type === "halt") {
+  comment("issue", String(spec), haltMessage(baseRef, action.blocked));
+  console.error(
+    `spec #${spec}: spec-branch \`${baseRef}\` CI did not pass — halting; #${action.blocked} NOT dispatched.`,
+  );
+  process.exit(1);
+}
+const next = action.type === "run-slice" ? action.slice : null;
+if (action.type === "run-slice") {
+  addLabel("issue", String(action.slice), "agent:implement");
+} else if (action.type === "open-final-pr") {
   openFinalPr(spec, baseRef);
 }
 
-// 4. Refresh the dashboard on the spec issue.
+// 5. Refresh the dashboard on the spec issue.
 comment("issue", String(spec), renderProgress({ branch: baseRef, bullets, closed, dispatched: next }));
 
 console.log(
   `spec #${spec}: closed ${merged === null ? "(none)" : `#${merged}`}; ${
-    next !== null
-      ? `dispatched #${next}`
-      : isComplete(bullets, closed)
+    action.type === "run-slice"
+      ? `dispatched #${action.slice}`
+      : action.type === "open-final-pr"
         ? "all slices done — opened final PR"
         : "no ready slice (deadlocked)"
   }.`,
@@ -151,7 +161,10 @@ function fetchSpecChecks(branch: string): CheckRun[] {
   }
 }
 
-function haltMessage(branch: string, blocked: number): string {
+// The advance gate always halts with the slice it declined to dispatch, so
+// `blocked` is a number on this path (the `number | null` is the shared action
+// shape — the slice-merge gate, wired later, carries no next-slice).
+function haltMessage(branch: string, blocked: number | null): string {
   const runUrl = process.env.RUN_URL;
   const tail = runUrl ? `\n\nSee the run: ${runUrl}` : "";
   return (
