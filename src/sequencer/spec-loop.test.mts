@@ -18,6 +18,9 @@ import {
   gracefulStopHaltReason,
   formatResumeGate,
   formatAlreadyMerged,
+  ceilingReached,
+  hasCeiling,
+  formatCeilingConsumption,
   type SpecPlan,
 } from "./spec-loop.mts";
 import type { TracerBullet } from "../shared/spec-graph.mts";
@@ -305,4 +308,90 @@ test("formatAlreadyMerged says it advances without rebuilding", () => {
   const out = formatAlreadyMerged({ slice: 5, pr: 12, specBranch: "agent/spec-3-x" });
   assert.match(out, /PR #12 is already merged/);
   assert.match(out, /advancing without rebuilding/);
+});
+
+// — run ceiling (issue #61): the decision in the loop's step —
+
+test("ceilingReached is null when no ceiling is configured (today's behaviour)", () => {
+  assert.equal(ceilingReached({}, { slicesAttempted: 99, elapsedSeconds: 99999 }), null);
+});
+
+test("ceilingReached halts once the slices-attempted ceiling is reached", () => {
+  assert.equal(ceilingReached({ maxSlices: 3 }, { slicesAttempted: 2, elapsedSeconds: 0 }), null);
+  const r = ceilingReached({ maxSlices: 3 }, { slicesAttempted: 3, elapsedSeconds: 0 });
+  assert.match(String(r), /run ceiling reached/);
+  assert.match(String(r), /3\/3 slices/);
+  assert.match(String(r), /re-run to resume/);
+});
+
+test("ceilingReached halts once the wall-clock ceiling is reached", () => {
+  assert.equal(
+    ceilingReached({ maxWallClockSeconds: 600 }, { slicesAttempted: 1, elapsedSeconds: 599 }),
+    null,
+  );
+  const r = ceilingReached({ maxWallClockSeconds: 600 }, { slicesAttempted: 1, elapsedSeconds: 600 });
+  assert.match(String(r), /run ceiling reached/);
+  assert.match(String(r), /600s\/600s wall-clock/);
+});
+
+test("ceilingReached reports the slices limit first when both are reached", () => {
+  const r = ceilingReached(
+    { maxSlices: 2, maxWallClockSeconds: 60 },
+    { slicesAttempted: 2, elapsedSeconds: 120 },
+  );
+  assert.match(String(r), /slices attempted/);
+});
+
+test("hasCeiling is true only when at least one limit is set", () => {
+  assert.equal(hasCeiling({}), false);
+  assert.equal(hasCeiling({ maxSlices: 1 }), true);
+  assert.equal(hasCeiling({ maxWallClockSeconds: 1 }), true);
+});
+
+test("formatCeilingConsumption shows consumed against each set limit", () => {
+  assert.equal(
+    formatCeilingConsumption({
+      slicesAttempted: 2,
+      maxSlices: 3,
+      elapsedSeconds: 65,
+      maxWallClockSeconds: 300,
+    }),
+    "consumed : 2/3 slices, 65s/300s wall-clock",
+  );
+});
+
+test("formatCeilingConsumption shows a bare figure for an unconfigured limit", () => {
+  assert.equal(
+    formatCeilingConsumption({ slicesAttempted: 2, elapsedSeconds: 65, maxWallClockSeconds: 300 }),
+    "consumed : 2 slices, 65s/300s wall-clock",
+  );
+});
+
+// — summary reports the ceiling consumption on exit (issue #61) —
+
+test("formatSpecSummary reports what was consumed against the ceiling", () => {
+  const out = formatSpecSummary({
+    spec: 3,
+    specBranch: "agent/spec-3-x",
+    dryRun: false,
+    merged: [4, 5],
+    halted: { slice: 5, reason: "run ceiling reached: 2/2 slices attempted this run." },
+    finalPrOpened: false,
+    ceiling: { slicesAttempted: 2, maxSlices: 2, elapsedSeconds: 65 },
+  });
+  assert.match(out, /run halted/);
+  assert.match(out, /run ceiling reached/);
+  assert.match(out, /consumed : 2\/2 slices, 65s wall-clock/);
+});
+
+test("formatSpecSummary omits the consumed line when no ceiling was configured", () => {
+  const out = formatSpecSummary({
+    spec: 3,
+    specBranch: "agent/spec-3-x",
+    dryRun: false,
+    merged: [4],
+    halted: null,
+    finalPrOpened: true,
+  });
+  assert.doesNotMatch(out, /consumed :/);
 });

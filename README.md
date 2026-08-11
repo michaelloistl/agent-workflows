@@ -235,7 +235,11 @@ because only GitHub Actions can act on them. Every value resolves per-run overri
   // command that makes a fresh worktree runnable (BOOTSTRAP overrides; absent →
   // no bootstrap step).
   "worktreeRoot": "/Users/you/.agent-worktrees",
-  "bootstrap": "yarn install"
+  "bootstrap": "yarn install",
+  // Attended spec loop only. Ceiling on what one run may spend before you see it
+  // again — slices attempted, wall-clock (seconds), or both (env overrides win:
+  // RUN_CEILING_MAX_SLICES / RUN_CEILING_MAX_WALLCLOCK_SECONDS). Absent → no ceiling.
+  "runCeiling": { "maxSlices": 4, "maxWallClockSeconds": 3600 }
 }
 ```
 
@@ -305,6 +309,17 @@ There are **two ways to stop**, and they are different:
   (the running one is occupied), asks for a **graceful stop**: the loop finishes the
   slice it is on and halts at the next checkpoint, leaving a clean between-slices
   boundary. It finds the live run through the pid its local lock records.
+
+**Run ceiling (a walk-away bound).** A slice loop over a whole spec is the longest,
+most expensive thing you can start, so you can cap what one run spends before it
+halts for you: `runCeiling.maxSlices`, `runCeiling.maxWallClockSeconds`, or both in
+the config file (env overrides `RUN_CEILING_MAX_SLICES` / `RUN_CEILING_MAX_WALLCLOCK_SECONDS`
+win per run). The ceiling is evaluated at each checkpoint, so a reached ceiling halts
+**cleanly between slices, never mid-slice** — the same clean stop as a graceful stop,
+reported distinctly from a failure, with what the run consumed against the ceiling
+printed in the exit summary. A ceiling-halted spec **resumes** on re-run just like any
+other clean halt. Absent configuration there is no ceiling — today's unbounded
+behaviour.
 
 **Resume derives entirely from the tracker and the branches — no local file is
 consulted.** Re-running the same command picks up where the run stopped: closed

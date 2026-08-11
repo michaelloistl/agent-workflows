@@ -34,6 +34,13 @@
 // RESUME derives entirely from the tracker and the branches — no local file: a slice
 // whose PR is already open resumes at its gate rather than re-running the agent, and
 // the worktree is removed only once the final spec PR opens (retained on every halt).
+//
+// Issue #61 puts a CEILING on a run — the most it may spend before a human sees it
+// again: slices attempted, wall-clock, or both, configured in the same config file
+// with the usual per-run env override. It is evaluated at each checkpoint, so a
+// reached ceiling halts CLEANLY between slices (never mid-slice) — the same clean
+// stop as a graceful stop, distinct from a failure, and resume picks it up. Absent
+// configuration there is no ceiling; the run reports what it consumed on exit.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -74,6 +81,8 @@ import {
   gracefulStopHaltReason,
   formatResumeGate,
   formatAlreadyMerged,
+  ceilingReached,
+  hasCeiling,
   type PrMergeView,
   type SpecPlan,
 } from "./spec-loop.mts";
@@ -155,6 +164,12 @@ function resolveBase(configured: string): string {
 }
 
 const config = resolveConfig();
+// The run ceiling (issue #61): the most this run may spend before a human sees it
+// again — slices attempted, wall-clock, or both. Resolved by the standard precedence
+// (env override → config file → unset); absent all, it is empty ({}) and the loop is
+// unbounded exactly as before. Evaluated at each checkpoint, so a reached ceiling
+// halts cleanly between slices, never mid-slice.
+const ceiling = config.runCeiling;
 const base = resolveBase(config.baseBranch);
 const root = config.worktreeRoot;
 const tree = join(root, `spec-${specNum}`);
@@ -259,6 +274,17 @@ if (acquired.clearedStale) {
 const built: number[] = [];
 let halted: { slice: number; reason: string } | null = null;
 let finalPrOpened = false;
+// Run-ceiling accounting (issue #61). `runStart` clocks the run's wall-clock from
+// here — after the preview is accepted and the lock is held, so human think-time at
+// the prompt does not count against the ceiling but every slice, the bootstrap, and
+// the worktree setup do. `slicesAttempted` counts only slices this run genuinely
+// built or gated (not an already-merged catch-up on resume), so resume makes progress
+// rather than re-halting on a ceiling it already reached.
+const runStart = Date.now();
+let slicesAttempted = 0;
+function elapsedSeconds(): number {
+  return Math.round((Date.now() - runStart) / 1000);
+}
 
 // Settle the run: release the lock, print the summary, and exit. The worktree is
 // REMOVED only once the final spec PR opens — the run is complete and the spec
@@ -277,6 +303,16 @@ function finish(code: number, opts: { removeWorktree?: boolean } = {}): never {
       merged: built,
       halted,
       finalPrOpened,
+      // Report what was consumed against the ceiling on exit (issue #61) — only when
+      // a ceiling was configured, so an unbounded run's summary is unchanged.
+      ceiling: hasCeiling(ceiling)
+        ? {
+            slicesAttempted,
+            maxSlices: ceiling.maxSlices,
+            elapsedSeconds: elapsedSeconds(),
+            maxWallClockSeconds: ceiling.maxWallClockSeconds,
+          }
+        : null,
     }),
   );
   if (opts.removeWorktree && existsSync(tree)) {
@@ -491,6 +527,20 @@ async function drive(): Promise<never> {
     // first merge, so it never reaches a between-slices checkpoint.
     if (built.length > 0) {
       console.log(formatCheckpoint({ lastMerged: lastMerged ?? slice, next: slice, specBranch }));
+      // Run ceiling (issue #61): a reached ceiling halts here CLEANLY — the same
+      // clean stop as a graceful stop, distinct from a failure (exit 0), and
+      // resume picks it up. Checked at the checkpoint so the halt is between
+      // slices, never mid-slice, and BEFORE the graceful-stop / --no-pause gates so
+      // that even a straight-through run cannot spend past its ceiling.
+      const ceilingReason = ceilingReached(ceiling, {
+        slicesAttempted,
+        elapsedSeconds: elapsedSeconds(),
+      });
+      if (ceilingReason) {
+        console.log(ceilingReason);
+        halted = { slice: lastMerged ?? slice, reason: ceilingReason };
+        finish(0);
+      }
       if (gracefulStop) {
         halted = { slice: lastMerged ?? slice, reason: gracefulStopHaltReason(lastMerged) };
         finish(0);
@@ -519,6 +569,9 @@ async function drive(): Promise<never> {
       }
       mergeSlicePr(existing.number);
       landSlice(slice, sliceBranch);
+      // A resumed gate merge is genuine work this run — it counts against the ceiling
+      // (issue #61), unlike an already-merged catch-up above.
+      slicesAttempted++;
       continue;
     }
 
@@ -583,6 +636,9 @@ async function drive(): Promise<never> {
     // Real run: the finalize opened the slice PR, gated its own CI, and merged it —
     // now CONFIRM that merge from GitHub, close the tracer-bullet, and advance.
     landSlice(slice, sliceBranch);
+    // The slice was built and landed this run — it counts against the ceiling (issue
+    // #61), evaluated at the next slice's checkpoint.
+    slicesAttempted++;
   }
 }
 
