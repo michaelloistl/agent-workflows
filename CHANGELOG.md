@@ -3,7 +3,7 @@
 All notable changes to this project are documented in this file.
 
 The `v1` tag is a floating major-version pointer: it always tracks the newest
-`v1.x.y` release, so consumers can pin `@v1` to follow the latest compatible
+`v1.x.y` release, so consumers can pin `#v1` to follow the latest compatible
 version without editing their workflow on every release.
 
 ## Unreleased

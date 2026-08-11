@@ -581,9 +581,13 @@ like this:
 2. **Promote `## Unreleased` in [`CHANGELOG.md`](CHANGELOG.md)** to a new
    `## vX.Y.Z — YYYY-MM-DD` heading (leaving a fresh empty `## Unreleased` above
    it), and merge that too.
-3. **Tag the merge commit:** `git tag -a vX.Y.Z -m "<summary>"`.
-4. **Move the floating major tag:** `git tag -f v1 vX.Y.Z`.
-5. **Push both:** `git push origin vX.Y.Z && git push -f origin v1`.
+3. **Pull `main` locally so it points at the merge commit:**
+   `git checkout main && git pull`. GitHub creates the merge commit server-side,
+   so your local `main` is stale until you pull — tagging before this would tag
+   the wrong commit.
+4. **Tag the merge commit:** `git tag -a vX.Y.Z -m "<summary>"`.
+5. **Move the floating major tag:** `git tag -f v1 vX.Y.Z`.
+6. **Push both:** `git push origin vX.Y.Z && git push -f origin v1`.
 
 The `v1` tag is a floating major-version pointer (see [`CHANGELOG.md`](CHANGELOG.md)):
 it always tracks the newest `v1.x.y` release, so consumers pin
