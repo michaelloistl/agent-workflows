@@ -1,6 +1,6 @@
 # Agent Workflows
 
-The central, public repo (`michaelloistl/agent-workflows`) that holds the **reusable GitHub Actions workflows** driving the label-triggered coding-agent fleet across multiple project repos. It owns only the generic, tracker-agnostic orchestration shell; every repo- or domain-specific decision lives in the consuming repo.
+The central, public repo (`michaelloistl/agent-workflows`) that holds the **sequencer** driving the coding-agent fleet across multiple project repos — reachable both as reusable GitHub Actions workflows and as a local CLI. It owns only the generic, tracker-agnostic sequencing; every repo- or domain-specific decision lives in the consuming repo.
 
 ## Language
 
@@ -17,8 +17,16 @@ _Avoid_: client repo, child repo, downstream repo
 **Fleet**:
 The full set of five agent workflows operating in one consuming repo.
 
+**Sequencer**:
+The component that runs a *verb*'s hooks in fixed order and supplies their environment. Tracker-agnostic and domain-agnostic by construction — it knows the order of the hooks and nothing about what they do. There is exactly one sequencer, reached through two entry points: the **workflow sequencer** (GitHub Actions, unattended) and the **local sequencer** (CLI, attended). Both run the same sequence; only the surrounding environment differs.
+_Avoid_: shell, driver, harness, runner (collides with the GitHub Actions runner), orchestrator (a different concept — see below)
+
 **Reusable workflow**:
-A central workflow file invoked via `uses:` with `on: workflow_call`. Holds jobs, services, and steps.
+A central workflow file invoked via `uses:` with `on: workflow_call`. Provides the environment a run needs — checkout, toolchain, services — and then hands the whole verb sequence to the *sequencer*. It does not itself know the order of the hooks.
+
+**Attended run**:
+A run a human is watching and can intervene in — started from the terminal, on the human's own machine. The counterpart is an **unattended run**, started by a *trigger label* and observed only through its output. The two differ in where the work happens and what a human can do mid-flight; they do not differ in what the run *does*.
+_Avoid_: local run vs remote run (describes the machine, not the property that matters), manual run
 
 **Thin caller**:
 The minimal workflow file in a consuming repo: event triggers + `workflow_dispatch` + `uses:` the central workflow + `with:` config + `secrets: inherit`. One per verb.
@@ -30,7 +38,7 @@ _Avoid_: wrapper, stub
 One of the five agent actions: `explore`, `implement`, `implement-pr`, `review-pr`, `update-branch`.
 
 **Orchestrator**:
-A workflow that sequences a *verb* over a graph of issues but runs **no agent of its own** — pure tracker/graph work (`gh` reads, label and state changes, branch and PR creation). `implement-spec` is the first orchestrator: it drives `implement` across a spec's tracer-bullets. It is **not** a sixth verb (it triggers no agent action) and does **not** follow the 5-hook contract. Like the verbs, its tracker I/O stays behind sandcastle hooks; the central YAML is a lightweight shell (node + `gh`, no postgres/redis/ruby).
+Something that sequences a *verb* over a graph of issues while running **no agent of its own** — pure tracker and graph work. `implement-spec` is the first orchestrator: it drives `implement` across a spec's tracer-bullets. It is **not** a sixth verb (it triggers no agent action) and does **not** follow the 5-hook contract. Like the verbs, its tracker I/O stays behind sandcastle hooks. Reachable from either entry point: unattended it is event-driven, attended it is a *slice loop*.
 _Avoid_: meta-verb, super-verb, sixth verb
 
 **Sandcastle**:
@@ -65,10 +73,17 @@ The topology where each tracer-bullet branches from the current spec-branch HEAD
 The orchestrator runs **one tracer-bullet at a time** in topological (dependency) order, never a parallel wave. Because nothing else touches the spec branch while a slice is in flight, every merge back into the spec branch is conflict-free by construction — the deliberate trade of wall-clock speed for zero agent-generated merge conflicts.
 
 **Kickoff**:
-The orchestrator entry point fired by labelling the spec issue: create the spec branch, then label the topologically-first tracer-bullet `agent:implement`. The spec is identified **structurally** — it has tracer-bullets and no `## Parent` of its own — not by a title prefix or a `spec` label. `/to-spec` adds only a `ready-for-agent` triage label — which tracer-bullets carry too — so no label distinguishes a spec from its slices.
+The orchestrator's opening move: create the spec branch, then start the topologically-first tracer-bullet. Unattended it is fired by labelling the spec issue and starts the slice by labelling it; attended it is the first turn of the *slice loop*. The spec is identified **structurally** — it has tracer-bullets and no `## Parent` of its own — not by a title prefix or a `spec` label. `/to-spec` adds only a `ready-for-agent` triage label — which tracer-bullets carry too — so no label distinguishes a spec from its slices.
 
 **Advance**:
-The orchestrator entry point fired when a tracer-bullet PR merges into a spec branch: close that tracer-bullet issue (merging into a non-default base does **not** auto-close it), then label the next single tracer-bullet in topological order (ties broken deterministically) — and when the last one closes, open the final spec→default PR. Posts a progress comment on the spec issue so it reads as the dashboard.
+What happens once a tracer-bullet PR has merged into a spec branch: close that tracer-bullet issue (merging into a non-default base does **not** auto-close it), recompute the slice set live, then start the next single tracer-bullet in topological order (ties broken deterministically) — and when the last one closes, open the final spec→default PR. Posts a progress comment on the spec issue so it reads as the dashboard. Unattended it is fired by the merge and starts the next slice by labelling it; attended it is one turn of the *slice loop*. The **decision** of which slice comes next is shared; only how that slice is started differs.
+
+**Slice loop**:
+The attended form of spec orchestration: a loop that picks the next tracer-bullet, builds it, merges it, advances, and repeats — rather than each step being fired by an event. Same decisions, same per-slice PRs, same gates, same resulting history; what disappears is labelling-as-dispatch, which exists only because an unattended run needs a transport. Halts on a failed slice rather than skipping it, because every later slice assumes the earlier ones landed.
+_Avoid_: batch run, spec runner
+
+**Resume**:
+Picking up an interrupted spec where it stopped. State is derived entirely from the tracker and the branches — never from a local file — so a spec can be interrupted under one entry point and continued under the other, and edits made directly in the tracker are honoured. A slice that already has an open unmerged PR resumes at its gate, not at its agent run.
 
 **Slice merge**:
 Under a spec a tracer-bullet skips per-slice review (ADR-0004): `implement`'s finalize opens a ready PR to the spec branch (detected via `base.ref ~ agent/spec-*`) and merges it straight in, which fires advance. The per-slice quality gate is the implement agent's own test loop; the single human gate is the final spec→default PR. (An earlier design ran a per-slice `review-pr`→`implement-pr` loop here — dropped because `review-pr` emits only advisory `COMMENT`s, with no approve/request-changes verdict to drive on; see ADR-0004.)
@@ -88,6 +103,10 @@ A human-applied `agent:<verb>` label on an issue or PR that starts a workflow.
 A label the fleet sets and clears, never a human: `agent:in-progress`, `agent:review`, `agent:blocked`. For Linear repos the equivalent is a Linear state, written by the `<verb>-status` hook.
 
 ### Config
+
+**Bootstrap**:
+The consuming repo's own command for making a freshly-created working tree runnable — dependencies installed, database prepared, whatever the stack needs. The *sequencer* invokes it and knows nothing about its contents; on an unattended run the workflow environment does the same job with toolchain steps and service containers. The seam that keeps stack-specific setup out of the central repo, the same way *hooks* keep tracker-specific work out of it.
+_Avoid_: setup, provision, install
 
 **Essential drift**:
 A value that genuinely differs between repos for a real reason — kept as a `with:` input (`system-packages`, `database-url`, `git-author-email`).
