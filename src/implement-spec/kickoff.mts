@@ -1,11 +1,12 @@
 // `implement-spec-kickoff` hook. Fired by labelling a spec issue `agent:implement-spec`
 // (after guards pass). Cut the spec branch off the default branch, dispatch the
-// topologically-first tracer-bullet, post the progress dashboard, and retire the
+// topologically-first tracer-bullet, post the progress comment, and retire the
 // trigger label. The orchestrator runs NO agent — pure `gh`/`git` over the pure
 // `spec-graph` brain.
 import { required, capture } from "../shared/process.mts";
 import { addLabel, removeLabel, comment } from "../shared/github.mts";
 import { tracerBullets } from "../shared/spec-graph.mts";
+import { DEPENDENCY_EDGES } from "../shared/spec-tree.mts";
 import { specStep } from "../shared/spec-step.mts";
 import { renderProgress } from "../shared/spec-report.mts";
 import { listIssues } from "../shared/spec-tracker.mts";
@@ -33,7 +34,9 @@ capture("git", ["push", "-u", "origin", branch]);
 
 // 2. Discover + order the tracer-bullets, and which are already closed.
 const issues = listIssues();
-const bullets = tracerBullets(spec, issues);
+// Membership stays textual — nothing writes native parents yet — while the dependency
+// edges are the shared union rule (#99).
+const bullets = tracerBullets(spec, issues, DEPENDENCY_EDGES);
 const closed = new Set(
   issues.filter((i) => i.state === "CLOSED").map((i) => i.number),
 );
@@ -46,7 +49,7 @@ const action = specStep({ phase: "kickoff", bullets, closed });
 const next = action.type === "run-slice" ? action.slice : null;
 if (next !== null) addLabel("issue", String(next), "agent:implement");
 
-// 4. Post the progress dashboard on the spec issue and retire the trigger label.
+// 4. Post the progress comment on the spec issue and retire the trigger label.
 comment("issue", number, renderProgress({ branch, bullets, closed, dispatched: next }));
 removeLabel("issue", number, TRIGGER);
 

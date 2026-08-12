@@ -5,9 +5,10 @@
 // failure, so it never applies `agent:blocked`).
 import { required, capture } from "../shared/process.mts";
 import { refuse } from "../shared/github.mts";
-import { section } from "../shared/markdown.mts";
 import { parentRef, tracerBullets } from "../shared/spec-graph.mts";
-import { listIssues } from "../shared/spec-tracker.mts";
+import { unmetBlockers } from "../shared/blocked-by.mts";
+import type { IssueState } from "../shared/spec-tree.mts";
+import { blockedBySources, listIssues } from "../shared/spec-tracker.mts";
 
 const TRIGGER = "agent:implement";
 const number = required("ISSUE_NUMBER");
@@ -26,7 +27,11 @@ const title = gh(["issue", "view", number, "--json", "title", "-q", ".title"]).t
 const labels = gh(["issue", "view", number, "--json", "labels", "-q", ".labels[].name"])
   .split("\n")
   .map((l) => l.trim().toLowerCase());
-const childCount = tracerBullets(Number(number), listIssues()).length;
+// The one repo-wide read this hook makes. It answers spec-ness here and, further down,
+// the state of every blocker declared textually — which is why the blocked-by guard no
+// longer reads one issue per ref.
+const issues = listIssues();
+const childCount = tracerBullets(Number(number), issues).length;
 const markedSpec = title.toLowerCase().startsWith("spec:") || labels.includes("spec");
 if (markedSpec || childCount > 0) {
   const why =
@@ -74,7 +79,13 @@ if (issue.subIssuesSummary.total > 0) {
     `Skipping \`${TRIGGER}\`: it has ${issue.subIssuesSummary.total} sub-issue(s). The agent only builds standalone issues, not epics or sub-issues. Removed the label without running.`,
   );
 }
-const body = gh(["issue", "view", number, "--json", "body", "-q", ".body"]);
+// Body, own URL and native dependency edges in one read — the body for the parent check
+// just below, all three for the blocked-by check further down. It is the same single read
+// the guard already made for the body, just projecting two more fields; a point read
+// rather than the issue's row in `issues`, because that list is one page of 500 and this
+// guard must not stop reading the body of the issue it was asked about.
+const sources = blockedBySources(number);
+const body = sources.body;
 // A native GH sub-issue link is normally an epic/sub-issue marker (refuse), but
 // tracer-bullets under a spec legitimately declare a native parent when the
 // tracker sync (e.g. Linear → GH) mirrors the parent/child edge. Allow it iff
@@ -89,22 +100,44 @@ if (issue.parent && parentRef(body) !== issue.parent.number) {
   );
 }
 
-// Blocked-by guard — refuse while any issue named under `## Blocked by` is open.
-const blockedSection = section(body, "blocked by");
-const refs = [...new Set([...blockedSection.matchAll(/#(\d+)/g)].map((m) => m[1]))];
-const unmet = refs.filter((n) => {
+// Blocked-by guard — refuse while any blocker is open, declared under `## Blocked by`, as a
+// native dependency edge, or both (`unionBlockers`, issue #99). A native edge carries its
+// blocker's state, and the issue list read above carries every other one, so the read per
+// blocking ref this guard used to make is gone.
+//
+// It is not replaced by nothing, though: that list is one page of 500, and a textual ref
+// past the end of it would come back unresolvable and quietly stop gating — under-blocking,
+// the failure the union exists to prevent. A ref the page cannot answer therefore falls
+// back to the point read, which is what the guard always did and is now the exception
+// rather than the rule.
+const stateByNumber = new Map(issues.map((i) => [i.number, i.state]));
+const stateOf = (blocker: number): IssueState | null => {
+  const listed = stateByNumber.get(blocker);
+  if (listed !== undefined) return listed;
   try {
-    return gh(["issue", "view", n, "--json", "state", "-q", ".state"]).trim() === "OPEN";
+    return gh(["issue", "view", String(blocker), "--json", "state", "-q", ".state"]).trim() ===
+      "OPEN"
+      ? "OPEN"
+      : "CLOSED";
   } catch {
-    return false; // a ref that isn't a real issue (or a PR) doesn't block.
+    return null; // a ref that isn't a real issue (or a PR) doesn't block.
   }
-});
-if (unmet.length > 0) {
+};
+const unmet = unmetBlockers(sources, stateOf);
+// A blocker in another repository is left out of the decision — `#12` there is not `#12`
+// here — but never in silence: it is a wait no local close will clear, and the job log is
+// where this path says so.
+if (unmet.foreign.length > 0) {
+  console.error(
+    `Note: #${number} declares native blocker(s) ${unmet.foreign.join(", ")} in another repository. Issue numbers are per-repo, so they do not gate this run.`,
+  );
+}
+if (unmet.open.length > 0) {
   refuse(
     "issue",
     number,
     TRIGGER,
-    `Not starting yet: blocked by still-open issue(s) ${unmet.map((n) => `#${n}`).join(" ")}. Re-apply \`${TRIGGER}\` once the blocker(s) are closed.`,
+    `Not starting yet: blocked by still-open issue(s) ${unmet.open.map((n) => `#${n}`).join(" ")}. Re-apply \`${TRIGGER}\` once the blocker(s) are closed.`,
   );
 }
 

@@ -12,6 +12,51 @@ version without editing their workflow on every release.
   can start with nothing at the terminal to answer it (a launcher script, an
   unattended resume). The preview is still printed in full and the run logs which
   flag accepted it. With `--no-pause`, a spec run is fully non-interactive.
+- Add the status view: `agent-workflows status` (`yarn agent:status`) prints the
+  specs currently building in the repo you are standing in, with their
+  tracer-bullets, build order, and per-slice state. Read-only and one-shot.
+- Resolve a slice's spec from GitHub's native sub-issue hierarchy where it exists,
+  falling back to the body's `## Parent` where it does not, so adopting native
+  hierarchy is gradual and per-repo. A migrated spec's tracer-bullets are read
+  through the sub-issue relationship and its own cross-references, so a slice that
+  is native and a slice that is only textual land in one tree — and the status view
+  no longer scans the whole repo to build it. Ordering is unchanged — still
+  `## Blocked by`.
+- Colour-code the status view's states on a terminal, with `agent:blocked` in bold
+  red. Colour is emitted only when stdout is a TTY — piping or redirecting the view
+  gives clean text — and `--no-color` (or `--no-colour`) suppresses it on a terminal
+  too.
+- Add `--watch` to the status view: it redraws in place every 30 seconds
+  (`--interval <seconds>` to change it, 5s floor) on its own screen, leaving the
+  scrollback intact on ctrl-c. A redraw only — no key bindings and no input loop.
+- Order slices by the **union** of GitHub's native `blockedBy` edges and the body's
+  `## Blocked by` refs, rather than by the body alone. A spec declaring dependencies
+  natively, textually, or half each builds in one correct sequence, so adopting native
+  dependencies is gradual and per-repo. The union is not the `native ?? textual`
+  fallback membership uses: blockers are a set, and over-blocking shows up as a
+  deadlocked row while under-blocking silently builds on a dependency that has not
+  landed. Everything that computes a build order reads it: the status view and the
+  orchestrator, unattended and attended. A native blocker in another repository is left
+  out of the order — issue numbers are per-repo — and named instead, on the status view's
+  row and in the spec's progress comment. The native edges ride the issue-list read every consumer
+  already makes, so this costs no request per slice; a `gh` older than 2.94 does not
+  serve them and now fails the read rather than the orchestrator quietly ordering on
+  half the edges.
+- Refuse `agent:implement` on a slice whose blocker is still open whichever way it was
+  declared — natively or under `## Blocked by`. The guard was the last reader of a
+  dependency edge with a parse of its own, so a slice blocked only natively walked past
+  it; it now reads the same union everything else orders on. Mostly defence in depth —
+  ordering would not have dispatched such a slice — but it is the whole gate on the
+  attended and manual paths, where a human names a slice directly, and it is the only
+  reader that honours a blocker which is not a tracer-bullet of the same spec. A blocker
+  in another repository is reported to the job log rather than gating the run, unless it
+  has already closed — that was never a wait. The guard no longer reads one issue per
+  blocking ref to learn its state: a native edge carries its blocker's state, and the
+  issue list the guard already reads carries the rest, so in the ordinary case the check
+  costs no request of its own. A ref past the end of that list still falls back to a point
+  read, because a blocker that scrolled off a page must not quietly stop gating.
+- Record the design in ADR-0007 and add *status view* and *spec tree* to the
+  glossary.
 
 ## v1.2.2 — 2026-08-11
 

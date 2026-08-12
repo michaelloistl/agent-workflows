@@ -21,6 +21,7 @@ commands emit. See [Authoring spec issues](#authoring-spec-issues) for the contr
 - [Labels](#labels)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Status view](#status-view)
 - [Inputs](#inputs)
 - [Secrets](#secrets)
 - [Repo layout](#repo-layout)
@@ -127,7 +128,11 @@ Users need to export any report as CSV. Today there's no way to get the data out
   section wins).
 - An optional **`## Blocked by`** section listing `#<number>` refs to other
   tracer-bullets it depends on (used to sequence the build in topological order,
-  lowest issue number first).
+  lowest issue number first). GitHub's native **blocked-by** relationship counts
+  too: the two are unioned, so a repo can declare dependencies either way, or
+  half each while it migrates. `agent:implement` refuses on a still-open blocker
+  from either source, so a slice started by hand stops at the same point the
+  orchestrator would have.
 - Headings at **`##`** level.
 - A plain issue — **not** a native GitHub sub-issue or epic (the `implement`
   shape guard refuses those; the spec↔tracer-bullet link is textual).
@@ -187,7 +192,11 @@ ends (see the attended spec loop below).
 
 ## Installation
 
-Set up a consuming repo in five steps.
+Set up a consuming repo in five steps. The tracker reads need **`gh` 2.94 or
+newer** — that is where the `parent` and `blockedBy` JSON projections landed, and
+both the orchestrator and the status view ask for them. GitHub-hosted runners
+have been past that for a while; a local install that is not will fail the read
+with an unknown-field error rather than degrading.
 
 **1. Add the sandcastle hooks.** Install the `agent-workflows` package as a git
 dependency — no registry, no copied code. For a GitHub-Issues tracker the
@@ -516,6 +525,58 @@ jobs:
     secrets: inherit
 ```
 
+## Status view
+
+`agent-workflows status` prints the specs currently building in the repo you are
+standing in, with their tracer-bullets nested beneath (ADR-0007):
+
+```sh
+yarn agent:status                          # or: agent-workflows status
+yarn agent:status --watch                  # redraw every 30s until ctrl-c
+yarn agent:status --watch --interval 60
+yarn agent:status --no-color
+```
+
+```
+madebyon/on-vantage — 2 specs in flight
+
+#1438      Spec: Default views in platform          2/5 · building           https://github.com/…/1438
+  ✓ #1519  Prefactor: extract Project-type filter…  done                     https://github.com/…/1519
+  ▸ #1521  Tag Retainer and internal Projects       building                 https://github.com/…/1521
+    #1522  Replace Retainer and internal toggles    pending                  https://github.com/…/1522
+
+#1485      Spec: Port the Utilization report        5/5 · awaiting final PR  https://github.com/…/1485
+```
+
+- **In flight** means an **open** spec issue with a live `agent/spec-*` branch — a
+  branch exists only after kickoff, and requiring the issue to be open excludes the
+  ghost branches a finished spec leaves behind. No label is involved: kickoff retires
+  `agent:implement-spec` immediately, so no label marks a running spec.
+- A slice belongs to a spec through GitHub's **native sub-issue** hierarchy where that
+  edge exists, and through the body's `## Parent` reference where it does not. Both
+  render as one tree, so a repo can adopt native hierarchy gradually.
+- Slices are in the orchestrator's own build order — topological over the **union** of
+  GitHub's native `blockedBy` edges and the body's `## Blocked by` refs, so a spec
+  declaring its dependencies either way (or half each) builds in one correct sequence.
+  The native sub-issue *priority* order is never used. A blocker in another repository
+  is named on the row rather than ordered on, since issue numbers are per-repo.
+  Each state is its issue state plus its `agent:*` label — nothing else. A slice in a
+  dependency cycle is shown as blocked rather than silently dropped.
+- **States are colour-coded on a terminal**, with `agent:blocked` in bold red because it
+  is the one state that means stop and look. Colour is emitted only when stdout is a
+  terminal, so piping or redirecting the view gives clean text with no escape sequences;
+  `--no-color` (or `--no-colour`) turns it off on a terminal too.
+- **`--watch` redraws in place** — every 30 seconds by default, `--interval <seconds>`
+  to change it (whole seconds, from 5 to 3600: the floor keeps a watch left open all day
+  inside the GitHub rate limit, and past the ceiling the timer overflows into no pause at
+  all). The interval is the gap *between* redraws, so a slow pass simply pushes the next
+  one out. It redraws on its own screen and gives your scrollback back on ctrl-c, and
+  since replacing a frame needs a terminal, `--watch` is refused when stdout is a pipe
+  or a file. There are **no key bindings**: it is a redraw, not a TUI.
+- It is **read-only**. It runs no agent and writes nothing — a label write would be a
+  dispatch, i.e. a real, billed agent run — so watching it costs reads only.
+- The repo comes from `GH_REPO` or the checkout's `origin` remote; no argument.
+
 ## Inputs
 
 The five verbs share the same inputs:
@@ -565,13 +626,17 @@ Pass with `secrets: inherit`.
   `agent-workflows` package. Consuming GitHub repos install it as a git
   dependency; a Linear repo swaps the adapter (packaged separately, #33).
 - **`bin/agent-workflows.mjs`** — the dispatcher: maps `<verb> <hook>` to a
-  `src/` entrypoint (override-first) and runs it under `tsx`.
+  `src/` entrypoint (override-first) and runs it under `tsx`. Also routes the
+  non-verb entry points: the attended local runs and `status`.
+- **`src/status/`** — the read-only [status view](#status-view), over the shared
+  spec-tree reader (`src/shared/spec-tree.mts`).
 - **`docs/hook-contract.md`** — the interface every consuming repo implements.
 - **`CONTEXT.md`** — glossary. **`PLAN.md`** — build plan + rollout.
   **[`CHANGELOG.md`](CHANGELOG.md)** — notable changes per release.
   **`docs/adr/`** — architecture decisions (0001 thin reusable workflows; 0002
   toolchain generalization + feedback-loop boundary; 0003 spec strictly
-  sequential; 0004 no per-slice review).
+  sequential; 0004 no per-slice review; 0005 one sequencer, two entry points;
+  0006 attended spec runs; 0007 the status view).
 
 ## Local checks
 

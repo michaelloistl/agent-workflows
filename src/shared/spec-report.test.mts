@@ -34,3 +34,20 @@ test("renderProgress surfaces a deadlocked cycle rather than dropping it", () =>
   assert.match(out, /#4 ⚠ blocked \(dependency cycle\)/);
   assert.match(out, /#5 ⚠ blocked \(dependency cycle\)/);
 });
+
+// A blocker in another repository is left out of the build order (issue #99) — the
+// orchestrator will dispatch this slice as though nothing gated it. That is only safe if
+// the comment says what it decided not to wait for.
+test("renderProgress names a blocker the ordering could not wait for", () => {
+  const out = renderProgress({
+    branch: "agent/spec-3-x",
+    bullets: [
+      { number: 4, blockedBy: [], foreignBlockers: ["other/repo#12"] },
+      { number: 5, blockedBy: [4] },
+    ],
+    closed: new Set(),
+    dispatched: 4,
+  });
+  assert.match(out, /- \[ \] #4 ◀ building ⚠ waits on other\/repo#12$/m);
+  assert.match(out, /- \[ \] #5$/m, "a slice with none says nothing about them");
+});

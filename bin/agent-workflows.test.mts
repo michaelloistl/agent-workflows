@@ -279,6 +279,19 @@ test("classifyInvocation treats --guards-only as a guards-only whole-verb run", 
   });
 });
 
+// The status view is not a verb (issue #95) — it has no hooks, so `status` alone must
+// not be classified as a whole-verb sequencer run, and its flags must not be read as
+// hook names. The bin FORWARDS flags verbatim and the entry point decides what they
+// mean, as it does for the attended runs: `--watch` is forwarded here and rejected
+// there until issue #98 implements it.
+test("classifyInvocation routes status to the read-only status view", () => {
+  assert.deepEqual(classifyInvocation(["status"]), { kind: "status", args: [] });
+  assert.deepEqual(classifyInvocation(["status", "--watch"]), {
+    kind: "status",
+    args: ["--watch"],
+  });
+});
+
 test("classifyInvocation reports usage when no verb is given", () => {
   assert.deepEqual(classifyInvocation([]), { kind: "usage" });
 });

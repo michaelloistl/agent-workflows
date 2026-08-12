@@ -51,7 +51,7 @@ A sandcastle command the central workflow calls at a fixed point in a verb's seq
 The fixed set of hook command names and their expected behaviour that the central workflow depends on. Stable across all consuming repos; only the implementations differ.
 
 **Guard**:
-A preflight check run before the agent (spec, shape, blocked-by, existing-PR for GitHub repos). Lives in the `<verb>-guards` hook.
+A preflight check run before the agent (spec, shape, blocked-by, existing-PR for GitHub repos). Lives in the `<verb>-guards` hook. The blocked-by guard reads the same dependency rule the *spec tree* holds, so a slice is gated by a blocker declared either way; its decision is pure and lives beside the rule, while the hook itself only reads and refuses.
 
 **Refusal**:
 A guard declining to run. The guard posts its own explanation and clears the trigger label, then signals non-zero so the workflow skips the rest. A refusal is **not** a failure.
@@ -64,7 +64,7 @@ A single long-lived `agent/spec-<n>-…` branch cut once from the default branch
 _Avoid_: feature branch, epic branch, integration branch
 
 **Tracer-bullet**:
-A thin, independently-buildable vertical slice of a spec — a standalone issue carrying a textual `## Parent` reference to the spec and a `## Blocked by` section. **Not** a GitHub sub-issue (the `implement` issue-shape guard refuses sub-issues and epics), so the spec↔tracer-bullet link is textual, not native.
+A thin, independently-buildable vertical slice of a spec — a standalone issue carrying a textual `## Parent` reference to the spec and a `## Blocked by` section. The `implement` issue-shape guard refuses sub-issues and epics, so nothing the fleet writes is a GitHub sub-issue; where something else has made one anyway (a Linear sync, a hand edit), the *status view* reads that native parent in preference to the body (see *spec tree*), while the orchestrator still goes by the text. The *dependency* edge is read from both sources at once: a slice's blockers are its native `blockedBy` edges **unioned** with its `## Blocked by` refs, everywhere the fleet reads dependencies — the status view, the orchestrator, and the `implement` blocked-by *guard*. The graph and the guard read one rule but answer different questions: the graph orders a spec's slices among themselves and ignores a blocker that is not one of them, while the guard gates a single run on *any* open blocker, which is why a slice named directly by a human still stops at the right time.
 
 **Stacked**:
 The topology where each tracer-bullet branches from the current spec-branch HEAD and its PR targets the spec branch (not the default branch) — so each slice sees the accumulated work of the ones before it.
@@ -76,7 +76,7 @@ The orchestrator runs **one tracer-bullet at a time** in topological (dependency
 The orchestrator's opening move: create the spec branch, then start the topologically-first tracer-bullet. Unattended it is fired by labelling the spec issue and starts the slice by labelling it; attended it is the first turn of the *slice loop*. The spec is identified **structurally** — it has tracer-bullets and no `## Parent` of its own — not by a title prefix or a `spec` label. `/to-spec` adds only a `ready-for-agent` triage label — which tracer-bullets carry too — so no label distinguishes a spec from its slices.
 
 **Advance**:
-What happens once a tracer-bullet PR has merged into a spec branch: close that tracer-bullet issue (merging into a non-default base does **not** auto-close it), recompute the slice set live, then start the next single tracer-bullet in topological order (ties broken deterministically) — and when the last one closes, open the final spec→default PR. Posts a progress comment on the spec issue so it reads as the dashboard. Unattended it is fired by the merge and starts the next slice by labelling it; attended it is one turn of the *slice loop*. The **decision** of which slice comes next is shared; only how that slice is started differs.
+What happens once a tracer-bullet PR has merged into a spec branch: close that tracer-bullet issue (merging into a non-default base does **not** auto-close it), recompute the slice set live, then start the next single tracer-bullet in topological order (ties broken deterministically) — and when the last one closes, open the final spec→default PR. Posts a *progress comment* on the spec issue. Unattended it is fired by the merge and starts the next slice by labelling it; attended it is one turn of the *slice loop*. The **decision** of which slice comes next is shared; only how that slice is started differs.
 
 **Slice loop**:
 The attended form of spec orchestration: a loop that picks the next tracer-bullet, builds it, merges it, advances, and repeats — rather than each step being fired by an event. Same decisions, same per-slice PRs, same gates, same resulting history; what disappears is labelling-as-dispatch, which exists only because an unattended run needs a transport. Halts on a failed slice rather than skipping it, because every later slice assumes the earlier ones landed.
@@ -88,13 +88,26 @@ Picking up an interrupted spec where it stopped. State is derived entirely from 
 **Slice merge**:
 Under a spec a tracer-bullet skips per-slice review (ADR-0004): `implement`'s finalize opens a ready PR to the spec branch (detected via `base.ref ~ agent/spec-*`) and merges it straight in, which fires advance. The per-slice quality gate is the implement agent's own test loop; the single human gate is the final spec→default PR. (An earlier design ran a per-slice `review-pr`→`implement-pr` loop here — dropped because `review-pr` emits only advisory `COMMENT`s, with no approve/request-changes verdict to drive on; see ADR-0004.)
 
+**Progress comment**:
+The checkbox rollup the orchestrator posts on the *spec* issue at every kickoff and advance (`spec-report.mts`) — the slices in topological order, which are closed, which is building. It is what makes a spec readable to anyone who is not the person running it.
+_Avoid_: dashboard (that word now belongs to the *status view*), progress report
+
+### Observability
+
+**Status view**:
+The read-only terminal view of specs currently building and their tracer-bullets' states — `agent-workflows status`, a third entry point to the package alongside the workflow and local sequencers. Runs no agent, follows no hook contract, and writes nothing: a label write would be a dispatch. Reads GitHub only, scoped to the repo it is standing in. See ADR-0007.
+_Avoid_: dashboard (ambiguous while the *progress comment* was also called one), monitor, TUI
+
+**Spec tree**:
+The shared reader (`shared/spec-tree.mts`) that resolves a repo's specs and their tracer-bullets with states. It holds both edge rules, and they are deliberately different rules (ADR-0007). Membership is **native-first**: a slice's spec is GitHub's sub-issue `parent` where that edge exists and the body's textual `## Parent` otherwise. Dependencies are a **union**, not a fallback: `unionBlockers` merges the native `blockedBy` edges with the `## Blocked by` refs, because a parent is one value while blockers are a set — over-blocking is a deadlocked row a human clears, under-blocking builds on a dependency that has not landed. Both make adopting native hierarchy gradual and per-repo rather than a flag day. A native blocker in another repository is excluded from the order and shown instead, since issue numbers are per-repo; the native sub-issue priority order is never displayed. The orchestrator takes the union too, and still resolves membership textually — it adopts that rule when native parents are written rather than merely read.
+
 ### Tracker
 
 **Tracker**:
 The system of record for the work an agent acts on — GitHub Issues or Linear. GitHub Issues always serve as the workflow *trigger* even when Linear is the tracker.
 
 **Tracker-agnostic**:
-The defining property of the central workflow: it performs zero tracker reads or writes and contains no `if: tracker == …` branch. All tracker I/O is behind hooks.
+The defining property of the central **workflow**: the YAML performs zero tracker reads or writes and contains no `if: tracker == …` branch. It is **not** a property of the package — since the hooks moved in, twenty-odd files under `src/` shell out to `gh`, and the *status view* reads the tracker too. The package ships GitHub as the **default** tracker and keeps it replaceable behind the hook and override seams; the workflow knows nothing either way.
 
 **Trigger label**:
 A human-applied `agent:<verb>` label on an issue or PR that starts a workflow.

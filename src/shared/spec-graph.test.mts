@@ -49,6 +49,44 @@ test("tracerBullets keeps only candidates parented to the spec, with their edges
   ]);
 });
 
+// Both edges are pluggable, and both default to the body. A caller reading the tracker's
+// own relationships (`spec-tree.mts`) swaps either one in without a second implementation
+// of membership-plus-edges living anywhere.
+test("tracerBullets takes both edges from the caller when it supplies them", () => {
+  const candidates = [
+    { number: 4, body: bullet(3, []) },
+    { number: 5, body: bullet(99, [4]) }, // the BODY parents it elsewhere
+  ];
+  assert.deepEqual(
+    tracerBullets(3, candidates, {
+      parentOf: (c) => (c.number === 5 ? 3 : parentRef(c.body)),
+      blockersOf: (c) => (c.number === 5 ? [4, 7] : []),
+    }),
+    [
+      { number: 4, blockedBy: [] },
+      { number: 5, blockedBy: [4, 7] },
+    ],
+  );
+});
+
+// What the rules would not order on travels with the edges, so every surface that shows
+// a spec's slices can name it. Absent when there is nothing to say.
+test("tracerBullets carries the blockers its rules excluded", () => {
+  const candidates = [
+    { number: 4, body: bullet(3, []) },
+    { number: 5, body: bullet(3, []) },
+  ];
+  assert.deepEqual(
+    tracerBullets(3, candidates, {
+      foreignBlockersOf: (c) => (c.number === 5 ? ["other/repo#12"] : []),
+    }),
+    [
+      { number: 4, blockedBy: [] },
+      { number: 5, blockedBy: [], foreignBlockers: ["other/repo#12"] },
+    ],
+  );
+});
+
 const CHAIN: { number: number; blockedBy: number[] }[] = [
   { number: 4, blockedBy: [] },
   { number: 5, blockedBy: [4] },
