@@ -6,6 +6,9 @@
 // One shot: list the remote branches, gather the issues they imply (`gather.mts`,
 // native-first), resolve the tree (`shared/spec-tree.mts`), print it (`render.mts`).
 // `--watch` (issue #98) will redraw this same pass on an interval.
+//
+// This file is the DISPATCH half throughout: it owns `process.argv`, `process.stdout`
+// and the `gh` calls, and every decision it makes lives in a tested module next door.
 
 import { repoFromRemoteUrl, resolveRepoSlug } from "../shared/github.mts";
 import { capture } from "../shared/process.mts";
@@ -18,17 +21,17 @@ import {
 } from "../shared/spec-tracker.mts";
 import { buildSpecTree } from "../shared/spec-tree.mts";
 import { gatherIssues } from "./gather.mts";
+import { parseStatusArgs } from "./options.mts";
 import { renderStatus } from "./render.mts";
 
-// The view takes no options yet — `--watch` arrives with issue #98. Rejected rather
-// than ignored, so a flag that does nothing says so instead of appearing to work.
-const options = process.argv.slice(2).filter(Boolean);
-if (options.length > 0) {
-  console.error(
-    `agent-workflows status: unknown option(s): ${options.join(" ")} — the status view takes none.`,
-  );
+// Colour follows the output device: `isTTY` is undefined when stdout is a pipe or a
+// file, so a redirected view is clean text with nothing to strip.
+const parsed = parseStatusArgs(process.argv.slice(2), process.stdout.isTTY === true);
+if (!parsed.ok) {
+  console.error(`agent-workflows status: ${parsed.message}`);
   process.exit(2);
 }
+const { colour } = parsed.options;
 
 // The repo you are standing in, from `GH_REPO` or the checkout's own origin remote —
 // no argument, because the view is scoped to the repo it runs in.
@@ -68,7 +71,7 @@ try {
     crossReferencedIssues: (spec) => crossReferencedIssues(repo, spec),
     allIssues: listIssueRecords,
   });
-  console.log(renderStatus({ repo, specs: buildSpecTree(issues, branches) }));
+  console.log(renderStatus({ repo, specs: buildSpecTree(issues, branches) }, { colour }));
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`agent-workflows status: could not read ${repo}: ${message}`);

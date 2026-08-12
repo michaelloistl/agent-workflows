@@ -513,6 +513,7 @@ standing in, with their tracer-bullets nested beneath (ADR-0007):
 
 ```sh
 yarn agent:status          # or: agent-workflows status
+yarn agent:status --no-color
 ```
 
 ```
@@ -537,6 +538,10 @@ madebyon/on-vantage — 2 specs in flight
   native sub-issue order is never used, because nothing populates native dependencies.
   Each state is its issue state plus its `agent:*` label — nothing else. A slice in a
   dependency cycle is shown as blocked rather than silently dropped.
+- **States are colour-coded on a terminal**, with `agent:blocked` in bold red because it
+  is the one state that means stop and look. Colour is emitted only when stdout is a
+  terminal, so piping or redirecting the view gives clean text with no escape sequences;
+  `--no-color` (or `--no-colour`) turns it off on a terminal too.
 - It is **read-only and one-shot**. It runs no agent and writes nothing — a label
   write would be a dispatch, i.e. a real, billed agent run.
 - The repo comes from `GH_REPO` or the checkout's `origin` remote; no argument.

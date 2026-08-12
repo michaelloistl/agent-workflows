@@ -18,6 +18,10 @@ version without editing their workflow on every release.
   is native and a slice that is only textual land in one tree — and the status view
   no longer scans the whole repo to build it. Ordering is unchanged — still
   `## Blocked by`.
+- Colour-code the status view's states on a terminal, with `agent:blocked` in bold
+  red. Colour is emitted only when stdout is a TTY — piping or redirecting the view
+  gives clean text — and `--no-color` (or `--no-colour`) suppresses it on a terminal
+  too.
 - Record the design in ADR-0007 and add *status view* and *spec tree* to the
   glossary.
 
