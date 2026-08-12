@@ -141,8 +141,12 @@ function fromRest(issue: RestIssue, parent: number | null): IssueRecord {
     url: issue.html_url,
     parent,
     // The edges themselves stay unset; the count is what says whether that silence means
-    // "none declared" or "this read cannot see them" (issue #99).
-    blockedByCount: issue.issue_dependencies_summary?.blocked_by ?? 0,
+    // "none declared" or "this read cannot see them" (issue #99). Left UNDEFINED — not
+    // defaulted to zero — when the host omits `issue_dependencies_summary` altogether: a
+    // missing summary is an unknown count, and reading it as "no blockers" would let a
+    // fully-migrated repo skip the scan and under-block. The gatherer treats undefined as
+    // "cannot rule blockers out" and scans, so the failure mode is a slower read.
+    blockedByCount: issue.issue_dependencies_summary?.blocked_by,
   };
 }
 

@@ -58,8 +58,14 @@ export function gatherIssues(
   // declare native dependencies. Unseen, they would UNDER-block the order.
   // Both REST reads, not just the sub-issue one: a textually-parented slice on a migrated
   // spec arrives through the timeline and can declare native blockers just the same.
+  //
+  // An UNDEFINED count is not zero: it means the host omitted `issue_dependencies_summary`
+  // entirely, so this read cannot say whether native blockers exist. Trusting that silence
+  // would skip the scan and under-block a fully-migrated repo — the failure the union
+  // exists to prevent — so an unknown count forces the scan just as a positive one does.
+  // The cost is a slower read on such a host, never a wrong order.
   const edgesUnread = [...native, ...referencing].some(
-    (child) => (child.blockedByCount ?? 0) > 0 && !child.blockedBy,
+    (child) => !child.blockedBy && (child.blockedByCount === undefined || child.blockedByCount > 0),
   );
 
   // The full-repo scan is otherwise the last resort, for a spec with no native hierarchy

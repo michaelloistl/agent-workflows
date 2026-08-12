@@ -18,8 +18,17 @@ function issue(over: Partial<IssueRecord> & { number: number }): IssueRecord {
 // native path is the reads it does NOT do. Cross-references are modelled as GitHub
 // serves them: every issue whose body mentions the spec, children and bystanders alike,
 // and without the native parent edge the sub-issue read carries.
-function tracker(issues: IssueRecord[]) {
+//
+// `serveCounts` mirrors whether the REST payloads carry `issue_dependencies_summary`. On
+// by default, as GitHub.com serves it; off models a host that omits it, where the count
+// is UNKNOWN rather than zero and the gatherer must fall back to the scan rather than
+// trust a silent "no blockers".
+function tracker(issues: IssueRecord[], { serveCounts = true }: { serveCounts?: boolean } = {}) {
   const calls = { issue: [] as number[], native: [] as number[], refs: [] as number[], scans: 0 };
+  // REST serves a dependency COUNT and no edges, so both REST reads carry the count
+  // alone — exactly as `fromRest` does — or omit it entirely on a host that does not.
+  const count = (blockedBy: IssueRecord["blockedBy"]) =>
+    serveCounts ? { blockedByCount: blockedBy?.length ?? 0 } : {};
   const reads: TrackerReads = {
     issueRecord: (n) => {
       calls.issue.push(n);
@@ -27,21 +36,16 @@ function tracker(issues: IssueRecord[]) {
     },
     nativeSubIssues: (spec) => {
       calls.native.push(spec);
-      // REST serves a dependency COUNT and no edges, so the native read carries the
-      // count alone — exactly as `fromRest` does.
       return issues
         .filter((i) => i.parent === spec)
-        .map(({ blockedBy, ...rest }) => ({ ...rest, blockedByCount: blockedBy?.length ?? 0 }));
+        .map(({ blockedBy, ...rest }) => ({ ...rest, ...count(blockedBy) }));
     },
     crossReferencedIssues: (spec) => {
       calls.refs.push(spec);
       // Also REST: no parent edge, and a dependency count in place of the edges.
       return issues
         .filter((i) => i.body.includes(`#${spec}`))
-        .map(({ parent: _native, blockedBy, ...rest }) => ({
-          ...rest,
-          blockedByCount: blockedBy?.length ?? 0,
-        }));
+        .map(({ parent: _native, blockedBy, ...rest }) => ({ ...rest, ...count(blockedBy) }));
     },
     allIssues: () => {
       calls.scans += 1;
@@ -155,6 +159,50 @@ test("a textual slice on a migrated spec is scanned for its native edges too", (
   assert.deepEqual(
     gathered.find((i) => i.number === 96)?.blockedBy?.map((b) => b.number),
     [95],
+  );
+});
+
+// The safety net rests on the count arriving at all: if a host omits
+// `issue_dependencies_summary`, the count is UNKNOWN, not zero, and trusting a silent
+// "no blockers" would skip the scan and under-block a fully-migrated repo — the exact
+// failure the union exists to avoid. Unknown therefore forces the scan, so the failure
+// mode is a slower read rather than a wrong order.
+test("a migrated spec whose REST reads omit the dependency summary is scanned, not trusted", () => {
+  const { reads, calls } = tracker(
+    [
+      issue({ number: 94 }),
+      issue({ number: 95, parent: 94 }),
+      issue({
+        number: 96,
+        parent: 94,
+        blockedBy: [{ number: 95, url: "https://github.com/o/r/issues/95" }],
+      }),
+    ],
+    { serveCounts: false },
+  );
+  const gathered = gatherIssues(["agent/spec-94-x"], reads);
+
+  assert.equal(calls.scans, 1, "an unknown count falls back to the scan");
+  assert.deepEqual(
+    gathered.find((i) => i.number === 96)?.blockedBy?.map((b) => b.number),
+    [95],
+    "and the scan recovers the native edges the REST reads could not see",
+  );
+});
+
+// The same host, no native blockers anywhere: still scanned, because a payload with no
+// summary cannot say so. A slower read on that host, never a wrong one.
+test("an absent dependency summary forces the scan even with no blockers to find", () => {
+  const { reads, calls } = tracker(
+    [issue({ number: 94 }), issue({ number: 95, parent: 94 })],
+    { serveCounts: false },
+  );
+  const gathered = gatherIssues(["agent/spec-94-x"], reads);
+
+  assert.equal(calls.scans, 1);
+  assert.deepEqual(
+    gathered.map((i) => i.number),
+    [94, 95],
   );
 });
 

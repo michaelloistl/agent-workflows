@@ -56,7 +56,11 @@ const originRepo = (() => {
     return null;
   }
 })();
-if (originRepo && originRepo !== repo) {
+// Compared case-insensitively: GitHub slugs are case-insensitive, and `GH_REPO` may
+// carry a casing the `origin` remote does not (or vice versa), so a difference in case
+// alone is the same repo — not a reason to warn. `spec-tree.mts` lower-cases repo slugs
+// for the same reason.
+if (originRepo && originRepo.toLowerCase() !== repo.toLowerCase()) {
   console.error(
     `agent-workflows status: GH_REPO is ${repo} but this checkout's origin is ${originRepo} — branches are read from origin, so specs in ${repo} will look as though none has started.`,
   );
