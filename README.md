@@ -530,8 +530,12 @@ madebyon/on-vantage — 2 specs in flight
   branch exists only after kickoff, and requiring the issue to be open excludes the
   ghost branches a finished spec leaves behind. No label is involved: kickoff retires
   `agent:implement-spec` immediately, so no label marks a running spec.
-- Slices are in the orchestrator's own build order (`## Blocked by`, topological), and
-  each state is its issue state plus its `agent:*` label — nothing else. A slice in a
+- A slice belongs to a spec through GitHub's **native sub-issue** hierarchy where that
+  edge exists, and through the body's `## Parent` reference where it does not. Both
+  render as one tree, so a repo can adopt native hierarchy gradually.
+- Slices are in the orchestrator's own build order (`## Blocked by`, topological) — the
+  native sub-issue order is never used, because nothing populates native dependencies.
+  Each state is its issue state plus its `agent:*` label — nothing else. A slice in a
   dependency cycle is shown as blocked rather than silently dropped.
 - It is **read-only and one-shot**. It runs no agent and writes nothing — a label
   write would be a dispatch, i.e. a real, billed agent run.

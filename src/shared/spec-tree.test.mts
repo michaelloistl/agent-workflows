@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildSpecTree, type IssueRecord } from "./spec-tree.mts";
+import { buildSpecTree, resolveParent, type IssueRecord } from "./spec-tree.mts";
 
 function issue(over: Partial<IssueRecord> & { number: number }): IssueRecord {
   return {
@@ -13,12 +13,31 @@ function issue(over: Partial<IssueRecord> & { number: number }): IssueRecord {
   };
 }
 
+// A slice as a repo that has NOT adopted native hierarchy hands it over: parentage is a
+// `## Parent` reference in the body. `over.body` carries the blockers, if any.
 function slice(number: number, spec: number, over: Partial<IssueRecord> = {}): IssueRecord {
   const blockedBy = (over.body ?? "").trim();
   return issue({
     number,
     ...over,
     body: `## Parent\n\n#${spec}\n\n## Blocked by\n\n${blockedBy || "None"}\n`,
+  });
+}
+
+// The same slice as a MIGRATED repo hands it over: the parent edge is the native
+// sub-issue relationship and the body says nothing about a parent. Blockers stay
+// textual — nothing populates native dependencies (ADR-0007).
+function nativeSlice(
+  number: number,
+  spec: number,
+  over: Partial<IssueRecord> = {},
+): IssueRecord {
+  const blockedBy = (over.body ?? "").trim();
+  return issue({
+    number,
+    ...over,
+    parent: spec,
+    body: `## Blocked by\n\n${blockedBy || "None"}\n`,
   });
 }
 
@@ -174,6 +193,89 @@ test("every node carries its issue URL and title", () => {
   );
   assert.equal(spec.slices[0].title, "Walking skeleton");
   assert.equal(spec.slices[0].url, "https://github.com/o/r/issues/95");
+});
+
+// --- Native-first parent resolution (issue #96) ---------------------------------
+//
+// Membership resolves as `native parent ?? textual ## Parent`, per slice. That makes
+// adopting GitHub's sub-issue hierarchy gradual and per-repo rather than a flag day:
+// a migrated repo, an unmigrated one, and one partway through all render one tree.
+
+test("a slice claims its spec through the native parent alone, with no ## Parent section", () => {
+  const [spec] = buildSpecTree(
+    [issue({ number: 94 }), nativeSlice(95, 94), nativeSlice(96, 94)],
+    ["agent/spec-94-x"],
+  );
+  assert.deepEqual(
+    spec.slices.map((s) => s.number),
+    [95, 96],
+  );
+  assert.equal(spec.total, 2);
+});
+
+// The point of "native-first": where the two disagree, the tracker's own edge is the
+// truth and the body is the stale copy — a slice re-parented in GitHub moves.
+test("a native parent wins over a disagreeing ## Parent", () => {
+  const specs = buildSpecTree(
+    [
+      issue({ number: 94 }),
+      issue({ number: 12 }),
+      { ...slice(95, 12), parent: 94 },
+    ],
+    ["agent/spec-94-x", "agent/spec-12-y"],
+  );
+  assert.deepEqual(
+    specs.map((s) => [s.number, s.slices.map((sl) => sl.number)]),
+    [
+      [12, []],
+      [94, [95]],
+    ],
+  );
+});
+
+// Mid-migration: some slices carry the native edge, others only the body. One tree.
+test("native and textual slices of one spec resolve into a single tree", () => {
+  const [spec] = buildSpecTree(
+    [
+      issue({ number: 94 }),
+      nativeSlice(95, 94),
+      slice(96, 94, { body: "#95" }),
+      nativeSlice(97, 94, { body: "#96" }),
+    ],
+    ["agent/spec-94-x"],
+  );
+  assert.deepEqual(
+    spec.slices.map((s) => s.number),
+    [95, 96, 97],
+  );
+});
+
+// Native dependency data is not read (nothing populates it), and the native sub-issue
+// PRIORITY order is not displayed: order comes from `## Blocked by` even when every
+// membership edge is native. Input order here is the reverse of the build order.
+test("native membership does not change where the build order comes from", () => {
+  const [spec] = buildSpecTree(
+    [
+      issue({ number: 94 }),
+      nativeSlice(97, 94, { body: "#96" }),
+      nativeSlice(96, 94, { body: "#95" }),
+      nativeSlice(95, 94),
+    ],
+    ["agent/spec-94-x"],
+  );
+  assert.deepEqual(
+    spec.slices.map((s) => s.number),
+    [95, 96, 97],
+  );
+});
+
+test("resolveParent prefers the native edge and falls back to the body", () => {
+  assert.equal(resolveParent(nativeSlice(95, 94)), 94);
+  assert.equal(resolveParent(slice(95, 94)), 94);
+  assert.equal(resolveParent({ ...slice(95, 12), parent: 94 }), 94);
+  assert.equal(resolveParent(issue({ number: 95 })), null);
+  // An explicit "no native parent" is a fallback, not an answer.
+  assert.equal(resolveParent({ ...slice(95, 94), parent: null }), 94);
 });
 
 test("specs are listed in issue-number order", () => {

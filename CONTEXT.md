@@ -64,7 +64,7 @@ A single long-lived `agent/spec-<n>-…` branch cut once from the default branch
 _Avoid_: feature branch, epic branch, integration branch
 
 **Tracer-bullet**:
-A thin, independently-buildable vertical slice of a spec — a standalone issue carrying a textual `## Parent` reference to the spec and a `## Blocked by` section. **Not** a GitHub sub-issue (the `implement` issue-shape guard refuses sub-issues and epics), so the spec↔tracer-bullet link is textual, not native.
+A thin, independently-buildable vertical slice of a spec — a standalone issue carrying a textual `## Parent` reference to the spec and a `## Blocked by` section. The `implement` issue-shape guard refuses sub-issues and epics, so nothing the fleet writes is a GitHub sub-issue; where something else has made one anyway (a Linear sync, a hand edit), the *status view* reads that native parent in preference to the body (see *spec tree*), while the orchestrator still goes by the text. Either way the *dependency* edge is textual: nothing populates native `blockedBy`.
 
 **Stacked**:
 The topology where each tracer-bullet branches from the current spec-branch HEAD and its PR targets the spec branch (not the default branch) — so each slice sees the accumulated work of the ones before it.
@@ -99,7 +99,7 @@ The read-only terminal view of specs currently building and their tracer-bullets
 _Avoid_: dashboard (ambiguous while the *progress comment* was also called one), monitor, TUI
 
 **Spec tree**:
-The shared reader (`shared/spec-tree.mts`) that resolves a repo's specs and their tracer-bullets with states. Membership is the body's textual `## Parent`; ADR-0007 adds a **native-first** arm — GitHub's sub-issue `parent` when present, textual otherwise — so migration to native hierarchy is gradual and per-repo, and that arm is not built yet (issue #96). Ordering stays textual either way: native `blockedBy` exists as a feature but nothing populates it, so `## Blocked by` is the only source of dependency edges.
+The shared reader (`shared/spec-tree.mts`) that resolves a repo's specs and their tracer-bullets with states. Membership is **native-first** (ADR-0007): a slice's spec is GitHub's sub-issue `parent` where that edge exists and the body's textual `## Parent` otherwise, so migration to native hierarchy is gradual and per-repo rather than a flag day. Only the *parent* edge is native — native `blockedBy` exists as a feature but nothing populates it, so `## Blocked by` remains the only source of dependency edges and the native sub-issue priority order is never displayed. The orchestrator still resolves membership textually; it adopts this rule when native parents are written rather than merely read.
 
 ### Tracker
 

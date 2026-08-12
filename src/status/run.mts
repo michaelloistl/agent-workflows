@@ -3,14 +3,21 @@
 // follows no hook contract, and writes NOTHING. A label write would be a dispatch —
 // one stray keypress would start a real, billed agent run — so this reads and prints.
 //
-// One shot: fetch the repo's issues and its remote branches, resolve the tree
-// (`shared/spec-tree.mts`), print it (`render.mts`). `--watch` (issue #98) will redraw
-// this same pass on an interval.
+// One shot: list the remote branches, gather the issues they imply (`gather.mts`,
+// native-first), resolve the tree (`shared/spec-tree.mts`), print it (`render.mts`).
+// `--watch` (issue #98) will redraw this same pass on an interval.
 
 import { repoFromRemoteUrl, resolveRepoSlug } from "../shared/github.mts";
 import { capture } from "../shared/process.mts";
-import { listIssueRecords, remoteBranches } from "../shared/spec-tracker.mts";
+import {
+  crossReferencedIssues,
+  issueRecord,
+  listIssueRecords,
+  nativeSubIssues,
+  remoteBranches,
+} from "../shared/spec-tracker.mts";
 import { buildSpecTree } from "../shared/spec-tree.mts";
+import { gatherIssues } from "./gather.mts";
 import { renderStatus } from "./render.mts";
 
 // The view takes no options yet — `--watch` arrives with issue #98. Rejected rather
@@ -54,8 +61,14 @@ if (originRepo && originRepo !== repo) {
 // renderer's job and a good outcome, while an unauthenticated `gh` or a missing remote
 // is an error with its own message.
 try {
-  const specs = buildSpecTree(listIssueRecords(), remoteBranches());
-  console.log(renderStatus({ repo, specs }));
+  const branches = remoteBranches();
+  const issues = gatherIssues(branches, {
+    issueRecord,
+    nativeSubIssues: (spec) => nativeSubIssues(repo, spec),
+    crossReferencedIssues: (spec) => crossReferencedIssues(repo, spec),
+    allIssues: listIssueRecords,
+  });
+  console.log(renderStatus({ repo, specs: buildSpecTree(issues, branches) }));
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`agent-workflows status: could not read ${repo}: ${message}`);

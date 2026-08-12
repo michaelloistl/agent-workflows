@@ -11,6 +11,13 @@ version without editing their workflow on every release.
 - Add the status view: `agent-workflows status` (`yarn agent:status`) prints the
   specs currently building in the repo you are standing in, with their
   tracer-bullets, build order, and per-slice state. Read-only and one-shot.
+- Resolve a slice's spec from GitHub's native sub-issue hierarchy where it exists,
+  falling back to the body's `## Parent` where it does not, so adopting native
+  hierarchy is gradual and per-repo. A migrated spec's tracer-bullets are read
+  through the sub-issue relationship and its own cross-references, so a slice that
+  is native and a slice that is only textual land in one tree — and the status view
+  no longer scans the whole repo to build it. Ordering is unchanged — still
+  `## Blocked by`.
 - Record the design in ADR-0007 and add *status view* and *spec tree* to the
   glossary.
 

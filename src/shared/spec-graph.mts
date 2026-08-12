@@ -4,8 +4,12 @@
 // call in here, and act on the result.
 //
 // A tracer-bullet links to its spec via a textual `## Parent` reference and to its
-// blockers via `## Blocked by` (NOT native sub-issues — the `implement`
-// issue-shape guard refuses those). Orchestration is strictly sequential
+// blockers via `## Blocked by`; nothing the fleet writes is a native sub-issue, because
+// the `implement` issue-shape guard refuses those. The textual parent is this module's
+// DEFAULT, not its only rule: `tracerBullets` takes a membership resolver so the status
+// view can prefer a native parent edge where some other system has written one
+// (`spec-tree.resolveParent`). Blockers have no such arm — nothing populates native
+// dependency relationships. Orchestration is strictly sequential
 // (ADR-0003): only `nextSlice` matters operationally, and `topologicalOrder` is
 // just `nextSlice` applied until done.
 
@@ -37,14 +41,21 @@ export function blockedByRefs(body: string): number[] {
   return refsIn(body, "blocked by");
 }
 
-// The tracer-bullets of `spec`: the candidates whose `## Parent` references it,
-// with their in-section blocked-by edges. Order follows the input.
-export function tracerBullets(
+// The tracer-bullets of `spec`: the candidates parented to it, with their in-section
+// blocked-by edges. Order follows the input.
+//
+// `parentOf` decides membership and defaults to the textual `## Parent` reference — the
+// orchestrator's rule, unchanged. The status view passes the native-first union instead
+// (`spec-tree.resolveParent`), so both surfaces share ONE implementation of
+// membership-plus-edges and only the parent edge differs. Edges never do: nothing
+// populates native dependencies, so blockers are always the `## Blocked by` section.
+export function tracerBullets<T extends IssueInput>(
   spec: number,
-  candidates: readonly IssueInput[],
+  candidates: readonly T[],
+  parentOf: (candidate: T) => number | null = (c) => parentRef(c.body),
 ): TracerBullet[] {
   return candidates
-    .filter((c) => parentRef(c.body) === spec)
+    .filter((c) => parentOf(c) === spec)
     .map((c) => ({ number: c.number, blockedBy: blockedByRefs(c.body) }));
 }
 

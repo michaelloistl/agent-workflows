@@ -16,7 +16,7 @@
 // ghost branches that outlive a finished spec.
 
 import { pickSpecBranch } from "./spec-context.mts";
-import { orderWithDeadlocked, tracerBullets } from "./spec-graph.mts";
+import { orderWithDeadlocked, parentRef, tracerBullets } from "./spec-graph.mts";
 
 // One issue as the tracker hands it over. `labels` is label NAMES only — the view
 // never reads a triage label (`ready-for-agent` here, `ready-for-afk` elsewhere), so
@@ -28,6 +28,26 @@ export interface IssueRecord {
   readonly state: "OPEN" | "CLOSED";
   readonly labels: readonly string[];
   readonly url: string;
+  // The NATIVE sub-issue parent, where the tracker has one. Absent (or null) in a repo
+  // that has not adopted the hierarchy — which is what `resolveParent` falls back for.
+  readonly parent?: number | null;
+}
+
+// The union rule (issue #96): a slice's spec is its native sub-issue parent where that
+// edge exists, and its textual `## Parent` reference otherwise. Native wins per slice,
+// so a repo can adopt the hierarchy gradually instead of on a flag day, and the view is
+// never silently empty in a repo that has not caught up.
+//
+// It lives here, in the shared reader, rather than in the status view: the orchestrator
+// resolves the same tree textually today (`spec-graph.tracerBullets`) and adopts this
+// rule when native parents are WRITTEN rather than merely read — a second implementation
+// is exactly what that migration must not need.
+//
+// Only the PARENT edge is native. Native dependency relationships exist as a GitHub
+// feature but nothing populates them, so `## Blocked by` remains the only source of
+// ordering, and the native sub-issue priority order is never displayed.
+export function resolveParent(issue: IssueRecord): number | null {
+  return issue.parent ?? parentRef(issue.body);
 }
 
 // A tracer-bullet's state, from its issue state and `agent:*` labels ONLY — no PR or
@@ -83,7 +103,7 @@ export function buildSpecTree(
     .filter((c): c is { issue: IssueRecord; branch: string } => c.branch !== null)
     .sort((a, b) => a.issue.number - b.issue.number)
     .map(({ issue, branch }) => {
-      const bullets = tracerBullets(issue.number, issues);
+      const bullets = tracerBullets(issue.number, issues, resolveParent);
       // Deadlocked slices go last rather than vanishing: the orchestrator will never
       // dispatch them, which is exactly why they have to show.
       const { ordered, deadlocked } = orderWithDeadlocked(bullets);
