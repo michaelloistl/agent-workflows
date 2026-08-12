@@ -4,12 +4,12 @@
 // Linear repo swaps this module for its own behind the same hook names.
 
 import { capture } from "./process.mts";
-import type { BlockerRef, IssueRecord } from "./spec-tree.mts";
+import type { BlockedBySources, BlockerRef, IssueRecord, IssueState } from "./spec-tree.mts";
 
 export interface RawIssue {
   number: number;
   body: string;
-  state: "OPEN" | "CLOSED";
+  state: IssueState;
   // Carried for the dependency union (issue #99), not for display: `url` says which repo
   // this issue's numbers belong to, and `blockedBy` is the native arm of the union.
   url: string;
@@ -17,13 +17,16 @@ export interface RawIssue {
 }
 
 // `gh`'s shape for a native dependency edge: a whole issue node per blocker. Only the
-// number and the URL cross this boundary.
+// number, the URL and the state cross this boundary — the node also carries an id and a
+// title, which nothing downstream should be able to reach for.
 interface RawBlockedBy {
-  blockedBy: { nodes: Array<{ number: number; url: string }> } | null;
+  blockedBy: { nodes: Array<{ number: number; url: string; state: IssueState }> } | null;
 }
 
+// The state comes along on every one of these reads at no cost, which is what lets the
+// `implement` blocked-by guard drop its read-per-ref fan-out (issue #100).
 function toBlockers(raw: RawBlockedBy): BlockerRef[] {
-  return (raw.blockedBy?.nodes ?? []).map(({ number, url }) => ({ number, url }));
+  return (raw.blockedBy?.nodes ?? []).map(({ number, url, state }) => ({ number, url, state }));
 }
 
 // Every issue in the repo (open and closed), with body, state and dependency edges —
@@ -199,6 +202,18 @@ export function nativeSubIssues(repo: string, spec: number): IssueRecord[] {
   const pages = JSON.parse(json) as RestIssue[][];
   // The edge the endpoint itself IS: these came back as children of `spec`.
   return pages.flat().map((issue) => fromRest(issue, spec));
+}
+
+// Everything the dependency rules need about ONE issue, in one read: its body (the textual
+// arm), its own URL (which repo a bare `#N` means), and its native edges with their states.
+// The `implement` guard reads its issue's body here rather than on its own — the body it
+// checks for a `## Parent` and the body the union parses must be the same body, and one
+// read is also one fewer than the guard used to make.
+export function blockedBySources(issue: number | string): BlockedBySources {
+  const raw = JSON.parse(
+    capture("gh", ["issue", "view", String(issue), "--json", "body,url,blockedBy"]),
+  ) as { body: string; url: string } & RawBlockedBy;
+  return { body: raw.body, url: raw.url, blockedBy: toBlockers(raw) };
 }
 
 // The label names on one issue. The read behind the local-run marker

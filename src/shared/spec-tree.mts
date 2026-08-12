@@ -18,12 +18,21 @@
 import { blockedByRefs, orderWithDeadlocked, parentRef, tracerBullets } from "./spec-graph.mts";
 import { pickSpecBranch } from "./spec-context.mts";
 
+// Whether an issue is still open. Uppercase because that is how `gh --json` serves it, and
+// one type rather than the literal union repeated at every read.
+export type IssueState = "OPEN" | "CLOSED";
+
 // One NATIVE dependency edge as the tracker serves it: the blocking issue's number and
 // its URL. The URL is not decoration — it is the only thing in the payload that says
 // which REPOSITORY the number belongs to, and numbers are per-repo.
 export interface BlockerRef {
   readonly number: number;
   readonly url: string;
+  // The blocking issue's own state, which the tracker serves in the same node. Ordering
+  // has no use for it — a spec's slice states come from the slices themselves — but the
+  // `implement` blocked-by guard does (issue #100), and it arrives free. Absent on a read
+  // that does not project it.
+  readonly state?: IssueState;
 }
 
 // One issue as the tracker hands it over. `labels` is label NAMES only — the view
@@ -33,7 +42,7 @@ export interface IssueRecord {
   readonly number: number;
   readonly title: string;
   readonly body: string;
-  readonly state: "OPEN" | "CLOSED";
+  readonly state: IssueState;
   readonly labels: readonly string[];
   readonly url: string;
   // The NATIVE sub-issue parent, where the tracker has one. Absent (or null) in a repo
@@ -85,8 +94,17 @@ export function resolveParent(issue: IssueRecord): number | null {
 // asymmetry, so a spec fully native, fully textual, or partway between all yield one
 // correct build order and adopting native dependencies stays gradual and per-repo.
 export function unionBlockers(issue: BlockedBySources): number[] {
-  const { sameRepo } = partitionBlockers(issue);
-  return [...new Set([...blockedByRefs(issue.body), ...sameRepo.map((ref) => ref.number)])];
+  return [
+    ...new Set([...blockedByRefs(issue.body), ...sameRepoBlockers(issue).map((ref) => ref.number)]),
+  ];
+}
+
+// The native blockers whose numbers mean what they say here — the arm of the union above,
+// whole rather than reduced to numbers. A caller that needs what else the edge carries
+// (the blocker's state, for the `implement` guard) reads them through this, so "which
+// blockers count as ours" stays one rule.
+export function sameRepoBlockers(issue: BlockedBySources): BlockerRef[] {
+  return partitionBlockers(issue).sameRepo;
 }
 
 // The native blockers that live in ANOTHER repository. They are excluded from the union
@@ -135,7 +153,9 @@ function repoOfIssueUrl(url: string): string | null {
 
 // How a foreign blocker is named once it leaves the number space it came from: bare
 // `#12` would read as this repo's #12, which is the confusion the exclusion exists for.
-function foreignBlockerLabel(ref: BlockerRef): string {
+// Exported because every surface that shows an excluded blocker must spell it the same
+// way — the status row, the progress comment, and the `implement` guard's job log.
+export function foreignBlockerLabel(ref: BlockerRef): string {
   const repo = repoOfIssueUrl(ref.url);
   return repo === null ? ref.url : `${repo}#${ref.number}`;
 }

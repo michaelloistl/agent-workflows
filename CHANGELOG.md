@@ -39,6 +39,19 @@ version without editing their workflow on every release.
   already makes, so this costs no request per slice; a `gh` older than 2.94 does not
   serve them and now fails the read rather than the orchestrator quietly ordering on
   half the edges.
+- Refuse `agent:implement` on a slice whose blocker is still open whichever way it was
+  declared — natively or under `## Blocked by`. The guard was the last reader of a
+  dependency edge with a parse of its own, so a slice blocked only natively walked past
+  it; it now reads the same union everything else orders on. Mostly defence in depth —
+  ordering would not have dispatched such a slice — but it is the whole gate on the
+  attended and manual paths, where a human names a slice directly, and it is the only
+  reader that honours a blocker which is not a tracer-bullet of the same spec. A blocker
+  in another repository is reported to the job log rather than gating the run, unless it
+  has already closed — that was never a wait. The guard no longer reads one issue per
+  blocking ref to learn its state: a native edge carries its blocker's state, and the
+  issue list the guard already reads carries the rest, so in the ordinary case the check
+  costs no request of its own. A ref past the end of that list still falls back to a point
+  read, because a blocker that scrolled off a page must not quietly stop gating.
 - Record the design in ADR-0007 and add *status view* and *spec tree* to the
   glossary.
 

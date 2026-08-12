@@ -130,7 +130,9 @@ Users need to export any report as CSV. Today there's no way to get the data out
   tracer-bullets it depends on (used to sequence the build in topological order,
   lowest issue number first). GitHub's native **blocked-by** relationship counts
   too: the two are unioned, so a repo can declare dependencies either way, or
-  half each while it migrates.
+  half each while it migrates. `agent:implement` refuses on a still-open blocker
+  from either source, so a slice started by hand stops at the same point the
+  orchestrator would have.
 - Headings at **`##`** level.
 - A plain issue — **not** a native GitHub sub-issue or epic (the `implement`
   shape guard refuses those; the spec↔tracer-bullet link is textual).

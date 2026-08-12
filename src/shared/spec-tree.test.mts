@@ -4,6 +4,7 @@ import {
   buildSpecTree,
   foreignBlockers,
   resolveParent,
+  sameRepoBlockers,
   unionBlockers,
   type BlockerRef,
   type IssueRecord,
@@ -335,6 +336,16 @@ test("a native blocker in another repository is excluded from the union, and sur
   assert.deepEqual(unionBlockers(waiting), [93]);
   assert.deepEqual(foreignBlockers(waiting), [elsewhere]);
   assert.deepEqual(foreignBlockers(slice(95, 94, { blockedBy: nativeBlockers(93) })), []);
+});
+
+// The same partition read the other way round, whole rather than reduced to numbers: what
+// a native edge carries beyond its number — the blocker's state — reaches the `implement`
+// guard only through the rule that decided the edge was ours in the first place.
+test("the same-repo native blockers are the union's native arm, with what they carry", () => {
+  const elsewhere: BlockerRef = { number: 96, url: "https://github.com/other/repo/issues/96" };
+  const open: BlockerRef = { number: 93, url: "https://github.com/o/r/issues/93", state: "OPEN" };
+  assert.deepEqual(sameRepoBlockers(slice(95, 94, { blockedBy: [elsewhere, open] })), [open]);
+  assert.deepEqual(sameRepoBlockers(slice(95, 94)), []);
 });
 
 // GitHub slugs are case-insensitive, and two reads can disagree on the casing. Reading

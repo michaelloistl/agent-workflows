@@ -51,7 +51,7 @@ A sandcastle command the central workflow calls at a fixed point in a verb's seq
 The fixed set of hook command names and their expected behaviour that the central workflow depends on. Stable across all consuming repos; only the implementations differ.
 
 **Guard**:
-A preflight check run before the agent (spec, shape, blocked-by, existing-PR for GitHub repos). Lives in the `<verb>-guards` hook.
+A preflight check run before the agent (spec, shape, blocked-by, existing-PR for GitHub repos). Lives in the `<verb>-guards` hook. The blocked-by guard reads the same dependency rule the *spec tree* holds, so a slice is gated by a blocker declared either way; its decision is pure and lives beside the rule, while the hook itself only reads and refuses.
 
 **Refusal**:
 A guard declining to run. The guard posts its own explanation and clears the trigger label, then signals non-zero so the workflow skips the rest. A refusal is **not** a failure.
@@ -64,7 +64,7 @@ A single long-lived `agent/spec-<n>-…` branch cut once from the default branch
 _Avoid_: feature branch, epic branch, integration branch
 
 **Tracer-bullet**:
-A thin, independently-buildable vertical slice of a spec — a standalone issue carrying a textual `## Parent` reference to the spec and a `## Blocked by` section. The `implement` issue-shape guard refuses sub-issues and epics, so nothing the fleet writes is a GitHub sub-issue; where something else has made one anyway (a Linear sync, a hand edit), the *status view* reads that native parent in preference to the body (see *spec tree*), while the orchestrator still goes by the text. The *dependency* edge is read from both sources at once: a slice's blockers are its native `blockedBy` edges **unioned** with its `## Blocked by` refs, wherever a build ORDER is computed — the status view and the orchestrator alike. The `implement` blocked-by guard is the exception and still parses the body alone.
+A thin, independently-buildable vertical slice of a spec — a standalone issue carrying a textual `## Parent` reference to the spec and a `## Blocked by` section. The `implement` issue-shape guard refuses sub-issues and epics, so nothing the fleet writes is a GitHub sub-issue; where something else has made one anyway (a Linear sync, a hand edit), the *status view* reads that native parent in preference to the body (see *spec tree*), while the orchestrator still goes by the text. The *dependency* edge is read from both sources at once: a slice's blockers are its native `blockedBy` edges **unioned** with its `## Blocked by` refs, everywhere the fleet reads dependencies — the status view, the orchestrator, and the `implement` blocked-by *guard*. The graph and the guard read one rule but answer different questions: the graph orders a spec's slices among themselves and ignores a blocker that is not one of them, while the guard gates a single run on *any* open blocker, which is why a slice named directly by a human still stops at the right time.
 
 **Stacked**:
 The topology where each tracer-bullet branches from the current spec-branch HEAD and its PR targets the spec branch (not the default branch) — so each slice sees the accumulated work of the ones before it.
