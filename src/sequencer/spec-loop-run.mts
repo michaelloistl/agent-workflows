@@ -20,7 +20,9 @@
 // irreversible action suppressed and halts where it would first merge, and a merge
 // CONFIRMATION read back from GitHub before the loop advances — a queued, blocked,
 // or stale merge must not be mistaken for a landed slice. A PREVIEW of the whole
-// plan is printed and accepted before the first agent runs.
+// plan is printed and accepted before the first agent runs; `--yes` accepts it
+// without a prompt, for the callers that have no terminal to answer one (a launcher,
+// an unattended resume), and the preview still prints so the bypass is never silent.
 //
 // Credentials come from the developer's already-authenticated `gh` and existing
 // agent credentials; this loop neither reads nor writes any secret material.
@@ -106,6 +108,7 @@ import {
   specBranchCutCommands,
   sliceRefusedHaltReason,
   specFlagConflict,
+  previewGate,
   sliceDisposition,
   formatCheckpoint,
   checkpointPrompt,
@@ -123,7 +126,7 @@ const specArg = process.argv[2];
 if (!specArg || !/^\d+$/.test(specArg)) {
   console.error(
     "spec-loop: usage: agent-workflows implement-spec <spec-issue> " +
-      "[--execute] [--force] [--no-pause] [--interactive] [--stop]",
+      "[--execute] [--force] [--yes] [--no-pause] [--interactive] [--stop]",
   );
   process.exit(2);
 }
@@ -148,6 +151,11 @@ const interactive = process.argv.includes("--interactive");
 // running one is occupied): it signals the live loop to finish its current slice and
 // halt at the next checkpoint, rather than starting a run of its own.
 const stop = process.argv.includes("--stop");
+// `--yes` pre-accepts the preview so a run can start with nothing at the terminal to
+// answer it — a launcher script, an unattended resume. It answers only that one-time
+// gate; between-slices checkpoints remain `--no-pause`'s business, so a fully
+// non-interactive run passes both.
+const yes = process.argv.includes("--yes");
 
 const flagConflict = specFlagConflict({ interactive, runThrough });
 if (flagConflict) {
@@ -325,7 +333,11 @@ if (order.length === 0) {
   console.log("spec-loop: no ready tracer-bullets to build — nothing to do.");
   process.exit(0);
 }
-if (!confirm(`spec-loop: proceed with ${dryRun ? "this DRY RUN" : "REAL merges"}? [y/N] `)) {
+// The preview is printed above either way — `--yes` answers the prompt, it does not
+// suppress the blast radius, and the notice records that a flag answered for the human.
+const gate = previewGate({ yes, dryRun });
+if (gate.notice) console.log(gate.notice);
+if (gate.prompt && !confirm(gate.prompt)) {
   console.log("spec-loop: declined — nothing done.");
   process.exit(0);
 }

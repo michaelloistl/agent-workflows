@@ -295,6 +295,7 @@ agent-workflows implement-spec 48 --execute    # real merges into the spec branc
 agent-workflows implement-spec 48 --execute --force      # also overrule the local lock
 agent-workflows implement-spec 48 --execute --no-pause   # run straight through, no checkpoints
 agent-workflows implement-spec 48 --execute --interactive # steer a live session per slice
+agent-workflows implement-spec 48 --execute --yes --no-pause # fully non-interactive
 agent-workflows implement-spec 48 --stop       # from a SECOND terminal: graceful stop
 ```
 
@@ -333,6 +334,16 @@ confirmation. `--no-pause` runs the whole spec straight through for a well-under
 spec; `--interactive` instead hands *each* slice's build to a live agent session, and
 because that is per-slice it is rejected together with `--no-pause` (one stops at
 every slice, the other never stops).
+
+**Running without a human at the terminal.** Both the preview and the checkpoints are
+read from stdin, and a non-interactive stdin **declines** — the safe default, but it
+also means a launcher script, an unattended resume, or a command run from an agent
+prompt can never start a run. `--yes` pre-accepts the *preview*; `--no-pause` covers
+the *checkpoints*, so `--execute --yes --no-pause` is the fully non-interactive
+combination. `--yes` does not suppress the preview: the whole blast radius is still
+printed, followed by a line naming the flag that accepted it, so a run started this
+way says so in its own log. It also does not weaken any gate — both CI gates, the
+merge confirmation, the local lock, and the `agent:local` marker behave identically.
 
 There are **two ways to stop**, and they are different:
 

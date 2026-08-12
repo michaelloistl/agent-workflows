@@ -8,6 +8,10 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Add `--yes` to the attended spec loop: it pre-accepts the preview prompt so a run
+  can start with nothing at the terminal to answer it (a launcher script, an
+  unattended resume). The preview is still printed in full and the run logs which
+  flag accepted it. With `--no-pause`, a spec run is fully non-interactive.
 - Add the status view: `agent-workflows status` (`yarn agent:status`) prints the
   specs currently building in the repo you are standing in, with their
   tracer-bullets, build order, and per-slice state. Read-only and one-shot.
@@ -32,10 +36,9 @@ version without editing their workflow on every release.
   fallback membership uses: blockers are a set, and over-blocking shows up as a
   deadlocked row while under-blocking silently builds on a dependency that has not
   landed. Everything that computes a build order reads it: the status view and the
-  orchestrator, unattended and attended. (The `implement` blocked-by guard still parses
-  the body alone.) A native blocker in another repository is left out of the order —
-  issue numbers are per-repo — and named instead, on the status view's row and in the
-  spec's progress comment. The native edges ride the issue-list read every consumer
+  orchestrator, unattended and attended. A native blocker in another repository is left
+  out of the order — issue numbers are per-repo — and named instead, on the status view's
+  row and in the spec's progress comment. The native edges ride the issue-list read every consumer
   already makes, so this costs no request per slice; a `gh` older than 2.94 does not
   serve them and now fails the read rather than the orchestrator quietly ordering on
   half the edges.
