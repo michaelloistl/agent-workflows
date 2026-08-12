@@ -108,6 +108,7 @@ test("classifyInvocation treats implement-spec + issue number as the spec loop",
     noPause: false,
     interactive: false,
     stop: false,
+    yes: false,
   });
 });
 
@@ -121,6 +122,7 @@ test("classifyInvocation reads --execute / --force on the spec loop", () => {
     noPause: false,
     interactive: false,
     stop: false,
+    yes: false,
   });
 });
 
@@ -138,6 +140,7 @@ test("classifyInvocation reads --no-pause / --interactive on the spec loop", () 
       noPause: true,
       interactive: false,
       stop: false,
+      yes: false,
     },
   );
   assert.deepEqual(
@@ -151,8 +154,25 @@ test("classifyInvocation reads --no-pause / --interactive on the spec loop", () 
       noPause: false,
       interactive: true,
       stop: false,
+      yes: false,
     },
   );
+});
+
+// `--yes` pre-accepts the preview prompt, so a launcher or script can start a run
+// without a terminal to answer it (a non-interactive stdin otherwise declines).
+test("classifyInvocation reads --yes on the spec loop", () => {
+  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--execute", "--yes"]), {
+    kind: "spec-loop",
+    spec: "48",
+    execute: true,
+    dryRun: false,
+    force: false,
+    noPause: false,
+    interactive: false,
+    stop: false,
+    yes: true,
+  });
 });
 
 test("classifyInvocation reads --stop as the graceful-stop control on the spec loop", () => {
@@ -165,6 +185,7 @@ test("classifyInvocation reads --stop as the graceful-stop control on the spec l
     noPause: false,
     interactive: false,
     stop: true,
+    yes: false,
   });
 });
 

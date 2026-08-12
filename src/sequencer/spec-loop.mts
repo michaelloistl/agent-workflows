@@ -241,6 +241,37 @@ export function formatSliceFooter(o: { slice: number; outcome: SliceOutcome }): 
 // and the branches — no local file — so a spec interrupted under one entry point
 // resumes under the other.
 
+// Whether the preview must be ANSWERED by a human before the run starts.
+//
+// The preview's confirmation is the gate between a typed command and real merges into
+// a spec branch, and `confirm` treats a non-interactive stdin as a decline — the safe
+// default, but it also means nothing without a terminal can ever start a run: not a
+// launcher script, not an unattended resume, not a `!`-prefixed command from an agent
+// prompt. `--yes` pre-accepts it.
+//
+// The safety property this preserves is that the bypass is never SILENT, not that it
+// cannot exist: the caller still PRINTS the whole preview, and `notice` names the flag
+// that answered in the human's place, so a run started this way says so in its own log.
+// `--yes` covers this one-time "may this run start at all" gate only; the recurring
+// between-slices checkpoints are governed by `--no-pause`, so a fully non-interactive
+// run passes both.
+// Exactly one of the two is non-null: the loop either asks or reports that a flag
+// answered. The prompt text lives here rather than in the shell (as `checkpointPrompt`
+// already does) so the question and the notice name the same blast radius by
+// construction — they cannot drift into describing different things.
+export interface PreviewGate {
+  // The question to put to the human, or null when `--yes` already answered it.
+  readonly prompt: string | null;
+  // The line to print in place of the prompt, or null when the human is being asked.
+  readonly notice: string | null;
+}
+
+export function previewGate(o: { yes: boolean; dryRun: boolean }): PreviewGate {
+  const radius = o.dryRun ? "this DRY RUN" : "REAL merges";
+  if (!o.yes) return { prompt: `spec-loop: proceed with ${radius}? [y/N] `, notice: null };
+  return { prompt: null, notice: `spec-loop: --yes — proceeding with ${radius} without prompting.` };
+}
+
 // Interactive per-slice mode and run-straight-through are mutually exclusive: one
 // stops to steer every slice, the other never stops at all — asking for both is a
 // contradiction. Returns the refusal message when both are set, null otherwise.
