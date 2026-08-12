@@ -27,13 +27,21 @@ function tracker(issues: IssueRecord[]) {
     },
     nativeSubIssues: (spec) => {
       calls.native.push(spec);
-      return issues.filter((i) => i.parent === spec);
+      // REST serves a dependency COUNT and no edges, so the native read carries the
+      // count alone — exactly as `fromRest` does.
+      return issues
+        .filter((i) => i.parent === spec)
+        .map(({ blockedBy, ...rest }) => ({ ...rest, blockedByCount: blockedBy?.length ?? 0 }));
     },
     crossReferencedIssues: (spec) => {
       calls.refs.push(spec);
+      // Also REST: no parent edge, and a dependency count in place of the edges.
       return issues
         .filter((i) => i.body.includes(`#${spec}`))
-        .map(({ parent: _native, ...rest }) => rest);
+        .map(({ parent: _native, blockedBy, ...rest }) => ({
+          ...rest,
+          blockedByCount: blockedBy?.length ?? 0,
+        }));
     },
     allIssues: () => {
       calls.scans += 1;
@@ -103,6 +111,79 @@ test("an issue that merely mentions the spec is gathered, not filtered out early
   ]);
   const gathered = gatherIssues(["agent/spec-94-x"], reads);
   assert.ok(gathered.some((i) => i.number === 99));
+});
+
+// The count is the tell (issue #99): REST says a slice HAS native blockers without
+// saying which, and an unseen blocker under-blocks the order — the failure mode the
+// union exists to avoid. The edges live on the issue-list read, so that is what pays for
+// them: one scan, never a request per slice, and only when native dependencies are
+// really in use.
+test("a migrated spec whose slices declare native blockers is scanned for the edges", () => {
+  const { reads, calls } = tracker([
+    issue({ number: 94 }),
+    issue({ number: 95, parent: 94 }),
+    issue({
+      number: 96,
+      parent: 94,
+      blockedBy: [{ number: 95, url: "https://github.com/o/r/issues/95" }],
+    }),
+  ]);
+  const gathered = gatherIssues(["agent/spec-94-x"], reads);
+
+  assert.equal(calls.scans, 1);
+  assert.deepEqual(
+    gathered.find((i) => i.number === 96)?.blockedBy?.map((b) => b.number),
+    [95],
+  );
+});
+
+// The same tell on the OTHER REST read: a slice that is textual on a migrated spec comes
+// back through the timeline, and it can declare native blockers just as readily.
+test("a textual slice on a migrated spec is scanned for its native edges too", () => {
+  const { reads, calls } = tracker([
+    issue({ number: 94 }),
+    issue({ number: 95, parent: 94 }),
+    issue({
+      number: 96,
+      body: "## Parent\n\n#94\n",
+      blockedBy: [{ number: 95, url: "https://github.com/o/r/issues/95" }],
+    }),
+  ]);
+  const gathered = gatherIssues(["agent/spec-94-x"], reads);
+
+  assert.equal(calls.scans, 1);
+  assert.deepEqual(
+    gathered.find((i) => i.number === 96)?.blockedBy?.map((b) => b.number),
+    [95],
+  );
+});
+
+// Native dependency edges ride the issue-list read alone (issue #99) — the REST reads
+// serve a count and no more. So the two records are merged field by field rather than
+// first-wins wholesale: losing the edges to the record that outranks it on parentage
+// would silently UNDER-block a slice, which is the failure this union exists to avoid.
+test("a slice keeps its native parent and its native blockers, from different reads", () => {
+  const { reads } = tracker([
+    issue({ number: 94 }),
+    issue({ number: 95, parent: 94 }),
+    issue({
+      number: 96,
+      parent: 94,
+      blockedBy: [{ number: 95, url: "https://github.com/o/r/issues/95" }],
+    }),
+    // An unmigrated spec alongside it, which is what makes the scan run at all.
+    issue({ number: 12 }),
+    issue({ number: 13, body: "## Parent\n\n#12\n" }),
+  ]);
+  const gathered = gatherIssues(["agent/spec-94-x", "agent/spec-12-y"], reads);
+  const slice = gathered.find((i) => i.number === 96);
+
+  assert.equal(slice?.parent, 94, "the native record still decides parentage");
+  assert.deepEqual(
+    slice?.blockedBy?.map((b) => b.number),
+    [95],
+    "and the scan's record supplies the edges it alone carries",
+  );
 });
 
 // A cross-reference carries no native parent, so a slice re-parented in GitHub would fall

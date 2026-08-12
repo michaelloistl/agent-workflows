@@ -128,7 +128,9 @@ Users need to export any report as CSV. Today there's no way to get the data out
   section wins).
 - An optional **`## Blocked by`** section listing `#<number>` refs to other
   tracer-bullets it depends on (used to sequence the build in topological order,
-  lowest issue number first).
+  lowest issue number first). GitHub's native **blocked-by** relationship counts
+  too: the two are unioned, so a repo can declare dependencies either way, or
+  half each while it migrates.
 - Headings at **`##`** level.
 - A plain issue — **not** a native GitHub sub-issue or epic (the `implement`
   shape guard refuses those; the spec↔tracer-bullet link is textual).
@@ -188,7 +190,11 @@ ends (see the attended spec loop below).
 
 ## Installation
 
-Set up a consuming repo in five steps.
+Set up a consuming repo in five steps. The tracker reads need **`gh` 2.94 or
+newer** — that is where the `parent` and `blockedBy` JSON projections landed, and
+both the orchestrator and the status view ask for them. GitHub-hosted runners
+have been past that for a while; a local install that is not will fail the read
+with an unknown-field error rather than degrading.
 
 **1. Add the sandcastle hooks.** Install the `agent-workflows` package as a git
 dependency — no registry, no copied code. For a GitHub-Issues tracker the
@@ -536,8 +542,11 @@ madebyon/on-vantage — 2 specs in flight
 - A slice belongs to a spec through GitHub's **native sub-issue** hierarchy where that
   edge exists, and through the body's `## Parent` reference where it does not. Both
   render as one tree, so a repo can adopt native hierarchy gradually.
-- Slices are in the orchestrator's own build order (`## Blocked by`, topological) — the
-  native sub-issue order is never used, because nothing populates native dependencies.
+- Slices are in the orchestrator's own build order — topological over the **union** of
+  GitHub's native `blockedBy` edges and the body's `## Blocked by` refs, so a spec
+  declaring its dependencies either way (or half each) builds in one correct sequence.
+  The native sub-issue *priority* order is never used. A blocker in another repository
+  is named on the row rather than ordered on, since issue numbers are per-repo.
   Each state is its issue state plus its `agent:*` label — nothing else. A slice in a
   dependency cycle is shown as blocked rather than silently dropped.
 - **States are colour-coded on a terminal**, with `agent:blocked` in bold red because it

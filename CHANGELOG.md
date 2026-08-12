@@ -25,6 +25,20 @@ version without editing their workflow on every release.
 - Add `--watch` to the status view: it redraws in place every 30 seconds
   (`--interval <seconds>` to change it, 5s floor) on its own screen, leaving the
   scrollback intact on ctrl-c. A redraw only — no key bindings and no input loop.
+- Order slices by the **union** of GitHub's native `blockedBy` edges and the body's
+  `## Blocked by` refs, rather than by the body alone. A spec declaring dependencies
+  natively, textually, or half each builds in one correct sequence, so adopting native
+  dependencies is gradual and per-repo. The union is not the `native ?? textual`
+  fallback membership uses: blockers are a set, and over-blocking shows up as a
+  deadlocked row while under-blocking silently builds on a dependency that has not
+  landed. Everything that computes a build order reads it: the status view and the
+  orchestrator, unattended and attended. (The `implement` blocked-by guard still parses
+  the body alone.) A native blocker in another repository is left out of the order —
+  issue numbers are per-repo — and named instead, on the status view's row and in the
+  spec's progress comment. The native edges ride the issue-list read every consumer
+  already makes, so this costs no request per slice; a `gh` older than 2.94 does not
+  serve them and now fails the read rather than the orchestrator quietly ordering on
+  half the edges.
 - Record the design in ADR-0007 and add *status view* and *spec tree* to the
   glossary.
 

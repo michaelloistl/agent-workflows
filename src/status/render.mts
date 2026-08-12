@@ -99,10 +99,16 @@ function sliceRow(slice: SliceNode): Row {
   // A cycle IS blocked as far as the row is concerned — same marker, same colour — so it
   // becomes that state once, here, and only the state TEXT names the cause.
   const state: SliceState = cycled ? "blocked" : slice.state;
+  // A blocker in another repository is not in this build order at all — nothing here will
+  // ever close it — so the row names it rather than reading as plain `pending`. Qualified
+  // with its repo, since a bare `#12` would be read as this repo's.
+  const foreign = slice.foreignBlockers.length
+    ? ` · waits on ${slice.foreignBlockers.join(", ")}`
+    : "";
   return {
     prefix: `  ${MARKER[state]} #${slice.number}`,
     title: truncate(slice.title),
-    state: cycled ? "blocked (dependency cycle)" : STATE_TEXT[state],
+    state: `${cycled ? "blocked (dependency cycle)" : STATE_TEXT[state]}${foreign}`,
     url: slice.url,
     tone: state,
   };

@@ -4,16 +4,32 @@
 // Linear repo swaps this module for its own behind the same hook names.
 
 import { capture } from "./process.mts";
-import type { IssueRecord } from "./spec-tree.mts";
+import type { BlockerRef, IssueRecord } from "./spec-tree.mts";
 
 export interface RawIssue {
   number: number;
   body: string;
   state: "OPEN" | "CLOSED";
+  // Carried for the dependency union (issue #99), not for display: `url` says which repo
+  // this issue's numbers belong to, and `blockedBy` is the native arm of the union.
+  url: string;
+  blockedBy: readonly BlockerRef[];
 }
 
-// Every issue in the repo (open and closed), with body and state — the input the
-// hooks feed to `spec-graph` to discover a spec's tracer-bullets and which are done.
+// `gh`'s shape for a native dependency edge: a whole issue node per blocker. Only the
+// number and the URL cross this boundary.
+interface RawBlockedBy {
+  blockedBy: { nodes: Array<{ number: number; url: string }> } | null;
+}
+
+function toBlockers(raw: RawBlockedBy): BlockerRef[] {
+  return (raw.blockedBy?.nodes ?? []).map(({ number, url }) => ({ number, url }));
+}
+
+// Every issue in the repo (open and closed), with body, state and dependency edges —
+// the input the hooks feed to `spec-graph` to discover a spec's tracer-bullets, which
+// are done, and what gates what. `blockedBy` rides along on this one list read, so
+// native ordering costs no request per slice.
 export function listIssues(): RawIssue[] {
   const json = capture("gh", [
     "issue",
@@ -23,26 +39,34 @@ export function listIssues(): RawIssue[] {
     "--limit",
     "500",
     "--json",
-    "number,body,state",
+    "number,body,state,url,blockedBy",
   ]);
-  return JSON.parse(json) as RawIssue[];
+  return (JSON.parse(json) as Array<Omit<RawIssue, "blockedBy"> & RawBlockedBy>).map((raw) => ({
+    ...raw,
+    blockedBy: toBlockers(raw),
+  }));
 }
 
-// The `--json` fields an `IssueRecord` needs from `gh`. `parent` is the NATIVE
-// sub-issue edge (gh 2.94+); it is null in a repo that has not adopted the hierarchy,
-// which is exactly when `resolveParent` falls back to the body.
-const RECORD_FIELDS = "number,title,body,state,labels,url,parent";
+// The `--json` fields an `IssueRecord` needs from `gh`. `parent` and `blockedBy` are the
+// NATIVE edges (gh 2.94+); both are empty in a repo that has not adopted them, which is
+// exactly when `resolveParent` falls back to the body and `unionBlockers` reduces to it.
+const RECORD_FIELDS = "number,title,body,state,labels,url,parent,blockedBy";
 
 // `gh`'s shape for the fields above: labels are objects and `parent` is a whole issue,
 // but only the label NAMES and the parent NUMBER cross this boundary — nothing
 // downstream can reach for a colour, an id, or a parent's body.
-interface RawRecord extends Omit<IssueRecord, "labels" | "parent"> {
+interface RawRecord extends Omit<IssueRecord, "labels" | "parent" | "blockedBy">, RawBlockedBy {
   labels: Array<{ name: string }>;
   parent: { number: number } | null;
 }
 
 function toRecord(raw: RawRecord): IssueRecord {
-  return { ...raw, labels: raw.labels.map((l) => l.name), parent: raw.parent?.number ?? null };
+  return {
+    ...raw,
+    labels: raw.labels.map((l) => l.name),
+    parent: raw.parent?.number ?? null,
+    blockedBy: toBlockers(raw),
+  };
 }
 
 // Every issue with the fields the STATUS VIEW renders — title, labels, URL and native
@@ -95,10 +119,14 @@ interface RestIssue {
   html_url: string;
   // Present only when the payload is really a PR — which is never a tracer-bullet.
   pull_request?: unknown;
+  // REST's dependency projection: counts, no edges. Absent on an older host.
+  issue_dependencies_summary?: { blocked_by: number };
 }
 
 // `parent` is the caller's to supply: REST carries no parent edge, so only an endpoint
-// that IS the edge (`sub_issues`) knows one.
+// that IS the edge (`sub_issues`) knows one. Dependency edges are left UNSET rather than
+// empty — REST serves a blocker count and no edges, so this read has nothing to say about
+// them and the gatherer takes them from the issue-list read instead.
 function fromRest(issue: RestIssue, parent: number | null): IssueRecord {
   return {
     number: issue.number,
@@ -109,6 +137,9 @@ function fromRest(issue: RestIssue, parent: number | null): IssueRecord {
     labels: issue.labels.map((l) => l.name),
     url: issue.html_url,
     parent,
+    // The edges themselves stay unset; the count is what says whether that silence means
+    // "none declared" or "this read cannot see them" (issue #99).
+    blockedByCount: issue.issue_dependencies_summary?.blocked_by ?? 0,
   };
 }
 

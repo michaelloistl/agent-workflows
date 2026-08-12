@@ -67,6 +67,7 @@ import { join } from "node:path";
 import { resolveConfig } from "../shared/config.mts";
 import { listIssues, remoteBranches, issueLabels, type RawIssue } from "../shared/spec-tracker.mts";
 import { tracerBullets } from "../shared/spec-graph.mts";
+import { DEPENDENCY_EDGES } from "../shared/spec-tree.mts";
 import { specStep, type SpecAction } from "../shared/spec-step.mts";
 import { renderProgress } from "../shared/spec-report.mts";
 import { awaitChecks } from "../shared/poll-checks.mts";
@@ -311,7 +312,8 @@ const specTitle = JSON.parse(
 ).title as string;
 const specBranch = `agent/spec-${specNum}-${slugify(specTitle)}`;
 const issues0 = listIssues();
-const bullets0 = tracerBullets(specNum, issues0);
+// The same edge rules as the unattended orchestrator (#99).
+const bullets0 = tracerBullets(specNum, issues0, DEPENDENCY_EDGES);
 const { order, deadlocked } = resolveOrder(bullets0);
 
 const plan: SpecPlan = { spec: specNum, specBranch, base, order, deadlocked, dryRun };
@@ -600,7 +602,7 @@ async function drive(): Promise<never> {
     }
 
     const issuesN = listIssues();
-    const bulletsN = tracerBullets(specNum, issuesN);
+    const bulletsN = tracerBullets(specNum, issuesN, DEPENDENCY_EDGES);
     const closedN = closedSet(issuesN);
     if (lastMerged !== null) closedN.add(lastMerged);
 

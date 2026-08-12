@@ -6,6 +6,7 @@
 import { required, capture } from "../shared/process.mts";
 import { addLabel, removeLabel, comment } from "../shared/github.mts";
 import { tracerBullets } from "../shared/spec-graph.mts";
+import { DEPENDENCY_EDGES } from "../shared/spec-tree.mts";
 import { specStep } from "../shared/spec-step.mts";
 import { renderProgress } from "../shared/spec-report.mts";
 import { listIssues } from "../shared/spec-tracker.mts";
@@ -33,7 +34,9 @@ capture("git", ["push", "-u", "origin", branch]);
 
 // 2. Discover + order the tracer-bullets, and which are already closed.
 const issues = listIssues();
-const bullets = tracerBullets(spec, issues);
+// Membership stays textual — nothing writes native parents yet — while the dependency
+// edges are the shared union rule (#99).
+const bullets = tracerBullets(spec, issues, DEPENDENCY_EDGES);
 const closed = new Set(
   issues.filter((i) => i.state === "CLOSED").map((i) => i.number),
 );

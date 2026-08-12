@@ -9,6 +9,7 @@ function slice(over: Partial<SliceNode> & { number: number }): SliceNode {
     url: `https://github.com/o/r/issues/${over.number}`,
     state: "pending",
     cycle: false,
+    foreignBlockers: [],
     ...over,
   };
 }
@@ -146,6 +147,29 @@ test("a closed slice is done even when it sits in a cycle", () => {
   });
   assert.match(out, /^ *✓ #95 .*\bdone\b/m);
   assert.doesNotMatch(out, /dependency cycle/);
+});
+
+// A native blocker in another repository is left out of the ordering, because its number
+// means nothing in this repo (issue #99). The row has to say so: a slice waiting on
+// another repo is waiting on something no local close will ever clear, and unstated it
+// looks merely pending.
+test("a blocker in another repository is named on the row it holds up", () => {
+  const out = renderStatus({
+    repo: "o/r",
+    specs: [
+      spec({
+        number: 94,
+        slices: [slice({ number: 95, foreignBlockers: ["other/repo#12"] })],
+      }),
+    ],
+  });
+  const row = rowFor(out, 95);
+  assert.match(row, /pending/);
+  assert.match(row, /other\/repo#12/);
+});
+
+test("a slice with no foreign blockers says nothing about them", () => {
+  assert.doesNotMatch(renderStatus(VIEW), /waits on/);
 });
 
 test("every row carries its issue URL so the terminal can linkify it", () => {
