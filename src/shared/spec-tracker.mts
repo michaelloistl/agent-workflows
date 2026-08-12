@@ -4,6 +4,7 @@
 // Linear repo swaps this module for its own behind the same hook names.
 
 import { capture } from "./process.mts";
+import type { IssueRecord } from "./spec-tree.mts";
 
 export interface RawIssue {
   number: number;
@@ -25,6 +26,28 @@ export function listIssues(): RawIssue[] {
     "number,body,state",
   ]);
   return JSON.parse(json) as RawIssue[];
+}
+
+// Every issue with the fields the STATUS VIEW renders — title, labels and URL on top of
+// what `listIssues` returns. A separate call rather than a widened `listIssues`, because
+// the orchestrator's hooks need none of it and pay for every extra field on a 500-issue
+// fetch. Labels come back as objects; only the names cross this boundary, so nothing
+// downstream can reach for a colour or an id.
+export function listIssueRecords(): IssueRecord[] {
+  const json = capture("gh", [
+    "issue",
+    "list",
+    "--state",
+    "all",
+    "--limit",
+    "500",
+    "--json",
+    "number,title,body,state,labels,url",
+  ]);
+  const raw = JSON.parse(json) as Array<
+    Omit<IssueRecord, "labels"> & { labels: Array<{ name: string }> }
+  >;
+  return raw.map((i) => ({ ...i, labels: i.labels.map((l) => l.name) }));
 }
 
 // The label names on one issue. The read behind the local-run marker

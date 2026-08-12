@@ -31,6 +31,6 @@ export function issueNumberFromBranch(ref: string): number | null {
 // The live spec branch for `spec` among `branchNames` (the repo's heads), or null
 // when none exists. Used by `implement`'s fetch-spec to derive a tracer-bullet's
 // base — the spec branch when its parent spec has one, else the default branch.
-export function pickSpecBranch(spec: number, branchNames: string[]): string | null {
+export function pickSpecBranch(spec: number, branchNames: readonly string[]): string | null {
   return branchNames.find((name) => specNumberFromBranch(name) === spec) ?? null;
 }

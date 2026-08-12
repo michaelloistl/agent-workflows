@@ -8,6 +8,12 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Add the status view: `agent-workflows status` (`yarn agent:status`) prints the
+  specs currently building in the repo you are standing in, with their
+  tracer-bullets, build order, and per-slice state. Read-only and one-shot.
+- Record the design in ADR-0007 and add *status view* and *spec tree* to the
+  glossary.
+
 ## v1.2.2 — 2026-08-11
 
 - Fix attended-run defects surfaced by the spec-loop dogfood, so a locally

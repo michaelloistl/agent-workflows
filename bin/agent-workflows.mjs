@@ -78,6 +78,10 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
 export function classifyInvocation(args) {
   const [verb, second, ...rest] = args;
   if (!verb) return { kind: "usage" };
+  // `status` is not a verb (issue #95): it runs no agent and follows no hook contract,
+  // so it never reaches the (verb, hook) table. Classified before everything else
+  // because its own flags would otherwise be read as hook names.
+  if (verb === "status") return { kind: "status", args: args.slice(1) };
   if (second === undefined) return { kind: "verb", verb };
   if (second === "--guards-only") return { kind: "verb", verb, guardsOnly: true };
   if (/^\d+$/.test(second)) {
@@ -188,11 +192,33 @@ function runSpecLoop(spec, execute, dryRun, force, noPause, interactive, stop) {
   process.exit(child.status ?? 1);
 }
 
+// Print the status view: spawn its entry point under tsx. Read-only — it takes no
+// worktree, no lock, and no marker, because it changes nothing (ADR-0007).
+function runStatusView(args) {
+  const runner = fileURLToPath(new URL("../src/status/run.mts", import.meta.url));
+  const require = createRequire(import.meta.url);
+  const tsxCli = require.resolve("tsx/cli");
+
+  const child = spawnSync(process.execPath, [tsxCli, runner, ...args], {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (child.error) {
+    console.error("agent-workflows: failed to run the status view:", child.error);
+    process.exit(1);
+  }
+  process.exit(child.status ?? 1);
+}
+
 function main() {
   const invocation = classifyInvocation(process.argv.slice(2));
   if (invocation.kind === "usage") {
     console.error("usage: agent-workflows <verb> [hook | issue-number] [args...]");
     process.exit(2);
+  }
+  if (invocation.kind === "status") {
+    runStatusView(invocation.args);
+    return;
   }
   if (invocation.kind === "verb") {
     runVerb(invocation.verb, invocation.guardsOnly);

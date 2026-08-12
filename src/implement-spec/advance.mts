@@ -72,7 +72,7 @@ if (action.type === "run-slice") {
   openFinalPr(spec, baseRef);
 }
 
-// 5. Refresh the dashboard on the spec issue.
+// 5. Refresh the progress comment on the spec issue.
 comment("issue", String(spec), renderProgress({ branch: baseRef, bullets, closed, dispatched: next }));
 
 console.log(

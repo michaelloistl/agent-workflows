@@ -16,6 +16,7 @@
     "agent:explore": "node bin/agent-workflows.mjs explore",
     "agent:implement": "node bin/agent-workflows.mjs implement",
     "agent:implement-spec": "node bin/agent-workflows.mjs implement-spec",
+    "agent:status": "node bin/agent-workflows.mjs status",
     "sandcastle:explore-sequence": "node bin/agent-workflows.mjs explore",
     "sandcastle:explore": "node bin/agent-workflows.mjs explore run",
     "sandcastle:explore-guards": "node bin/agent-workflows.mjs explore guards",

@@ -39,7 +39,10 @@ export function blockedByRefs(body: string): number[] {
 
 // The tracer-bullets of `spec`: the candidates whose `## Parent` references it,
 // with their in-section blocked-by edges. Order follows the input.
-export function tracerBullets(spec: number, candidates: IssueInput[]): TracerBullet[] {
+export function tracerBullets(
+  spec: number,
+  candidates: readonly IssueInput[],
+): TracerBullet[] {
   return candidates
     .filter((c) => parentRef(c.body) === spec)
     .map((c) => ({ number: c.number, blockedBy: blockedByRefs(c.body) }));
@@ -48,7 +51,7 @@ export function tracerBullets(spec: number, candidates: IssueInput[]): TracerBul
 // The next single tracer-bullet to dispatch: the lowest-numbered slice not yet in
 // `closed` whose in-set blockers are all closed. null when none is ready (the spec
 // is complete, or the remaining slices are deadlocked).
-export function nextSlice(bullets: TracerBullet[], closed: Set<number>): number | null {
+export function nextSlice(bullets: readonly TracerBullet[], closed: Set<number>): number | null {
   const members = new Set(bullets.map((b) => b.number));
   const ready = bullets
     .filter((b) => !closed.has(b.number))
@@ -61,13 +64,13 @@ export function nextSlice(bullets: TracerBullet[], closed: Set<number>): number 
 }
 
 // True when every tracer-bullet is closed.
-export function isComplete(bullets: TracerBullet[], closed: Set<number>): boolean {
+export function isComplete(bullets: readonly TracerBullet[], closed: Set<number>): boolean {
   return bullets.every((b) => closed.has(b.number));
 }
 
 // The strict topological build order — `nextSlice` applied repeatedly. Stops if
 // the remaining slices deadlock (so a cycle yields a partial order, never a hang).
-export function topologicalOrder(bullets: TracerBullet[]): number[] {
+export function topologicalOrder(bullets: readonly TracerBullet[]): number[] {
   const order: number[] = [];
   const closed = new Set<number>();
   for (let next = nextSlice(bullets, closed); next !== null; next = nextSlice(bullets, closed)) {
@@ -75,4 +78,21 @@ export function topologicalOrder(bullets: TracerBullet[]): number[] {
     closed.add(next);
   }
   return order;
+}
+
+// The build order plus what it could not reach: the slices left out are in a
+// dependency cycle, so the orchestrator will never dispatch them. Every surface that
+// shows a spec's slices needs both halves — the progress comment and the status view
+// each render the leftovers rather than silently dropping them — so the split lives
+// here, in the brain, and not once per renderer. `deadlocked` keeps the input's order.
+export interface BuildOrder {
+  readonly ordered: number[];
+  readonly deadlocked: number[];
+}
+
+export function orderWithDeadlocked(bullets: readonly TracerBullet[]): BuildOrder {
+  const ordered = topologicalOrder(bullets);
+  const inOrder = new Set(ordered);
+  const deadlocked = bullets.filter((b) => !inOrder.has(b.number)).map((b) => b.number);
+  return { ordered, deadlocked };
 }

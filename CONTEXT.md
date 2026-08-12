@@ -76,7 +76,7 @@ The orchestrator runs **one tracer-bullet at a time** in topological (dependency
 The orchestrator's opening move: create the spec branch, then start the topologically-first tracer-bullet. Unattended it is fired by labelling the spec issue and starts the slice by labelling it; attended it is the first turn of the *slice loop*. The spec is identified **structurally** — it has tracer-bullets and no `## Parent` of its own — not by a title prefix or a `spec` label. `/to-spec` adds only a `ready-for-agent` triage label — which tracer-bullets carry too — so no label distinguishes a spec from its slices.
 
 **Advance**:
-What happens once a tracer-bullet PR has merged into a spec branch: close that tracer-bullet issue (merging into a non-default base does **not** auto-close it), recompute the slice set live, then start the next single tracer-bullet in topological order (ties broken deterministically) — and when the last one closes, open the final spec→default PR. Posts a progress comment on the spec issue so it reads as the dashboard. Unattended it is fired by the merge and starts the next slice by labelling it; attended it is one turn of the *slice loop*. The **decision** of which slice comes next is shared; only how that slice is started differs.
+What happens once a tracer-bullet PR has merged into a spec branch: close that tracer-bullet issue (merging into a non-default base does **not** auto-close it), recompute the slice set live, then start the next single tracer-bullet in topological order (ties broken deterministically) — and when the last one closes, open the final spec→default PR. Posts a *progress comment* on the spec issue. Unattended it is fired by the merge and starts the next slice by labelling it; attended it is one turn of the *slice loop*. The **decision** of which slice comes next is shared; only how that slice is started differs.
 
 **Slice loop**:
 The attended form of spec orchestration: a loop that picks the next tracer-bullet, builds it, merges it, advances, and repeats — rather than each step being fired by an event. Same decisions, same per-slice PRs, same gates, same resulting history; what disappears is labelling-as-dispatch, which exists only because an unattended run needs a transport. Halts on a failed slice rather than skipping it, because every later slice assumes the earlier ones landed.
@@ -88,13 +88,26 @@ Picking up an interrupted spec where it stopped. State is derived entirely from 
 **Slice merge**:
 Under a spec a tracer-bullet skips per-slice review (ADR-0004): `implement`'s finalize opens a ready PR to the spec branch (detected via `base.ref ~ agent/spec-*`) and merges it straight in, which fires advance. The per-slice quality gate is the implement agent's own test loop; the single human gate is the final spec→default PR. (An earlier design ran a per-slice `review-pr`→`implement-pr` loop here — dropped because `review-pr` emits only advisory `COMMENT`s, with no approve/request-changes verdict to drive on; see ADR-0004.)
 
+**Progress comment**:
+The checkbox rollup the orchestrator posts on the *spec* issue at every kickoff and advance (`spec-report.mts`) — the slices in topological order, which are closed, which is building. It is what makes a spec readable to anyone who is not the person running it.
+_Avoid_: dashboard (that word now belongs to the *status view*), progress report
+
+### Observability
+
+**Status view**:
+The read-only terminal view of specs currently building and their tracer-bullets' states — `agent-workflows status`, a third entry point to the package alongside the workflow and local sequencers. Runs no agent, follows no hook contract, and writes nothing: a label write would be a dispatch. Reads GitHub only, scoped to the repo it is standing in. See ADR-0007.
+_Avoid_: dashboard (ambiguous while the *progress comment* was also called one), monitor, TUI
+
+**Spec tree**:
+The shared reader (`shared/spec-tree.mts`) that resolves a repo's specs and their tracer-bullets with states. Membership is the body's textual `## Parent`; ADR-0007 adds a **native-first** arm — GitHub's sub-issue `parent` when present, textual otherwise — so migration to native hierarchy is gradual and per-repo, and that arm is not built yet (issue #96). Ordering stays textual either way: native `blockedBy` exists as a feature but nothing populates it, so `## Blocked by` is the only source of dependency edges.
+
 ### Tracker
 
 **Tracker**:
 The system of record for the work an agent acts on — GitHub Issues or Linear. GitHub Issues always serve as the workflow *trigger* even when Linear is the tracker.
 
 **Tracker-agnostic**:
-The defining property of the central workflow: it performs zero tracker reads or writes and contains no `if: tracker == …` branch. All tracker I/O is behind hooks.
+The defining property of the central **workflow**: the YAML performs zero tracker reads or writes and contains no `if: tracker == …` branch. It is **not** a property of the package — since the hooks moved in, twenty-odd files under `src/` shell out to `gh`, and the *status view* reads the tracker too. The package ships GitHub as the **default** tracker and keeps it replaceable behind the hook and override seams; the workflow knows nothing either way.
 
 **Trigger label**:
 A human-applied `agent:<verb>` label on an issue or PR that starts a workflow.

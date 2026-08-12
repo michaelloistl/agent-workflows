@@ -1,0 +1,58 @@
+# A read-only terminal status view, piloting native issue hierarchy
+
+The fleet's only cross-cutting progress surface is the **progress comment** the orchestrator posts on each spec issue — readable, but only one spec at a time and only in a browser. This adds a third entry point to the package: `agent-workflows status`, a one-shot terminal view of the specs currently building and the state of each of their tracer-bullets. It is read-only, it reads GitHub and nothing else, and it deliberately reads the **native** parent/sub-issue hierarchy first — making it the zero-risk pilot for a migration the orchestrator will make later.
+
+## Status
+
+accepted
+
+## Context
+
+Running the fleet AFK means the interesting question is never "what is this run doing" — the Actions UI answers that — but "which of my specs is mid-flight, how far in, and is any of them stuck". Today that is assembled by hand from a spec issue's progress comment, the issue list's `agent:*` labels, and a PR list.
+
+Three properties of the existing code make a terminal view cheap. `spec-graph.mts` is already the pure brain (`tracerBullets`, `nextSlice`, `topologicalOrder`) with no `gh` in it. `resolveRepoSlug()` already infers the repo from the git remote. And `spec-report.mts` already renders essentially the view we want, just into markdown for a comment.
+
+One property of the tracker made it much cheaper still, and was discovered while designing this. GitHub's native sub-issue hierarchy is exposed through `gh` 2.94+ (`--json parent,blockedBy,blocking,issueType`) and the REST `sub_issues` endpoint — and in `madebyon/on-vantage` it is **already populated**, mirrored by the Linear sync. `gh api repos/madebyon/on-vantage/issues/1438/sub_issues` returns all five tracer-bullets with their states, including the closed one. Native `blockedBy`, by contrast, is empty everywhere: the feature exists, nothing writes it.
+
+That single fact removed the hardest problem in the design. Rendering a spec's finished slices needs issues that are no longer open, and scanning a 1,500-issue repo for them is not viable; the fallback under consideration was reading the last progress comment as a cache, with all the staleness that implies. The native endpoint returns them directly.
+
+## Decision
+
+**Scoped to specs, and to the repo you are standing in.** The view lists specs currently being built with their tracer-bullets nested beneath, and nothing else — no standalone issues, no un-parented agent PRs. Multi-repo aggregation and a flat remainder section are both plausible later additions and neither is built now; the structure keeps them additive.
+
+**A running spec carries no label, so discovery is by branch.** `kickoff.mts:51` removes `agent:implement-spec` the moment it fires, so filtering specs by `agent:*` matches exactly zero specs, always. The first design walked up from labelled slices to their parents instead; slicing the work revealed that this cannot reach a spec whose tracer-bullets have *all* closed — which is precisely the `awaiting final PR` state below, so the state and its discovery rule contradicted each other. Discovery is therefore **an open spec issue with a live `agent/spec-*` remote branch**: a branch exists only after kickoff, so that set is exactly the in-flight specs, and `remoteBranches()`/`specNumberFromBranch()`/`pickSpecBranch()` already exist. Labels are still read — for per-slice *state*, not for finding the spec. This needs no new label and no new convention.
+
+**No triage labels are read.** `ready-for-agent` here and `ready-for-afk` in `on-vantage` is real drift that `docs/agents/triage-labels.md` exists to absorb. Deriving membership structurally means the view never sees a triage label, so the drift cannot reach it and no config field is needed to paper over it.
+
+**Membership is native-first with a textual fallback; ordering stays textual.** A slice's parent resolves as `native parent ?? parentRef(body)`. (Sequencing note: the walking skeleton ships the textual arm alone and the native arm follows in #96 — the fallback is what makes that order safe, since the view is never empty in a repo the native read cannot see.) This makes migration gradual and per-repo rather than a flag day, and means the view is never silently empty in a repo that has not caught up. Ordering cannot follow: native `blockedBy` is unpopulated, so `## Blocked by` remains the only source of dependency edges and the view sorts with the same `topologicalOrder()` the orchestrator uses. The alternative — displaying the native sub-issue *priority* order — is rejected outright: a view whose "next" row disagrees with `nextSlice()` is worse than no view, because it is confidently wrong about the only thing anyone reads it for.
+
+**A spec is identified by having sub-issues**, `subIssuesSummary.total > 0`, unioned with the existing structural scan. `guards.mts:53` already issues this query. This preserves `CONTEXT.md`'s rule that a spec is recognised structurally rather than by a title prefix or a label — native hierarchy is structure, better typed.
+
+**The view is a pilot, so it shares a reader rather than owning one.** The union logic lands in a new `shared/spec-tree.mts` — given a repo, the specs and their slices with states — which the status view consumes now and the orchestrator migrates onto when native parents are written rather than merely read. A pilot running on its own private reader would prove nothing about the code that eventually matters.
+
+**Data is shared; rendering is not.** `spec-report.mts` keeps emitting markdown checkboxes for the progress comment; the status view gets its own terminal renderer with alignment, colour and `agent:*` states. One function serving both a comment body and an ANSI terminal makes both worse. This is the decide/dispatch split ADR-0006 credited in `advance.mts`, applied to output.
+
+**Read-only, one-shot, `--watch` to redraw.** No key applies a label, because a label write *is* a dispatch — one stray keypress would start a real, billed agent run — and because writing labels would put tracker semantics in a fourth place. Nor is there any key handling: a one-shot command has no input loop, so each row simply carries its issue URL for the terminal to make clickable. One-shot output first, before committing to a render loop, resize handling and input: the content has to be proven right before the surface is worth building. Fetch cost is one label-filtered issue list plus one `sub_issues` call per visible spec, so a 30s `--watch` interval is affordable against the rate limit.
+
+**Shipped as a dispatcher subcommand.** `agent-workflows status`, inside the package's `files:`, exposed as `yarn agent:status`. Since the view reads the repo it is standing in, shipping it to consuming repos is what makes it work in `on-vantage` at all.
+
+**Row states are labels and issue state only.** No PR or check-run join. A slice is `closed`, `open`, or its `agent:*` label, with `agent:blocked` rendered loudly because it is the one state meaning *stop and look*. Joining the building slice to its PR and checks would answer "why is it stuck" and is the most likely first extension; it is not in the first version.
+
+**A finished spec is kept visible.** A spec whose slices are all closed while its issue is open renders as `awaiting final PR` — the moment a spec needs a human must not be the moment it disappears. Branch-based discovery is what makes this reachable, and it also removes the gaps a label-driven rule would have had: under labels a spec would blink out during `advance` and during the CI-gate wait, which the first draft accepted as self-correcting. They now cost nothing to eliminate.
+
+## Considered alternatives
+
+- **`gh-dash`.** Sections are raw GitHub search filters, so multi-repo is free and keybindings can shell out to anything. Rejected as the primary surface for two structural reasons: a flat search query cannot express a parent→child rollup, and it cannot join an issue to its PR and checks into one row. Still worth a config as a cheap falsifier for the flat half of the problem, which this view deliberately does not cover.
+- **Reading the last progress comment as the source of closed slices.** Nearly free and already rendered. Rejected once native `sub_issues` proved to return them directly: the comment is a cache that goes stale between advances and is absent on a spec that has never advanced — lying exactly when a run is in trouble.
+- **Walking up from `agent:*`-labelled slices to their parents.** The original discovery rule, replaced during slicing: it cannot see a spec whose slices have all closed, so it contradicted `awaiting final PR`. The objection that sank branch-based discovery first time round — `spec-1198`'s branch outlives its issue, so the branch set contains ghosts — is answered by requiring the spec *issue* to be open, which excludes exactly those ghosts.
+- **Migrating the orchestrator to native parents first, then building the view against clean data.** Rejected as the wrong order of risk. The view is read-only; a misread renders a wrong list and nothing else — no branch, no merge, no agent run. Piloting the native edge here first is close to free, and a correct tree drawn from native data is the evidence the orchestrator migration needs.
+- **A persistent TUI.** Rejected for now: a much larger commitment to input handling and layout, taken before anyone knows whether the content is right.
+- **Multi-repo aggregation.** The one thing a browser genuinely cannot do, and still rejected for v1 — the spec rollup is the sharper product and it is what makes the view worth building at all.
+
+## Consequences
+
+- `CONTEXT.md` gains **status view** and **spec tree**, and the spec issue's rollup is renamed the **progress comment** — the name the code has always used (`renderProgress`, `spec-report.mts`), while only the prose called it a dashboard. That collision is resolved before two things share one word.
+- `CONTEXT.md`'s *Tracker-agnostic* entry is corrected. "Performs zero tracker reads or writes" is true of the reusable **workflow** and has been false of the **package** since the hooks moved into it — twenty files under `src/` shell out to `gh`. The status view is the third place this is true and the first that is not a hook, so the claim is restated rather than quietly broken again.
+- The package acquires a non-verb, non-orchestrator entry point. `status` runs no agent and follows no hook contract; like `implement-spec` it is reached through the dispatcher without being a sixth verb.
+- Two sources of truth for the spec graph coexist during migration — native parent and `## Parent` — and the union reader is the only place that knows. When `/to-tickets` starts writing native parents, the textual arm becomes dead weight rather than a second contract.
+- Native dependencies remain unwritten. Until something populates `blockedBy`, ordering keeps a body parse, and any future "migrate to native hierarchy" work is two jobs, not one.

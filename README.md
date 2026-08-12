@@ -21,6 +21,7 @@ commands emit. See [Authoring spec issues](#authoring-spec-issues) for the contr
 - [Labels](#labels)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Status view](#status-view)
 - [Inputs](#inputs)
 - [Secrets](#secrets)
 - [Repo layout](#repo-layout)
@@ -505,6 +506,37 @@ jobs:
     secrets: inherit
 ```
 
+## Status view
+
+`agent-workflows status` prints the specs currently building in the repo you are
+standing in, with their tracer-bullets nested beneath (ADR-0007):
+
+```sh
+yarn agent:status          # or: agent-workflows status
+```
+
+```
+madebyon/on-vantage — 2 specs in flight
+
+#1438      Spec: Default views in platform          2/5 · building           https://github.com/…/1438
+  ✓ #1519  Prefactor: extract Project-type filter…  done                     https://github.com/…/1519
+  ▸ #1521  Tag Retainer and internal Projects       building                 https://github.com/…/1521
+    #1522  Replace Retainer and internal toggles    pending                  https://github.com/…/1522
+
+#1485      Spec: Port the Utilization report        5/5 · awaiting final PR  https://github.com/…/1485
+```
+
+- **In flight** means an **open** spec issue with a live `agent/spec-*` branch — a
+  branch exists only after kickoff, and requiring the issue to be open excludes the
+  ghost branches a finished spec leaves behind. No label is involved: kickoff retires
+  `agent:implement-spec` immediately, so no label marks a running spec.
+- Slices are in the orchestrator's own build order (`## Blocked by`, topological), and
+  each state is its issue state plus its `agent:*` label — nothing else. A slice in a
+  dependency cycle is shown as blocked rather than silently dropped.
+- It is **read-only and one-shot**. It runs no agent and writes nothing — a label
+  write would be a dispatch, i.e. a real, billed agent run.
+- The repo comes from `GH_REPO` or the checkout's `origin` remote; no argument.
+
 ## Inputs
 
 The five verbs share the same inputs:
@@ -554,13 +586,17 @@ Pass with `secrets: inherit`.
   `agent-workflows` package. Consuming GitHub repos install it as a git
   dependency; a Linear repo swaps the adapter (packaged separately, #33).
 - **`bin/agent-workflows.mjs`** — the dispatcher: maps `<verb> <hook>` to a
-  `src/` entrypoint (override-first) and runs it under `tsx`.
+  `src/` entrypoint (override-first) and runs it under `tsx`. Also routes the
+  non-verb entry points: the attended local runs and `status`.
+- **`src/status/`** — the read-only [status view](#status-view), over the shared
+  spec-tree reader (`src/shared/spec-tree.mts`).
 - **`docs/hook-contract.md`** — the interface every consuming repo implements.
 - **`CONTEXT.md`** — glossary. **`PLAN.md`** — build plan + rollout.
   **[`CHANGELOG.md`](CHANGELOG.md)** — notable changes per release.
   **`docs/adr/`** — architecture decisions (0001 thin reusable workflows; 0002
   toolchain generalization + feedback-loop boundary; 0003 spec strictly
-  sequential; 0004 no per-slice review).
+  sequential; 0004 no per-slice review; 0005 one sequencer, two entry points;
+  0006 attended spec runs; 0007 the status view).
 
 ## Local checks
 
