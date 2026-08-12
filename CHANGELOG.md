@@ -22,6 +22,9 @@ version without editing their workflow on every release.
   red. Colour is emitted only when stdout is a TTY — piping or redirecting the view
   gives clean text — and `--no-color` (or `--no-colour`) suppresses it on a terminal
   too.
+- Add `--watch` to the status view: it redraws in place every 30 seconds
+  (`--interval <seconds>` to change it, 5s floor) on its own screen, leaving the
+  scrollback intact on ctrl-c. A redraw only — no key bindings and no input loop.
 - Record the design in ADR-0007 and add *status view* and *spec tree* to the
   glossary.
 

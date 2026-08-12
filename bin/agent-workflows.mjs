@@ -21,7 +21,7 @@
 // This file is plain ESM JavaScript on purpose: it must start under bare `node`
 // (it is the thing that bootstraps tsx), so it cannot itself be TypeScript.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -194,20 +194,33 @@ function runSpecLoop(spec, execute, dryRun, force, noPause, interactive, stop) {
 
 // Print the status view: spawn its entry point under tsx. Read-only — it takes no
 // worktree, no lock, and no marker, because it changes nothing (ADR-0007).
+//
+// Spawned ASYNCHRONOUSLY, unlike every other runner here, because `--watch` can be
+// interrupted: `spawnSync` blocks the event loop, so this process could not forward the
+// signal and would die first, orphaning a watch that owns the terminal. A tty sends
+// SIGINT to the whole process group and would reach the child anyway; a supervisor
+// signalling this pid alone would not, and the child restores the screen on its way out.
 function runStatusView(args) {
   const runner = fileURLToPath(new URL("../src/status/run.mts", import.meta.url));
   const require = createRequire(import.meta.url);
   const tsxCli = require.resolve("tsx/cli");
 
-  const child = spawnSync(process.execPath, [tsxCli, runner, ...args], {
+  const child = spawn(process.execPath, [tsxCli, runner, ...args], {
     stdio: "inherit",
     env: process.env,
   });
-  if (child.error) {
-    console.error("agent-workflows: failed to run the status view:", child.error);
-    process.exit(1);
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    // Let the child unwind on its own: it exits by itself, and this process follows it
+    // out through the `exit` handler below.
+    process.on(signal, () => child.kill(signal));
   }
-  process.exit(child.status ?? 1);
+  child.on("error", (error) => {
+    console.error("agent-workflows: failed to run the status view:", error);
+    process.exit(1);
+  });
+  // A child killed by a signal reports a null code; the watch treats its own interrupt
+  // as an ordinary end, so this does too.
+  child.on("exit", (code, signal) => process.exit(code ?? (signal ? 0 : 1)));
 }
 
 function main() {
