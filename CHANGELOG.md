@@ -8,6 +8,8 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+## v1.3.0 — 2026-08-12
+
 - Add `--yes` to the attended spec loop: it pre-accepts the preview prompt so a run
   can start with nothing at the terminal to answer it (a launcher script, an
   unattended resume). The preview is still printed in full and the run logs which
