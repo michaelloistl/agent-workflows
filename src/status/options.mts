@@ -167,8 +167,11 @@ export function parseStatusArgs(
   if (forced && suppressed) {
     return refuse(`${HYPERLINKS} and ${NO_HYPERLINKS} contradict each other — pass one or the other.`);
   }
-  // Forcing links into a pipe would emit escapes AND drop the URL column, so redirected
-  // output would lose the only way left to reach the issue. Downwards-only still holds.
+  // The two flags are deliberately asymmetric off a terminal, and that is a decision rather
+  // than an oversight. DOWNWARDS is always safe: `--no-hyperlinks` in a pipe only withholds
+  // an escape a pipe never wanted, so it is a harmless no-op. UPWARDS is not: `--hyperlinks`
+  // would emit escapes AND drop the URL column, leaving redirected output with no reachable
+  // target at all. So the one that can lose information is named rather than swallowed.
   if (forced && !isTTY) {
     return refuse(
       `${HYPERLINKS} needs a terminal — stdout here is not one, and in redirected output the URL column is what carries the link.`,

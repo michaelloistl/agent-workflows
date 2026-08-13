@@ -98,6 +98,14 @@ test("--no-hyperlinks inside Herdr is harmless, where they were already off", ()
   assert.equal(options(["--no-hyperlinks"], true, HERDR).hyperlinks, false);
 });
 
+// Asserted together, because the asymmetry is the decision: overriding DOWN off a terminal
+// withholds an escape a pipe never wanted, while overriding UP would emit escapes and drop
+// the URL column, leaving redirected output with nothing to reach the issue by.
+test("off a terminal the override is a no-op downwards and a refusal upwards", () => {
+  assert.equal(options(["--no-hyperlinks"], false).hyperlinks, false);
+  assert.equal(parseStatusArgs(["--hyperlinks"], false, {}).ok, false);
+});
+
 test("--no-color suppresses colour even on a terminal", () => {
   assert.equal(options(["--no-color"], true).colour, false);
 });
