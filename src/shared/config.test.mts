@@ -11,6 +11,7 @@ import {
   resolveWorktreeRoot,
   resolveBootstrap,
   resolveRunCeiling,
+  resolveFinalPrReview,
   resolveConfig,
   effectiveBase,
   DEFAULT_AGENT_MODEL,
@@ -161,6 +162,45 @@ test("resolveRunCeiling ignores non-positive and non-numeric limits (a fat-finge
   assert.deepEqual(resolveRunCeiling({ env: { RUN_CEILING_MAX_SLICES: "nope" }, file: {} }), {});
 });
 
+// Whether the orchestrator labels the final spec→default PR for review when it
+// opens it (issue #114). The FIRST boolean the resolver holds, so the rule for
+// "off" is explicit: only a real `false` in the file and only the exact string
+// `"false"` in the env disable it; a mistyped value falls through to on, because a
+// typo must never silently remove a review a repo relies on. Default on.
+test("resolveFinalPrReview: on by default, off only on an explicit false", () => {
+  // Default — no env, no file — is on. A repo with no config file gets the label.
+  assert.equal(resolveFinalPrReview({ env: {}, file: {} }), true);
+  // A real boolean false in the file disables it.
+  assert.equal(resolveFinalPrReview({ env: {}, file: { finalPrReview: false } }), false);
+  // The exact string "false" in the env disables it.
+  assert.equal(resolveFinalPrReview({ env: { FINAL_PR_REVIEW: "false" }, file: {} }), false);
+});
+
+test("resolveFinalPrReview: the env override beats the file in both directions", () => {
+  // Env off beats file on.
+  assert.equal(
+    resolveFinalPrReview({ env: { FINAL_PR_REVIEW: "false" }, file: { finalPrReview: true } }),
+    false,
+  );
+  // Env on beats file off.
+  assert.equal(
+    resolveFinalPrReview({ env: { FINAL_PR_REVIEW: "true" }, file: { finalPrReview: false } }),
+    true,
+  );
+});
+
+test("resolveFinalPrReview: only an explicit false disables — a typo leaves it on", () => {
+  // A non-boolean in the file is not `false`, so it stays on.
+  assert.equal(
+    resolveFinalPrReview({ env: {}, file: { finalPrReview: "no" as unknown as boolean } }),
+    true,
+  );
+  // A mistyped env string is not the exact "false", so it stays on.
+  assert.equal(resolveFinalPrReview({ env: { FINAL_PR_REVIEW: "flase" }, file: {} }), true);
+  // An empty env value is treated as unset and falls through to the file/default.
+  assert.equal(resolveFinalPrReview({ env: { FINAL_PR_REVIEW: "" }, file: {} }), true);
+});
+
 test("resolveConfig combines the resolvers over env and file", () => {
   const cfg = resolveConfig(
     { DEFAULT_BRANCH: "main", AGENT_MODEL: "", RUN_CEILING_MAX_SLICES: "3" },
@@ -173,4 +213,5 @@ test("resolveConfig combines the resolvers over env and file", () => {
   assert.equal(cfg.worktreeRoot, DEFAULT_WORKTREE_ROOT);
   assert.equal(cfg.bootstrap, "yarn install");
   assert.deepEqual(cfg.runCeiling, { maxSlices: 3 });
+  assert.equal(cfg.finalPrReview, true);
 });
