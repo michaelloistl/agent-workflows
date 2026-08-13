@@ -7,6 +7,10 @@ export interface StatusOptions {
   // Whether the RENDERER should paint. Colour is a property of the output device, not
   // of the tree — so it is decided once, here, and passed down.
   readonly colour: boolean;
+  // Whether the RENDERER should link the issue reference and drop the URL column. A
+  // separate terminal capability from colour (Apple Terminal paints but ignores OSC 8), so
+  // it is decided on its own and neither flag implies the other.
+  readonly hyperlinks: boolean;
   // How often to redraw, or null for the one-shot render that is still the default.
   readonly watchIntervalMs: number | null;
 }
@@ -18,6 +22,10 @@ export type ParseResult =
 // Both spellings: the repo's prose is British, the CLI convention is not, and a user who
 // guesses the other one should not get an error about an unknown flag.
 const NO_COLOUR = ["--no-color", "--no-colour"];
+// The escape hatch for a terminal that paints but does not honour OSC 8 (Apple Terminal
+// prints the reference as plain, unclickable text). One spelling: unlike colour it has no
+// British variant to guess wrong.
+const NO_HYPERLINKS = "--no-hyperlinks";
 const WATCH = "--watch";
 const INTERVAL = "--interval";
 
@@ -68,10 +76,11 @@ function parseInterval(raw: string | undefined): { ms: number } | { message: str
   return { ms: seconds * 1000 };
 }
 
-// Colour is emitted only to a terminal, so piping the view to a file or another command
-// yields clean text with no escape sequences to strip; `--no-color` overrides that
-// downwards only, since nothing yet needs colour forced into a pipe. `--watch` turns the
-// single render into a redraw loop and is the only option that takes a value.
+// Colour and hyperlinks are each emitted only to a terminal, so piping the view to a file
+// or another command yields clean text with no escape sequences to strip; `--no-color` and
+// `--no-hyperlinks` each override their own capability downwards only, independently, since
+// nothing yet needs either forced into a pipe. `--watch` turns the single render into a
+// redraw loop and is the only option that takes a value.
 //
 // Nothing is silently ignored: an option the view does not have, or one that cannot mean
 // anything in the combination given, is refused with a message naming it.
@@ -79,6 +88,7 @@ export function parseStatusArgs(argv: readonly string[], isTTY: boolean): ParseR
   const args = argv.filter(Boolean);
 
   let colour = isTTY;
+  let hyperlinks = isTTY;
   let watch = false;
   let interval: number | null = null;
   const unknown: string[] = [];
@@ -90,6 +100,8 @@ export function parseStatusArgs(argv: readonly string[], isTTY: boolean): ParseR
     const arg = args[i]!;
     if (NO_COLOUR.includes(arg)) {
       colour = false;
+    } else if (arg === NO_HYPERLINKS) {
+      hyperlinks = false;
     } else if (arg === WATCH) {
       watch = true;
     } else if (arg === INTERVAL || arg.startsWith(`${INTERVAL}=`)) {
@@ -108,7 +120,7 @@ export function parseStatusArgs(argv: readonly string[], isTTY: boolean): ParseR
   // appearing to work.
   if (unknown.length > 0) {
     return refuse(
-      `unknown option(s): ${unknown.join(" ")} — the status view takes ${WATCH}, ${INTERVAL} <seconds> and ${NO_COLOUR[0]}.`,
+      `unknown option(s): ${unknown.join(" ")} — the status view takes ${WATCH}, ${INTERVAL} <seconds>, ${NO_COLOUR[0]} and ${NO_HYPERLINKS}.`,
     );
   }
   if (intervalError !== null) return refuse(intervalError);
@@ -125,6 +137,7 @@ export function parseStatusArgs(argv: readonly string[], isTTY: boolean): ParseR
     ok: true,
     options: {
       colour,
+      hyperlinks,
       watchIntervalMs: watch ? (interval ?? DEFAULT_INTERVAL_SECONDS * 1000) : null,
     },
   };
