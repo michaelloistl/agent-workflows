@@ -24,6 +24,7 @@ The toolchain is deliberately not abstracted that way. Every verb installs Node,
 - [Repo layout](#repo-layout)
 - [Local checks](#local-checks)
 - [Releasing](#releasing)
+- [License](#license)
 
 ## How it works
 
@@ -722,3 +723,7 @@ tag.** A git-dependency install records the *resolved commit* in the consumer's
 whose lockfile still pins the old one. `yarn upgrade agent-workflows` re-resolves
 `#v1` to the commit it now points at and rewrites the lockfile; until a consumer runs
 it (and commits the changed `yarn.lock`), they stay on the release they installed.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).

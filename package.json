@@ -3,6 +3,7 @@
   "version": "1.4.0",
   "private": true,
   "description": "Central reusable agent workflows — distributed to consuming repos as a git dependency exposing the agent-workflows hook dispatcher.",
+  "license": "MIT",
   "bin": {
     "agent-workflows": "bin/agent-workflows.mjs"
   },

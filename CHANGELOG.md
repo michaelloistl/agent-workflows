@@ -8,6 +8,13 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- License the project MIT. There was no `LICENSE` file and no `license` field, so default
+  copyright applied and the repo was readable but not legally usable: nobody could adopt
+  these workflows without permission, however public the code was. MIT matches
+  `mattpocock/skills`, which `implement-spec` is built to interoperate with. Adds
+  `LICENSE`, `"license": "MIT"` in `package.json`, and a License section in the README.
+  `"private": true` stays, since consumers install this as a git dependency and it only
+  guards against an accidental `npm publish`.
 - Rewrite the README opening around what a run does, and correct the scope of the
   agnosticism claim. The old text said the central YAML knows nothing about your "tracker,
   stack, or domain". Tracker and domain are true and hook-backed (ADR-0001); the stack is
