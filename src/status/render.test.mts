@@ -253,3 +253,91 @@ test("colour changes nothing but the escapes", () => {
   assert.equal(strip(renderStatus(EVERY_STATE, { colour: true })), renderStatus(EVERY_STATE));
   assert.equal(strip(renderStatus(VIEW, { colour: true })), renderStatus(VIEW));
 });
+
+// Hyperlinks (issue #105). The renderer is told whether to link, the same way it is told
+// whether to paint; `options.mts` decides it from the TTY. An OSC 8 hyperlink wraps the
+// text between an opening `\x1b]8;;URL\x1b\` and a closing `\x1b]8;;\x1b\`. As with the
+// colour escapes above, a `/g` copy carries `lastIndex` and a plain copy is what the
+// assertions use.
+const OSC8 = /\x1b\]8;;[^\x1b]*\x1b\\/g;
+const OSC8_ONE = /\x1b\]8;;[^\x1b]*\x1b\\/;
+const unlink = (text: string) => text.replace(OSC8, "");
+// The text a hyperlink to `url` wraps, or null if that url is linked nowhere in `out`.
+const linkedText = (out: string, url: string) => {
+  const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = new RegExp(`\\x1b\\]8;;${escaped}\\x1b\\\\([^\\x1b]*)\\x1b\\]8;;\\x1b\\\\`).exec(out);
+  return m ? m[1] : null;
+};
+// `rowFor` matches on a trailing space after the reference, which the closing hyperlink
+// escape displaces — so unlink first, then find the row.
+const linkedRowFor = (out: string, issue: number) => rowFor(unlink(out), issue);
+
+test("the issue reference is a hyperlink to the issue on every row", () => {
+  const out = renderStatus(VIEW, { hyperlinks: true });
+  for (const n of [94, 95, 96, 97]) {
+    assert.equal(
+      linkedText(out, `https://github.com/o/r/issues/${n}`),
+      `#${n}`,
+      `#${n} is the click target`,
+    );
+  }
+});
+
+test("the state marker sits outside the link, so only the reference is clickable", () => {
+  const out = renderStatus(VIEW, { hyperlinks: true });
+  // The building slice's marker precedes the opening hyperlink escape, with no ▸ inside it.
+  assert.match(out, /▸ \x1b\]8;;[^\x1b]*\x1b\\#96\x1b\]8;;\x1b\\/, "▸ before the link, #96 inside");
+});
+
+test("the trailing URL column is gone when hyperlinks are on", () => {
+  const out = renderStatus(VIEW, { hyperlinks: true });
+  // The URL rides the escape now, not a visible column: it never appears as plain text.
+  assert.doesNotMatch(unlink(out), /https:\/\//);
+});
+
+test("the URL column is printed with no escapes when hyperlinks are off", () => {
+  const out = renderStatus(VIEW, { hyperlinks: false });
+  assert.doesNotMatch(out, OSC8_ONE);
+  for (const n of [94, 95, 96, 97]) {
+    assert.match(out, new RegExp(`https://github\\.com/o/r/issues/${n}\\b`));
+  }
+});
+
+test("hyperlinks default off, so a piped view carries no OSC 8 escapes", () => {
+  assert.doesNotMatch(renderStatus(VIEW), OSC8_ONE);
+});
+
+// The single most likely regression: an OSC 8 sequence is zero-width on screen but many
+// characters to `String.length`, so linking after padding is what keeps the columns
+// aligned across rows whose titles differ in length.
+test("columns stay aligned with hyperlinks on, across differing title lengths", () => {
+  const out = renderStatus(
+    {
+      repo: "o/r",
+      specs: [
+        spec({
+          number: 94,
+          slices: [
+            slice({ number: 1, title: "x", state: "building" }),
+            slice({ number: 2, title: "y".repeat(40), state: "pending" }),
+          ],
+        }),
+      ],
+    },
+    { hyperlinks: true },
+  );
+  // With the escapes stripped the two slice rows are pure layout again, so their state
+  // columns must start at the same offset.
+  assert.equal(
+    unlink(linkedRowFor(out, 1)).indexOf("building"),
+    unlink(linkedRowFor(out, 2)).indexOf("pending"),
+  );
+});
+
+// A row can be both painted and linked: the colour wraps the whole prefix, the link wraps
+// only the reference inside it, and neither eats the other.
+test("a row is painted and linked at once", () => {
+  const out = renderStatus(VIEW, { colour: true, hyperlinks: true });
+  assert.equal(linkedText(out, "https://github.com/o/r/issues/96"), "#96", "still linked");
+  assert.ok(escapesOn(linkedRowFor(out, 96)).length > 0, "still painted");
+});

@@ -33,7 +33,7 @@ if (!parsed.ok) {
   console.error(`agent-workflows status: ${parsed.message}`);
   process.exit(2);
 }
-const { colour, watchIntervalMs } = parsed.options;
+const { colour, hyperlinks, watchIntervalMs } = parsed.options;
 
 // The repo you are standing in, from `GH_REPO` or the checkout's own origin remote —
 // no argument, because the view is scoped to the repo it runs in.
@@ -77,7 +77,7 @@ function view(): string {
     crossReferencedIssues: (spec) => crossReferencedIssues(repo, spec),
     allIssues: listIssueRecords,
   });
-  return renderStatus({ repo, specs: buildSpecTree(issues, branches) }, { colour });
+  return renderStatus({ repo, specs: buildSpecTree(issues, branches) }, { colour, hyperlinks });
 }
 
 if (watchIntervalMs === null) {
