@@ -28,8 +28,27 @@ const NO_COLOUR = ["--no-color", "--no-colour"];
 // prints the reference as plain, unclickable text). One spelling: unlike colour it has no
 // British variant to guess wrong.
 const NO_HYPERLINKS = "--no-hyperlinks";
+// The escape hatch in the OTHER direction, and what makes the Herdr default below safe to
+// hard-code: a multiplexer that gains working OSC 8 support must not leave this view stuck
+// with the URL column until the package ships a release.
+const HYPERLINKS = "--hyperlinks";
 const WATCH = "--watch";
 const INTERVAL = "--interval";
+
+// Herdr (a terminal multiplexer for coding agents) sets `HERDR_ENV=1` in every pane it
+// owns. Measured against Herdr 0.8.0 under Ghostty: an OSC 8 hyperlink inside a pane opens
+// on NEITHER route — not on ⌘-click, which Herdr receives and does not act on, nor on
+// ⌘-Shift-click, which bypasses Herdr's mouse capture and reaches the host terminal with no
+// hyperlink to find. Herdr's plain-URL clicking works on both routes, so inside Herdr the
+// URL column is a WORKING click target while the escape is an inert one. Hyperlinks
+// therefore default off here: the difference between a reachable row and a row carrying
+// neither a link nor a URL.
+//
+// This IS capability detection, which ADR-0007 rejected — but what it rejected was a table
+// of terminal NAMES that goes stale silently. This is one variable the tool sets itself, it
+// fails toward the URL column rather than toward a broken row, and `--hyperlinks` overrides
+// it the day Herdr fixes this. See the ADR amendment.
+const HERDR = "HERDR_ENV";
 
 // A tick now costs one conditional read and a branch listing rather than a full fetch of
 // the tree (ADR-0007, #106), so the cadence is what a person watching a spec build wants:
@@ -81,17 +100,29 @@ function parseInterval(raw: string | undefined): { ms: number } | { message: str
 
 // Colour and hyperlinks are each emitted only to a terminal, so piping the view to a file
 // or another command yields clean text with no escape sequences to strip; `--no-color` and
-// `--no-hyperlinks` each override their own capability downwards only, independently, since
-// nothing yet needs either forced into a pipe. `--watch` turns the single render into a
-// redraw loop and is the only option that takes a value.
+// `--no-hyperlinks` each override their own capability downwards, independently. Hyperlinks
+// additionally need a terminal that can ACT on the escape, which is why the environment is
+// an input here — `--hyperlinks` forces them back on, but only where they could be honoured
+// at all, so redirected output keeps its URL column. `--watch` turns the single render into
+// a redraw loop and is the only option that takes a value.
 //
 // Nothing is silently ignored: an option the view does not have, or one that cannot mean
 // anything in the combination given, is refused with a message naming it.
-export function parseStatusArgs(argv: readonly string[], isTTY: boolean): ParseResult {
+export function parseStatusArgs(
+  argv: readonly string[],
+  isTTY: boolean,
+  env: NodeJS.ProcessEnv,
+): ParseResult {
   const args = argv.filter(Boolean);
 
   let colour = isTTY;
-  let hyperlinks = isTTY;
+  // A terminal AND one that can act on the escape: inside Herdr the link is inert and the
+  // URL column it would replace is not, so the row is better off with the column.
+  let hyperlinks = isTTY && env[HERDR] !== "1";
+  // Held separately from the resolved value so the two flags can be caught contradicting
+  // each other rather than resolved last-one-wins.
+  let forced = false;
+  let suppressed = false;
   let watch = false;
   let interval: number | null = null;
   const unknown: string[] = [];
@@ -104,7 +135,11 @@ export function parseStatusArgs(argv: readonly string[], isTTY: boolean): ParseR
     if (NO_COLOUR.includes(arg)) {
       colour = false;
     } else if (arg === NO_HYPERLINKS) {
+      suppressed = true;
       hyperlinks = false;
+    } else if (arg === HYPERLINKS) {
+      forced = true;
+      hyperlinks = true;
     } else if (arg === WATCH) {
       watch = true;
     } else if (arg === INTERVAL || arg.startsWith(`${INTERVAL}=`)) {
@@ -123,10 +158,25 @@ export function parseStatusArgs(argv: readonly string[], isTTY: boolean): ParseR
   // appearing to work.
   if (unknown.length > 0) {
     return refuse(
-      `unknown option(s): ${unknown.join(" ")} — the status view takes ${WATCH}, ${INTERVAL} <seconds>, ${NO_COLOUR[0]} and ${NO_HYPERLINKS}.`,
+      `unknown option(s): ${unknown.join(" ")} — the status view takes ${WATCH}, ${INTERVAL} <seconds>, ${NO_COLOUR[0]}, ${NO_HYPERLINKS} and ${HYPERLINKS}.`,
     );
   }
   if (intervalError !== null) return refuse(intervalError);
+  // Contradictory rather than last-one-wins: the view cannot both link and not link, and
+  // guessing which was meant is worse than saying so.
+  if (forced && suppressed) {
+    return refuse(`${HYPERLINKS} and ${NO_HYPERLINKS} contradict each other — pass one or the other.`);
+  }
+  // The two flags are deliberately asymmetric off a terminal, and that is a decision rather
+  // than an oversight. DOWNWARDS is always safe: `--no-hyperlinks` in a pipe only withholds
+  // an escape a pipe never wanted, so it is a harmless no-op. UPWARDS is not: `--hyperlinks`
+  // would emit escapes AND drop the URL column, leaving redirected output with no reachable
+  // target at all. So the one that can lose information is named rather than swallowed.
+  if (forced && !isTTY) {
+    return refuse(
+      `${HYPERLINKS} needs a terminal — stdout here is not one, and in redirected output the URL column is what carries the link.`,
+    );
+  }
   if (interval !== null && !watch) {
     return refuse(`${INTERVAL} only means something with ${WATCH} — a single render has no cadence.`);
   }

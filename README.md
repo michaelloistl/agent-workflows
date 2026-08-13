@@ -549,6 +549,7 @@ yarn agent:status --watch                  # check every 5s until ctrl-c
 yarn agent:status --watch --interval 60
 yarn agent:status --no-color
 yarn agent:status --no-hyperlinks          # print the URL column instead of linking
+yarn agent:status --hyperlinks             # link anyway (overrides the Herdr default)
 ```
 
 ```
@@ -597,6 +598,13 @@ the trailing URL column comes back instead:
   that column on a terminal too, for one (like Apple Terminal) that prints the escape as
   plain text rather than honouring it. It is independent of `--no-color`: they are separate
   terminal capabilities and neither implies the other.
+- **Inside Herdr the URL column is printed instead**, automatically. A multiplexer owns the
+  pane, and Herdr 0.8.0 acts on neither route: ⌘-click reaches Herdr, which does not open
+  the link, and ⌘-Shift-click bypasses Herdr to the host terminal, which was never handed
+  one. Plain URLs *are* clickable there on both routes, so the column is the working target
+  and the escape is an inert one — hence hyperlinks default off when `HERDR_ENV=1`. This is
+  the only terminal the view knows by name, and `--hyperlinks` overrides it, so a Herdr that
+  fixes OSC 8 needs a flag rather than a release.
 - **`--watch` checks in place** — every 5 seconds by default, `--interval <seconds>` sets
   how often it checks (whole seconds, from 2 to 3600). A tick costs one conditional read
   and a branch listing, not a full fetch of the tree, and redraws only when something has
