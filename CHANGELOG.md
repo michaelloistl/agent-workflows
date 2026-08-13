@@ -8,6 +8,13 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Move `@ai-hero/sandcastle` from `^0.7.0` to `^0.12.0`. No call this package makes
+  changed shape: nothing was removed from the library's public API across the five
+  releases, and the additions (`maxRetries` on structured output, `sandbox.exec()`,
+  `verbose` stream logging, `permissionMode` on `claudeCode()`) are all optional and
+  unadopted here. The 0.12.0 default-model bump does not reach us either — every run
+  passes its model explicitly, from `agentModel`.
+
 ## v1.3.0 — 2026-08-12
 
 - Add `--yes` to the attended spec loop: it pre-accepts the preview prompt so a run

@@ -2,10 +2,10 @@
 # yarn lockfile v1
 
 
-"@ai-hero/sandcastle@^0.7.0":
-  version "0.7.0"
-  resolved "https://registry.yarnpkg.com/@ai-hero/sandcastle/-/sandcastle-0.7.0.tgz#2e21b2cf13b404ff713d3344816cb98886342ff7"
-  integrity sha512-Rqb9FarzvtzDHqhBoofS7HqI1Tn5J/MuPoj+EVqO6F1jK1+Zzq+kT8Zl1K8Rs9ftLcLS0VKtQoPldn3UsSsGJw==
+"@ai-hero/sandcastle@^0.12.0":
+  version "0.12.0"
+  resolved "https://registry.yarnpkg.com/@ai-hero/sandcastle/-/sandcastle-0.12.0.tgz#2163dd3151e9091bc4f8fdc737a1e38876c86e54"
+  integrity sha512-kdQ414rM8t1QiWeqZ3Klz4KSd0PqQG4bRVuqGpRDUomWhojSZkEAc1tbcEcThVmBEaHkCt8LmYR49vqEPNIoYQ==
   dependencies:
     "@clack/prompts" "^1.1.0"
 
