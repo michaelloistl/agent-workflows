@@ -27,8 +27,10 @@ import { renderStatus } from "./render.mts";
 import { terminalScreen, watchStatus } from "./watch.mts";
 
 // Colour follows the output device: `isTTY` is undefined when stdout is a pipe or a
-// file, so a redirected view is clean text with nothing to strip.
-const parsed = parseStatusArgs(process.argv.slice(2), process.stdout.isTTY === true);
+// file, so a redirected view is clean text with nothing to strip. The environment goes in
+// too, because hyperlinks need more than a TTY — a multiplexer can own the terminal and
+// swallow the escape (see `options.mts`), and this is the dispatch half that owns `process`.
+const parsed = parseStatusArgs(process.argv.slice(2), process.stdout.isTTY === true, process.env);
 if (!parsed.ok) {
   console.error(`agent-workflows status: ${parsed.message}`);
   process.exit(2);

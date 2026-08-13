@@ -7,17 +7,21 @@ import {
   parseStatusArgs,
 } from "./options.mts";
 
-function options(argv: string[], isTTY = true) {
-  const result = parseStatusArgs(argv, isTTY);
+// An empty environment by default: the interesting env is Herdr's, and every other case
+// should read as "an ordinary terminal" without restating that.
+function options(argv: string[], isTTY = true, env: NodeJS.ProcessEnv = {}) {
+  const result = parseStatusArgs(argv, isTTY, env);
   assert.ok(result.ok, `expected ok, got: ${result.ok ? "" : result.message}`);
   return result.options;
 }
 
-function refusal(argv: string[], isTTY = true) {
-  const result = parseStatusArgs(argv, isTTY);
+function refusal(argv: string[], isTTY = true, env: NodeJS.ProcessEnv = {}) {
+  const result = parseStatusArgs(argv, isTTY, env);
   assert.equal(result.ok, false, "expected a refusal");
   return result.ok ? "" : result.message;
 }
+
+const HERDR = { HERDR_ENV: "1" };
 
 test("colour is on for a terminal and off for a pipe", () => {
   assert.deepEqual(options([], true), { colour: true, hyperlinks: true, watchIntervalMs: null });
@@ -49,6 +53,51 @@ test("the flag is harmless off a terminal, where hyperlinks were already off", (
   assert.equal(options(["--no-hyperlinks"], false).hyperlinks, false);
 });
 
+// Inside Herdr the OSC 8 escape is inert on every route, while the URL column it would
+// replace is a working click target — so the row is better off with the column.
+
+test("hyperlinks default off inside Herdr, even on a terminal", () => {
+  assert.equal(options([], true, HERDR).hyperlinks, false);
+});
+
+test("the Herdr default leaves colour alone — the pane paints fine", () => {
+  assert.equal(options([], true, HERDR).colour, true);
+});
+
+test("only the exact marker counts, so an unrelated or unset variable changes nothing", () => {
+  assert.equal(options([], true, { HERDR_ENV: "0" }).hyperlinks, true);
+  assert.equal(options([], true, { HERDR_ENV: "" }).hyperlinks, true);
+  assert.equal(options([], true, { SOMETHING_ELSE: "1" }).hyperlinks, true);
+});
+
+// The override exists so a Herdr that fixes OSC 8 does not have to wait for a release.
+
+test("--hyperlinks forces them back on inside Herdr", () => {
+  assert.equal(options(["--hyperlinks"], true, HERDR).hyperlinks, true);
+});
+
+test("--hyperlinks is a no-op on an ordinary terminal, where they were already on", () => {
+  assert.equal(options(["--hyperlinks"], true).hyperlinks, true);
+});
+
+test("--hyperlinks is refused off a terminal, so a pipe keeps its URL column", () => {
+  const message = refusal(["--hyperlinks"], false);
+  assert.match(message, /--hyperlinks/);
+  assert.match(message, /terminal/i);
+  assert.match(message, /URL column/i, "and says what redirected output would lose");
+});
+
+test("the two hyperlink flags together are refused rather than resolved last-one-wins", () => {
+  const message = refusal(["--hyperlinks", "--no-hyperlinks"], true, HERDR);
+  assert.match(message, /--hyperlinks/);
+  assert.match(message, /--no-hyperlinks/);
+  assert.match(refusal(["--no-hyperlinks", "--hyperlinks"], true), /contradict/i, "in either order");
+});
+
+test("--no-hyperlinks inside Herdr is harmless, where they were already off", () => {
+  assert.equal(options(["--no-hyperlinks"], true, HERDR).hyperlinks, false);
+});
+
 test("--no-color suppresses colour even on a terminal", () => {
   assert.equal(options(["--no-color"], true).colour, false);
 });
@@ -70,6 +119,7 @@ test("an unknown option is refused, and named in the message", () => {
   assert.match(message, /--json/);
   assert.match(message, /--watch/, "the message lists what the view does take");
   assert.match(message, /--no-hyperlinks/, "including the hyperlinks opt-out");
+  assert.match(message, /--hyperlinks/, "and the opt-in that overrides the Herdr default");
 });
 
 test("every unknown option is named, not just the first", () => {
@@ -132,8 +182,8 @@ test("an interval below the floor is refused, and the floor is named", () => {
 });
 
 test("a zero or negative interval is refused too", () => {
-  assert.equal(parseStatusArgs(["--watch", "--interval", "0"], true).ok, false);
-  assert.equal(parseStatusArgs(["--watch", "--interval", "-5"], true).ok, false);
+  assert.equal(parseStatusArgs(["--watch", "--interval", "0"], true, {}).ok, false);
+  assert.equal(parseStatusArgs(["--watch", "--interval", "-5"], true, {}).ok, false);
 });
 
 // Past ~24.8 days `setTimeout` overflows and fires immediately, turning an absurd
