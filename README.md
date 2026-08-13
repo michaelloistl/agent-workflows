@@ -532,7 +532,7 @@ standing in, with their tracer-bullets nested beneath (ADR-0007):
 
 ```sh
 yarn agent:status                          # or: agent-workflows status
-yarn agent:status --watch                  # redraw every 30s until ctrl-c
+yarn agent:status --watch                  # check every 5s until ctrl-c
 yarn agent:status --watch --interval 60
 yarn agent:status --no-color
 ```
@@ -566,13 +566,17 @@ madebyon/on-vantage — 2 specs in flight
   is the one state that means stop and look. Colour is emitted only when stdout is a
   terminal, so piping or redirecting the view gives clean text with no escape sequences;
   `--no-color` (or `--no-colour`) turns it off on a terminal too.
-- **`--watch` redraws in place** — every 30 seconds by default, `--interval <seconds>`
-  to change it (whole seconds, from 5 to 3600: the floor keeps a watch left open all day
-  inside the GitHub rate limit, and past the ceiling the timer overflows into no pause at
-  all). The interval is the gap *between* redraws, so a slow pass simply pushes the next
-  one out. It redraws on its own screen and gives your scrollback back on ctrl-c, and
-  since replacing a frame needs a terminal, `--watch` is refused when stdout is a pipe
-  or a file. There are **no key bindings**: it is a redraw, not a TUI.
+- **`--watch` checks in place** — every 5 seconds by default, `--interval <seconds>` sets
+  how often it checks (whole seconds, from 2 to 3600). A tick costs one conditional read
+  and a branch listing, not a full fetch of the tree, and redraws only when something has
+  changed — so the default is a person's cadence, not a rate-limit budget: a label change
+  shows up in about five seconds. The floor is the round trip of a check itself (a shorter
+  interval would only stack checks on each other, since a `304` is free); past the ceiling
+  the timer overflows into no pause at all. The interval is the gap *between* checks, so a
+  slow pass simply pushes the next one out. It redraws on its own screen and gives your
+  scrollback back on ctrl-c, and since replacing a frame needs a terminal, `--watch` is
+  refused when stdout is a pipe or a file. There are **no key bindings**: it is a redraw,
+  not a TUI.
 - It is **read-only**. It runs no agent and writes nothing — a label write would be a
   dispatch, i.e. a real, billed agent run — so watching it costs reads only.
 - The repo comes from `GH_REPO` or the checkout's `origin` remote; no argument.
