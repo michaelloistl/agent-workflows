@@ -169,9 +169,11 @@ export function resolveRunCeiling({ env, file }: ResolveInputs): RunCeiling {
 // only a real `false` in the file and only the exact string `"false"` in the env
 // disable it. Anything else — a mistyped env string, a non-boolean in the file — is
 // NOT off and falls through to on, because a typo must never silently remove a review
-// the repo was relying on. An empty env value is treated as unset (the workflow may
-// always set the variable, empty when the input is unset), so it falls through to the
-// file then the default rather than reading as "not false → on" and shadowing the file.
+// the repo was relying on. An empty env value is treated as unset, so it falls through
+// to the file then the default rather than reading as "not false → on" and shadowing
+// the file — parity with the other resolvers (this switch is repo-level policy with no
+// workflow input, so nothing sets the variable empty today, but the guard costs nothing
+// and keeps the "off" rule identical across every reader).
 export function resolveFinalPrReview({ env, file }: ResolveInputs): boolean {
   const raw = env.FINAL_PR_REVIEW;
   if (raw !== undefined && raw !== "") return raw !== "false";

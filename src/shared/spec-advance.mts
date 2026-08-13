@@ -98,6 +98,11 @@ export function openFinalPr(specNumber: number, specBranch: string): void {
     if (pr) {
       ensureLabel(REVIEW_TRIGGER_LABEL, REVIEW_TRIGGER_LABEL_DESCRIPTION);
       addLabel("pr", pr, REVIEW_TRIGGER_LABEL);
+    } else {
+      // The whole feature is "the review actually starts", so a no-match must not
+      // vanish silently — `gh pr create` reliably prints the PR URL, but if its
+      // output ever changes shape this line is the only trace of the skipped review.
+      console.warn(`Could not parse the final PR number from \`gh pr create\` output (${url}); skipped the \`${REVIEW_TRIGGER_LABEL}\` label, so no review will start.`);
     }
   }
 }
