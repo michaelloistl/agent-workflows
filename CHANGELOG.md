@@ -8,6 +8,53 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+## v1.4.0 — 2026-08-13
+
+- Label the final spec→default PR `agent:review-pr` when the orchestrator opens it, so
+  the review is already running by the time anyone looks. **This is a behaviour change
+  for consumers**: a spec now costs one extra agent run, on a diff that is the whole
+  feature. Set `reviewFinalPr: false` in `.sandcastle/agent-workflows/config.json` (or
+  `REVIEW_FINAL_PR=false` for one run) to keep the previous behaviour; only an explicit
+  `false` disables it, so a mistyped value leaves the review on rather than silently
+  removing one you were relying on. The label is applied only when the PR is newly
+  created — never on the idempotent path that finds one already open, which would fire a
+  second review every advance — and it needs `AGENT_PAT`, since a label written by
+  `GITHUB_TOKEN` triggers no workflow. The PR is still a draft, the review is still
+  advisory with no verdict, and nothing routes on it: the human gate is unmoved. Both
+  entry points inherit this from one shared routine, so a locally-run spec does not
+  silently skip its review.
+- Make the status view's issue reference the click target. `#1521` is what you read and
+  what you click — it carries the issue URL through an OSC 8 hyperlink rather than a
+  column of visible text roughly fifty characters wide, and the state marker stays
+  outside the link. The URL column survives as the fallback: piped, redirected, or with
+  `--no-hyperlinks`, it is printed exactly as before, so a reference is never left
+  unreachable. Independent of `--no-color` — they are separate terminal capabilities.
+- Default the status view's hyperlinks **off** inside Herdr (`HERDR_ENV=1`), printing the
+  URL column instead. Measured against Herdr 0.8.0 under Ghostty, an OSC 8 link in a pane
+  opens on neither route — not on ⌘-click, which Herdr receives and does not act on, nor
+  on ⌘-Shift-click, which bypasses Herdr's mouse capture and reaches the host terminal
+  with no hyperlink to find — while Herdr's plain-URL clicking works on both. So inside
+  Herdr the column is a working click target and the escape is an inert one, and the TTY
+  default was landing on a row with neither a link nor a URL. `--hyperlinks` forces them
+  back on, so a Herdr that fixes OSC 8 costs a flag rather than a release. This is the
+  only terminal the view knows by name.
+- Refresh the watched status view only when the tracker has actually changed. Each tick
+  now asks one cheap question first — the remote branch list, which is not an API call,
+  plus one conditional GitHub read carrying the previous `ETag` — and performs the full
+  pass only when the answer is yes. A `304 Not Modified` costs nothing against the
+  primary rate limit, so a watch left open all day consumes almost none. The probe is an
+  invalidation signal and never a source of display data, so `--watch` still shows exactly
+  what a one-shot run prints; it fails open, so a probe error causes a refresh rather than
+  a stale screen; and a staleness ceiling forces a full pass regardless, so a change the
+  probe cannot witness costs latency rather than a frozen view.
+- Drop the status view's default `--watch` interval from 30s to 5s, and its floor from 5s
+  to 2s, now that a tick costs a conditional read rather than a full fetch. A label change
+  shows up in about five seconds instead of up to thirty — measured detection latency for
+  the conditional read is around four. The floor's reason changed rather than merely
+  moving: it no longer protects the shared rate limit, it protects against an interval
+  shorter than the tick's own round trip. The 3600s ceiling is unchanged, for its own
+  unrelated reason — past it the timer overflows and fires without pausing at all.
+
 ## v1.3.1 — 2026-08-13
 
 - Move `@ai-hero/sandcastle` from `^0.7.0` to `^0.12.0`. No call this package makes
