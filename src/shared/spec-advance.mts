@@ -9,6 +9,13 @@
 import { capture } from "./process.mts";
 import { parseChecks, parseCommitCheckRuns, type CheckRun } from "./checks.mts";
 import { resolveConfig } from "./config.mts";
+import { addLabel, ensureLabel } from "./github.mts";
+
+// The review verb's trigger label, applied to the final spec→default PR so the
+// `review-pr` thin caller fires its advisory review on it (issue #114). The same
+// string the review guards/status hooks key on.
+const REVIEW_TRIGGER_LABEL = "agent:review-pr";
+const REVIEW_TRIGGER_LABEL_DESCRIPTION = "Triggers an advisory agent review of this PR.";
 
 // Close a merged tracer-bullet (merging into a non-default base does NOT auto-close
 // it). Best-effort: an already-closed issue or a race with a re-run must not fail
@@ -27,9 +34,20 @@ export function closeTracerBullet(issue: number, base: string): void {
 // auto-closes the spec). The base is the configured base branch (issue #53),
 // falling back to the repository default when no config file sets one — matching
 // where kickoff cut the spec branch from. Idempotent — never opens a second final PR.
+//
+// The review trigger label is applied as a DISTINCT write after the PR exists (issue
+// #114) — not as part of `pr create`, because the thin caller triggers on the label
+// event and it is not established that creating a PR with a label already attached
+// emits one. It is applied ONLY on this create path: a run that finds the final PR
+// already open (the early return below) leaves it alone, since the review verb retires
+// its own trigger label when it starts and re-applying it would fire a second full
+// review on every later advance. The label is ensured to exist in the repo first,
+// since label edits are best-effort and would otherwise fail silently in a repo that
+// has never created it. A consuming repo turns the review off with `finalPrReview`.
 export function openFinalPr(specNumber: number, specBranch: string): void {
+  const config = resolveConfig();
   const base =
-    resolveConfig().baseBranch ||
+    config.baseBranch ||
     capture("gh", [
       "repo",
       "view",
@@ -58,7 +76,7 @@ export function openFinalPr(specNumber: number, specBranch: string): void {
   }
   const title = capture("gh", ["issue", "view", String(specNumber), "--json", "title", "-q", ".title"]).trim();
   const body = `Automated by the implement-spec orchestrator: every tracer-bullet of spec #${specNumber} is merged into \`${specBranch}\`. This is the single human-review gate for the whole feature.\n\nCloses #${specNumber}`;
-  capture("gh", [
+  const url = capture("gh", [
     "pr",
     "create",
     "--draft",
@@ -70,7 +88,18 @@ export function openFinalPr(specNumber: number, specBranch: string): void {
     title,
     "--body",
     body,
-  ]);
+  ]).trim();
+
+  // Label the final PR for review — a distinct write after it exists, gated on
+  // `finalPrReview` (issue #114). Ensure the label first, then apply it, so the
+  // tracker emits the label event the `review-pr` thin caller triggers on.
+  if (config.finalPrReview) {
+    const pr = url.match(/\/pull\/(\d+)/)?.[1];
+    if (pr) {
+      ensureLabel(REVIEW_TRIGGER_LABEL, REVIEW_TRIGGER_LABEL_DESCRIPTION);
+      addLabel("pr", pr, REVIEW_TRIGGER_LABEL);
+    }
+  }
 }
 
 // Read the check-runs on the spec branch's tip. The branch has no open PR (the
