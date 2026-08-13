@@ -308,30 +308,41 @@ test("hyperlinks default off, so a piped view carries no OSC 8 escapes", () => {
 });
 
 // The single most likely regression: an OSC 8 sequence is zero-width on screen but many
-// characters to `String.length`, so linking after padding is what keeps the columns
-// aligned across rows whose titles differ in length.
-test("columns stay aligned with hyperlinks on, across differing title lengths", () => {
+// characters to `String.length`, so linking must happen AFTER padding. To catch a
+// pad-over-link bug the rows must need DIFFERENT amounts of prefix padding — a `#94`
+// heading (ref 3), a `#1` slice (prefix 6) and a `#2000` slice (the widest, prefix 8) all
+// pad out to the same width, so their title columns must line up. Measured over the escape
+// that padding collapses, pulling the shorter refs' titles left; rows of equal prefix width
+// would align either way and prove nothing.
+test("columns stay aligned with hyperlinks on, across differing prefix widths", () => {
   const out = renderStatus(
     {
       repo: "o/r",
       specs: [
         spec({
           number: 94,
+          title: "Status view",
           slices: [
-            slice({ number: 1, title: "x", state: "building" }),
-            slice({ number: 2, title: "y".repeat(40), state: "pending" }),
+            slice({ number: 1, title: "short", state: "building" }),
+            slice({ number: 2000, title: "y".repeat(40), state: "pending" }),
           ],
         }),
       ],
     },
     { hyperlinks: true },
   );
-  // With the escapes stripped the two slice rows are pure layout again, so their state
-  // columns must start at the same offset.
-  assert.equal(
-    unlink(linkedRowFor(out, 1)).indexOf("building"),
-    unlink(linkedRowFor(out, 2)).indexOf("pending"),
-  );
+  const titleOffset = (issue: number, title: string) =>
+    unlink(linkedRowFor(out, issue)).indexOf(title);
+  // The heading needs the most padding and the widest slice needs none; if any of the three
+  // disagrees, padding was measured over the link.
+  assert.equal(titleOffset(94, "Status view"), titleOffset(1, "short"));
+  assert.equal(titleOffset(1, "short"), titleOffset(2000, "y".repeat(40)));
+});
+
+// The empty view returns before any row is built, so — like the colour case above — it is
+// the one branch that could emit an escape by accident without a test saying otherwise.
+test("the empty view carries no hyperlinks on a terminal either", () => {
+  assert.doesNotMatch(renderStatus({ repo: "o/r", specs: [] }, { hyperlinks: true }), OSC8_ONE);
 });
 
 // A row can be both painted and linked: the colour wraps the whole prefix, the link wraps
