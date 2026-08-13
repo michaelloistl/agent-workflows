@@ -8,6 +8,8 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+## v1.3.1 — 2026-08-13
+
 - Move `@ai-hero/sandcastle` from `^0.7.0` to `^0.12.0`. No call this package makes
   changed shape: nothing was removed from the library's public API across the five
   releases, and the additions (`maxRetries` on structured output, `sandbox.exec()`,
