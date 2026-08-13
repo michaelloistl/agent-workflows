@@ -1,17 +1,14 @@
 # agent-workflows
 
-Central **Reusable GitHub Actions workflows** that drive a
-label-triggered coding-agent fleet across multiple project repos. The central Workflows own only the generic, tracker-agnostic orchestration shell; every
-repo- or domain-specific decision lives behind sandcastle hooks in the consuming repo.
+**Label a GitHub issue `agent:implement`, and a coding agent picks it up, does the work, pushes a branch, and reports back on the issue.**
 
-You label an issue or PR (e.g. `agent:implement`); the matching reusable
-workflow checks out your repo, spins up its toolchain, runs Claude Code against the work, pushes the result, and reports back to your tracker — all without the central YAML knowing anything about your tracker, stack, or domain.
+This repo holds the reusable GitHub Actions workflows that make that happen, across as many project repos as you like. A run checks out your code, installs your toolchain, runs Claude Code against the issue spec, and pushes the result with plain git.
 
-The individual verbs work on any issue spec. The **spec orchestrator**
-(`implement-spec`), however, expects its issues to be authored by
-[mattpocock/skills](https://github.com/mattpocock/skills) `/to-spec` and
-`/to-tickets`: it parses the exact `## Parent` / `## Blocked by` body format those
-commands emit. See [Authoring spec issues](#authoring-spec-issues) for the contract.
+The central workflow knows nothing about your tracker or your domain. All of that lives behind sandcastle hooks in the consuming repo, so one set of workflows serves every project you point at it (ADR-0001).
+
+The toolchain is deliberately not abstracted that way. Every verb installs Node, and Ruby, Postgres 16 and Redis come up behind an `enable-ruby` flag, so a Rails app gets a working test database and a green suite without you writing any CI. Other stacks run fine, but the agent only gets Node, so it can edit code it has no way to test.
+
+**Works with `mattpocock/skills`.** If you author issues with `/to-spec` and `/to-tickets` from [mattpocock/skills](https://github.com/mattpocock/skills), the `implement-spec` orchestrator reads the `## Parent` / `## Blocked by` structure those commands emit and works a whole spec ticket by ticket, in blocking order. The individual verbs work on any issue spec. See [Authoring spec issues](#authoring-spec-issues) for the contract.
 
 ## Contents
 

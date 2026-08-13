@@ -8,6 +8,17 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Rewrite the README opening around what a run does, and correct the scope of the
+  agnosticism claim. The old text said the central YAML knows nothing about your "tracker,
+  stack, or domain". Tracker and domain are true and hook-backed (ADR-0001); the stack is
+  not. Every verb installs Node unconditionally and brings Ruby, Postgres 16 and Redis up
+  behind `enable-ruby`, with `bundle exec rails db:prepare`, `RAILS_ENV` and
+  `RAILS_MASTER_KEY` written into the workflow itself. The claim is now scoped to tracker
+  and domain, the Rails path is stated as the deliberate first-class one it is, and its
+  limit is named: other stacks get Node only, so the agent can edit code it has no way to
+  test. The opening also leads with the labelled-issue flow rather than the architecture,
+  and `mattpocock/skills` compatibility reads as a feature rather than a constraint.
+  Documentation only.
 - Document that under `--watch` inside Herdr a URL opens with ⌘-Shift-click rather than
   ⌘-click. `--watch` draws on the alternate screen, which Herdr's own URL clicking does not
   reach; Shift suppresses mouse reporting so the click reaches the host terminal, which
