@@ -110,7 +110,7 @@ The system of record for the work an agent acts on — GitHub Issues or Linear. 
 The defining property of the central **workflow**: the YAML performs zero tracker reads or writes and contains no `if: tracker == …` branch. It is **not** a property of the package — since the hooks moved in, twenty-odd files under `src/` shell out to `gh`, and the *status view* reads the tracker too. The package ships GitHub as the **default** tracker and keeps it replaceable behind the hook and override seams; the workflow knows nothing either way.
 
 **Trigger label**:
-A human-applied `agent:<verb>` label on an issue or PR that starts a workflow.
+An `agent:<verb>` label on an issue or PR that **starts** a run — the counterpart of a *state label*, which **reports** one. What distinguishes the two is what the label does, not who writes it: a human applies one by hand, and the *orchestrator* applies one when it dispatches work (both *kickoff* and *advance* label the next tracer-bullet `agent:implement`). Retired by the run's own `<verb>-status` hook as it goes in-progress, so a trigger label still sitting on an issue means nothing picked it up.
 
 **State label**:
 A label the fleet sets and clears, never a human: `agent:in-progress`, `agent:review`, `agent:blocked`. For Linear repos the equivalent is a Linear state, written by the `<verb>-status` hook.
