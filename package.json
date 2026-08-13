@@ -1,6 +1,6 @@
 {
   "name": "agent-workflows",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "private": true,
   "description": "Central reusable agent workflows — distributed to consuming repos as a git dependency exposing the agent-workflows hook dispatcher.",
   "bin": {
@@ -8,8 +8,12 @@
   },
   "files": [
     "bin",
-    "src"
+    "src",
+    "CHANGELOG.md"
   ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.mts\" \"bin/**/*.test.mts\"",
@@ -48,8 +52,7 @@
     "sandcastle:implement-spec-sequence": "node bin/agent-workflows.mjs implement-spec",
     "sandcastle:implement-spec-guards": "node bin/agent-workflows.mjs implement-spec guards",
     "sandcastle:implement-spec-kickoff": "node bin/agent-workflows.mjs implement-spec kickoff",
-    "sandcastle:implement-spec-advance": "node bin/agent-workflows.mjs implement-spec advance",
-    "sandcastle:implement-spec-loop": "node bin/agent-workflows.mjs implement-spec"
+    "sandcastle:implement-spec-advance": "node bin/agent-workflows.mjs implement-spec advance"
   },
   "dependencies": {
     "@ai-hero/sandcastle": "^0.7.0",

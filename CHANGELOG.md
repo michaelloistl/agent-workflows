@@ -59,6 +59,10 @@ version without editing their workflow on every release.
   read, because a blocker that scrolled off a page must not quietly stop gating.
 - Record the design in ADR-0007 and add *status view* and *spec tree* to the
   glossary.
+- Declare the Node floor (`engines: node >= 22`) the package has always assumed, ship
+  `CHANGELOG.md` in the packed `files`, and carry the release version in
+  `package.json` — it had read `1.0.0` since the first release, which is what a
+  consumer's lockfile records.
 
 ## v1.2.2 — 2026-08-11
 
