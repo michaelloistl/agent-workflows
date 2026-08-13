@@ -17,6 +17,11 @@ export interface RenderOptions {
   // Off by default: a caller that has not thought about the output device is more likely
   // to be piping or capturing than driving a terminal.
   readonly colour?: boolean;
+  // Also off by default, and for the same reason. When on, the issue reference is an OSC 8
+  // hyperlink to the issue and the trailing URL column is dropped; when off, the URL column
+  // is the fallback click target so a reference is never left unreachable. Independent of
+  // `colour`: they are separate terminal capabilities (`options.mts` decides each).
+  readonly hyperlinks?: boolean;
 }
 
 // Long enough for a real issue title, short enough that the state and URL columns stay
@@ -65,8 +70,15 @@ const PAINT: Record<Tone, Paint> = {
   spec: PLAIN,
 };
 
+// An OSC 8 hyperlink: the terminal is told the URL through the escape rather than a column
+// of visible text. Zero-width on screen, so — like colour — it is applied AFTER padding.
+const link = (url: string, text: string): string => `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
+
 interface Row {
-  readonly prefix: string;
+  // The reference (`#N`) is split from what leads it (the state marker, indentation) so the
+  // link can wrap the reference alone with the marker left outside it.
+  readonly lead: string;
+  readonly ref: string;
   readonly title: string;
   readonly state: string;
   readonly url: string;
@@ -81,7 +93,8 @@ function specRow(spec: SpecNode): Row {
   const progress = `${spec.closed}/${spec.total}`;
   const state = spec.state === "awaiting-final-pr" ? "awaiting final PR" : "building";
   return {
-    prefix: `#${spec.number}`,
+    lead: "",
+    ref: `#${spec.number}`,
     title: truncate(spec.title),
     state: `${progress} · ${state}`,
     url: spec.url,
@@ -106,7 +119,8 @@ function sliceRow(slice: SliceNode): Row {
     ? ` · waits on ${slice.foreignBlockers.join(", ")}`
     : "";
   return {
-    prefix: `  ${MARKER[state]} #${slice.number}`,
+    lead: `  ${MARKER[state]} `,
+    ref: `#${slice.number}`,
     title: truncate(slice.title),
     state: `${cycled ? "blocked (dependency cycle)" : STATE_TEXT[state]}${foreign}`,
     url: slice.url,
@@ -118,7 +132,10 @@ function pad(text: string, width: number): string {
   return text + " ".repeat(Math.max(0, width - text.length));
 }
 
-export function renderStatus({ repo, specs }: StatusView, { colour = false }: RenderOptions = {}): string {
+export function renderStatus(
+  { repo, specs }: StatusView,
+  { colour = false, hyperlinks = false }: RenderOptions = {},
+): string {
   if (specs.length === 0) {
     return [
       `${repo} — nothing is currently building.`,
@@ -129,16 +146,30 @@ export function renderStatus({ repo, specs }: StatusView, { colour = false }: Re
 
   const blocks = specs.map((spec) => [specRow(spec), ...spec.slices.map(sliceRow)]);
   const rows = blocks.flat();
-  const prefixWidth = Math.max(...rows.map((r) => r.prefix.length));
+  const prefixWidth = Math.max(...rows.map((r) => r.lead.length + r.ref.length));
   const titleWidth = Math.max(...rows.map((r) => r.title.length));
   const stateWidth = Math.max(...rows.map((r) => r.state.length));
 
-  // Painted AFTER padding, never before: an escape sequence is zero-width on screen and
-  // several characters to `String.length`, so widths measured over painted text would
-  // misalign every column that follows.
+  // The prefix, padded to width. When hyperlinks are on the reference becomes a link to the
+  // issue — done AFTER padding, for the same reason painting is: an OSC 8 escape is
+  // zero-width on screen and many characters to `String.length`, so a width measured over
+  // it would misalign every column that follows. The marker (in `lead`) stays outside the
+  // link, so the click target is exactly the reference.
+  const prefix = (r: Row) => {
+    const padding = " ".repeat(Math.max(0, prefixWidth - r.lead.length - r.ref.length));
+    return `${r.lead}${hyperlinks ? link(r.url, r.ref) : r.ref}${padding}`;
+  };
+
+  // Painted AFTER padding and linking, never before, for the same zero-width reason. The
+  // URL column is a fallback click target: printed when hyperlinks are off (so a reference
+  // is never unreachable), dropped when they are on (the URL rides the escape instead).
   const render = (r: Row) => {
     const paint = colour ? PAINT[r.tone] : PLAIN;
-    return `${paint(pad(r.prefix, prefixWidth))}  ${pad(r.title, titleWidth)}  ${paint(pad(r.state, stateWidth))}  ${r.url}`;
+    // With hyperlinks on the state is the last column, so padding it would only trail
+    // whitespace; with them off the URL follows, so it is padded to keep that column aligned.
+    const state = hyperlinks ? r.state : pad(r.state, stateWidth);
+    const url = hyperlinks ? "" : `  ${r.url}`;
+    return `${paint(prefix(r))}  ${pad(r.title, titleWidth)}  ${paint(state)}${url}`;
   };
 
   return [

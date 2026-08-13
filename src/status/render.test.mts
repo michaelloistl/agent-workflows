@@ -253,3 +253,102 @@ test("colour changes nothing but the escapes", () => {
   assert.equal(strip(renderStatus(EVERY_STATE, { colour: true })), renderStatus(EVERY_STATE));
   assert.equal(strip(renderStatus(VIEW, { colour: true })), renderStatus(VIEW));
 });
+
+// Hyperlinks (issue #105). The renderer is told whether to link, the same way it is told
+// whether to paint; `options.mts` decides it from the TTY. An OSC 8 hyperlink wraps the
+// text between an opening `\x1b]8;;URL\x1b\` and a closing `\x1b]8;;\x1b\`. As with the
+// colour escapes above, a `/g` copy carries `lastIndex` and a plain copy is what the
+// assertions use.
+const OSC8 = /\x1b\]8;;[^\x1b]*\x1b\\/g;
+const OSC8_ONE = /\x1b\]8;;[^\x1b]*\x1b\\/;
+const unlink = (text: string) => text.replace(OSC8, "");
+// The text a hyperlink to `url` wraps, or null if that url is linked nowhere in `out`.
+const linkedText = (out: string, url: string) => {
+  const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = new RegExp(`\\x1b\\]8;;${escaped}\\x1b\\\\([^\\x1b]*)\\x1b\\]8;;\\x1b\\\\`).exec(out);
+  return m ? m[1] : null;
+};
+// `rowFor` matches on a trailing space after the reference, which the closing hyperlink
+// escape displaces — so unlink first, then find the row.
+const linkedRowFor = (out: string, issue: number) => rowFor(unlink(out), issue);
+
+test("the issue reference is a hyperlink to the issue on every row", () => {
+  const out = renderStatus(VIEW, { hyperlinks: true });
+  for (const n of [94, 95, 96, 97]) {
+    assert.equal(
+      linkedText(out, `https://github.com/o/r/issues/${n}`),
+      `#${n}`,
+      `#${n} is the click target`,
+    );
+  }
+});
+
+test("the state marker sits outside the link, so only the reference is clickable", () => {
+  const out = renderStatus(VIEW, { hyperlinks: true });
+  // The building slice's marker precedes the opening hyperlink escape, with no ▸ inside it.
+  assert.match(out, /▸ \x1b\]8;;[^\x1b]*\x1b\\#96\x1b\]8;;\x1b\\/, "▸ before the link, #96 inside");
+});
+
+test("the trailing URL column is gone when hyperlinks are on", () => {
+  const out = renderStatus(VIEW, { hyperlinks: true });
+  // The URL rides the escape now, not a visible column: it never appears as plain text.
+  assert.doesNotMatch(unlink(out), /https:\/\//);
+});
+
+test("the URL column is printed with no escapes when hyperlinks are off", () => {
+  const out = renderStatus(VIEW, { hyperlinks: false });
+  assert.doesNotMatch(out, OSC8_ONE);
+  for (const n of [94, 95, 96, 97]) {
+    assert.match(out, new RegExp(`https://github\\.com/o/r/issues/${n}\\b`));
+  }
+});
+
+test("hyperlinks default off, so a piped view carries no OSC 8 escapes", () => {
+  assert.doesNotMatch(renderStatus(VIEW), OSC8_ONE);
+});
+
+// The single most likely regression: an OSC 8 sequence is zero-width on screen but many
+// characters to `String.length`, so linking must happen AFTER padding. To catch a
+// pad-over-link bug the rows must need DIFFERENT amounts of prefix padding — a `#94`
+// heading (ref 3), a `#1` slice (prefix 6) and a `#2000` slice (the widest, prefix 8) all
+// pad out to the same width, so their title columns must line up. Measured over the escape
+// that padding collapses, pulling the shorter refs' titles left; rows of equal prefix width
+// would align either way and prove nothing.
+test("columns stay aligned with hyperlinks on, across differing prefix widths", () => {
+  const out = renderStatus(
+    {
+      repo: "o/r",
+      specs: [
+        spec({
+          number: 94,
+          title: "Status view",
+          slices: [
+            slice({ number: 1, title: "short", state: "building" }),
+            slice({ number: 2000, title: "y".repeat(40), state: "pending" }),
+          ],
+        }),
+      ],
+    },
+    { hyperlinks: true },
+  );
+  const titleOffset = (issue: number, title: string) =>
+    unlink(linkedRowFor(out, issue)).indexOf(title);
+  // The heading needs the most padding and the widest slice needs none; if any of the three
+  // disagrees, padding was measured over the link.
+  assert.equal(titleOffset(94, "Status view"), titleOffset(1, "short"));
+  assert.equal(titleOffset(1, "short"), titleOffset(2000, "y".repeat(40)));
+});
+
+// The empty view returns before any row is built, so — like the colour case above — it is
+// the one branch that could emit an escape by accident without a test saying otherwise.
+test("the empty view carries no hyperlinks on a terminal either", () => {
+  assert.doesNotMatch(renderStatus({ repo: "o/r", specs: [] }, { hyperlinks: true }), OSC8_ONE);
+});
+
+// A row can be both painted and linked: the colour wraps the whole prefix, the link wraps
+// only the reference inside it, and neither eats the other.
+test("a row is painted and linked at once", () => {
+  const out = renderStatus(VIEW, { colour: true, hyperlinks: true });
+  assert.equal(linkedText(out, "https://github.com/o/r/issues/96"), "#96", "still linked");
+  assert.ok(escapesOn(linkedRowFor(out, 96)).length > 0, "still painted");
+});

@@ -20,8 +20,33 @@ function refusal(argv: string[], isTTY = true) {
 }
 
 test("colour is on for a terminal and off for a pipe", () => {
-  assert.deepEqual(options([], true), { colour: true, watchIntervalMs: null });
-  assert.deepEqual(options([], false), { colour: false, watchIntervalMs: null });
+  assert.deepEqual(options([], true), { colour: true, hyperlinks: true, watchIntervalMs: null });
+  assert.deepEqual(options([], false), { colour: false, hyperlinks: false, watchIntervalMs: null });
+});
+
+// Hyperlinks (issue #105). Like colour, they are a terminal capability decided from the
+// TTY — but a SEPARATE one, so neither flag implies the other.
+
+test("hyperlinks default on for a terminal and off for a pipe", () => {
+  assert.equal(options([], true).hyperlinks, true);
+  assert.equal(options([], false).hyperlinks, false);
+});
+
+test("--no-hyperlinks suppresses hyperlinks even on a terminal", () => {
+  assert.equal(options(["--no-hyperlinks"], true).hyperlinks, false);
+});
+
+test("suppressing hyperlinks leaves colour alone, and suppressing colour leaves hyperlinks alone", () => {
+  const noLinks = options(["--no-hyperlinks"], true);
+  assert.equal(noLinks.hyperlinks, false);
+  assert.equal(noLinks.colour, true);
+  const noColour = options(["--no-color"], true);
+  assert.equal(noColour.colour, false);
+  assert.equal(noColour.hyperlinks, true);
+});
+
+test("the flag is harmless off a terminal, where hyperlinks were already off", () => {
+  assert.equal(options(["--no-hyperlinks"], false).hyperlinks, false);
 });
 
 test("--no-color suppresses colour even on a terminal", () => {
@@ -44,6 +69,7 @@ test("an unknown option is refused, and named in the message", () => {
   const message = refusal(["--json"]);
   assert.match(message, /--json/);
   assert.match(message, /--watch/, "the message lists what the view does take");
+  assert.match(message, /--no-hyperlinks/, "including the hyperlinks opt-out");
 });
 
 test("every unknown option is named, not just the first", () => {
@@ -70,6 +96,7 @@ test("--interval sets the redraw cadence, in seconds, in either spelling", () =>
 test("--watch and --no-color are orthogonal", () => {
   assert.deepEqual(options(["--watch", "--no-color"]), {
     colour: false,
+    hyperlinks: true,
     watchIntervalMs: DEFAULT_INTERVAL_SECONDS * 1000,
   });
 });
