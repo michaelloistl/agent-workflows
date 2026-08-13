@@ -535,17 +535,27 @@ yarn agent:status                          # or: agent-workflows status
 yarn agent:status --watch                  # redraw every 30s until ctrl-c
 yarn agent:status --watch --interval 60
 yarn agent:status --no-color
+yarn agent:status --no-hyperlinks          # print the URL column instead of linking
 ```
 
 ```
 madebyon/on-vantage — 2 specs in flight
 
-#1438      Spec: Default views in platform          2/5 · building           https://github.com/…/1438
-  ✓ #1519  Prefactor: extract Project-type filter…  done                     https://github.com/…/1519
-  ▸ #1521  Tag Retainer and internal Projects       building                 https://github.com/…/1521
-    #1522  Replace Retainer and internal toggles    pending                  https://github.com/…/1522
+#1438      Spec: Default views in platform          2/5 · building
+  ✓ #1519  Prefactor: extract Project-type filter…  done
+  ▸ #1521  Tag Retainer and internal Projects       building
+    #1522  Replace Retainer and internal toggles    pending
 
-#1485      Spec: Port the Utilization report        5/5 · awaiting final PR  https://github.com/…/1485
+#1485      Spec: Port the Utilization report        5/5 · awaiting final PR
+```
+
+On a terminal each `#1521` is itself the link to the issue — the state marker beside it
+stays outside the link, so only the reference is clickable. Piped or with `--no-hyperlinks`
+the trailing URL column comes back instead:
+
+```
+#1438      Spec: Default views in platform          2/5 · building           https://github.com/…/1438
+  ▸ #1521  Tag Retainer and internal Projects       building                 https://github.com/…/1521
 ```
 
 - **In flight** means an **open** spec issue with a live `agent/spec-*` branch — a
@@ -566,6 +576,14 @@ madebyon/on-vantage — 2 specs in flight
   is the one state that means stop and look. Colour is emitted only when stdout is a
   terminal, so piping or redirecting the view gives clean text with no escape sequences;
   `--no-color` (or `--no-colour`) turns it off on a terminal too.
+- **The issue reference is the click target on a terminal.** `#1521` is what you read and
+  `#1521` is what you click: it carries the issue URL through an OSC 8 hyperlink rather than
+  a column of visible text, and the state marker stays outside the link. Like colour, links
+  are emitted only when stdout is a terminal — piped or redirected, the trailing URL column
+  is printed instead so a reference is never left unreachable. `--no-hyperlinks` restores
+  that column on a terminal too, for one (like Apple Terminal) that prints the escape as
+  plain text rather than honouring it. It is independent of `--no-color`: they are separate
+  terminal capabilities and neither implies the other.
 - **`--watch` redraws in place** — every 30 seconds by default, `--interval <seconds>`
   to change it (whole seconds, from 5 to 3600: the floor keeps a watch left open all day
   inside the GitHub rate limit, and past the ceiling the timer overflows into no pause at
