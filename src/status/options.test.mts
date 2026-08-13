@@ -134,8 +134,14 @@ test("without --watch the view renders once", () => {
   assert.equal(options([]).watchIntervalMs, null);
 });
 
-test("--watch redraws on the default interval", () => {
+test("--watch checks on the default interval", () => {
   assert.equal(options(["--watch"]).watchIntervalMs, DEFAULT_INTERVAL_SECONDS * 1000);
+});
+
+// A tick now costs a conditional read rather than a full fetch (#106/#107), so the default
+// cadence is what a person watching a spec build wants: a change shows up in ~5s.
+test("the default check interval is 5 seconds", () => {
+  assert.equal(DEFAULT_INTERVAL_SECONDS, 5);
 });
 
 test("--interval sets the redraw cadence, in seconds, in either spelling", () => {
@@ -173,12 +179,25 @@ test("a non-numeric interval is refused", () => {
   assert.match(refusal(["--watch", "--interval", "soon"]), /soon/);
 });
 
-// The floor is the rate limit's, not a preference: at a few calls per redraw a very
-// tight interval would spend the hourly budget the agent runs also draw on.
-test("an interval below the floor is refused, and the floor is named", () => {
-  const message = refusal(["--watch", "--interval", "1"]);
+// The floor is the tick's own round trip, not the rate limit: a 304 is free, so a tight
+// interval no longer starves the fleet — but one shorter than a check's round trip would
+// stack checks on each other. An interval AT the floor is accepted; one below is refused.
+test("the floor is 2 seconds: the floor is accepted and one below it is refused", () => {
+  assert.equal(MIN_INTERVAL_SECONDS, 2);
+  assert.equal(
+    options(["--watch", "--interval", String(MIN_INTERVAL_SECONDS)]).watchIntervalMs,
+    MIN_INTERVAL_SECONDS * 1000,
+  );
+  const message = refusal(["--watch", "--interval", String(MIN_INTERVAL_SECONDS - 1)]);
   assert.match(message, new RegExp(String(MIN_INTERVAL_SECONDS)));
-  assert.equal(options(["--watch", "--interval", String(MIN_INTERVAL_SECONDS)]).watchIntervalMs, MIN_INTERVAL_SECONDS * 1000);
+});
+
+// The refusal must give the reason that still holds — the round trip of the tick itself —
+// not the rate-limit reason, which a free 304 retired.
+test("the too-tight refusal gives the round-trip reason, not the rate-limit one", () => {
+  const message = refusal(["--watch", "--interval", "1"]);
+  assert.match(message, /round trip/i);
+  assert.doesNotMatch(message, /rate limit/i);
 });
 
 test("a zero or negative interval is refused too", () => {
@@ -212,8 +231,8 @@ test("an unknown flag is still named when the interval is also wrong", () => {
   assert.match(message, /--json/);
 });
 
-test("the default interval is well inside the hourly rate limit", () => {
-  // ~4 calls per redraw against GitHub's 5,000/hour for an authenticated user.
-  const redrawsPerHour = 3600 / DEFAULT_INTERVAL_SECONDS;
-  assert.ok(redrawsPerHour * 4 < 2000, `${redrawsPerHour} redraws/hour is not comfortable`);
+// The ceiling still requires --watch and a terminal — the interval change touches neither.
+test("--interval still requires --watch, and --watch still needs a terminal", () => {
+  assert.match(refusal(["--interval", "5"]), /--watch/);
+  assert.match(refusal(["--watch"], false), /terminal/i);
 });

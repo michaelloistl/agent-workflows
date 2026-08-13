@@ -16,11 +16,13 @@ import { capture } from "../shared/process.mts";
 import {
   crossReferencedIssues,
   issueRecord,
+  issuesChanged,
   listIssueRecords,
   nativeSubIssues,
   remoteBranches,
 } from "../shared/spec-tracker.mts";
 import { buildSpecTree } from "../shared/spec-tree.mts";
+import { freshRender } from "./freshness.mts";
 import { gatherIssues } from "./gather.mts";
 import { parseStatusArgs } from "./options.mts";
 import { renderStatus } from "./render.mts";
@@ -68,11 +70,11 @@ if (originRepo && originRepo.toLowerCase() !== repo.toLowerCase()) {
   );
 }
 
-// One pass: branches, the issues they imply, the tree, the frame. The whole read is in
-// here so `--watch` repeats exactly what the one-shot run prints, never a cheaper
-// approximation of it.
-function view(): string {
-  const branches = remoteBranches();
+// One full pass: the issues the branches imply, the tree, the frame. Given the branch list
+// rather than reading it, so a `--watch` tick reads the branches ONCE and hands the same
+// list to both its change probe and this pass (issue #106). The whole read is in here so
+// `--watch` repeats exactly what the one-shot run prints, never a cheaper approximation.
+function pass(branches: readonly string[]): string {
   const issues = gatherIssues(branches, {
     issueRecord,
     nativeSubIssues: (spec) => nativeSubIssues(repo, spec),
@@ -83,11 +85,12 @@ function view(): string {
 }
 
 if (watchIntervalMs === null) {
-  // A failure has to read differently from an empty view: "nothing is building" is the
-  // renderer's job and a good outcome, while an unauthenticated `gh` or a missing remote
-  // is an error with its own message. A watch, by contrast, keeps going and shows it.
+  // The one-shot path is unchanged: it always performs a full pass. A failure has to read
+  // differently from an empty view: "nothing is building" is the renderer's job and a good
+  // outcome, while an unauthenticated `gh` or a missing remote is an error with its own
+  // message. A watch, by contrast, keeps going and shows it.
   try {
-    console.log(view());
+    console.log(pass(remoteBranches()));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`agent-workflows status: could not read ${repo}: ${message}`);
@@ -102,8 +105,17 @@ if (watchIntervalMs === null) {
     process.on(signal, () => stopping.abort());
   }
 
+  // The redraw loop is unchanged: it still calls one `() => string` per interval. What it
+  // calls now decides whether the tick is worth a full pass — a cheap change probe against
+  // the last frame's state — and only then fetches. An unchanged tracker redraws the frame
+  // it already has (issue #106).
   await watchStatus({
-    render: view,
+    render: freshRender({
+      branches: remoteBranches,
+      changed: () => issuesChanged(repo),
+      pass,
+      now: () => Date.now(),
+    }),
     screen: terminalScreen(process.stdout),
     intervalMs: watchIntervalMs,
     signal: stopping.signal,

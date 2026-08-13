@@ -48,6 +48,12 @@ export interface ConfigFile {
     readonly maxSlices?: number;
     readonly maxWallClockSeconds?: number;
   };
+  // Whether the orchestrator labels the final spec→default PR for review when it
+  // opens it (issue #114). Absent → on. A consuming repo that does not want to spend
+  // the agent run sets this to `false`. The first boolean the resolver holds, so its
+  // "off" rule is explicit (see `resolveFinalPrReview`): only a real `false` here
+  // disables it — a non-boolean falls through to on.
+  readonly finalPrReview?: boolean;
 }
 
 // The model default lives here (not agent.mts) so the file/override resolution and
@@ -156,6 +162,24 @@ export function resolveRunCeiling({ env, file }: ResolveInputs): RunCeiling {
   return ceiling;
 }
 
+// Whether the orchestrator labels the final spec→default PR for review when it
+// opens it (issue #114): per-run override (FINAL_PR_REVIEW) → file (`finalPrReview`)
+// → the built-in default of ON. The FIRST boolean the resolver holds, so the rule
+// for what counts as OFF is explicit and cannot lean on the seconds/ceiling helpers:
+// only a real `false` in the file and only the exact string `"false"` in the env
+// disable it. Anything else — a mistyped env string, a non-boolean in the file — is
+// NOT off and falls through to on, because a typo must never silently remove a review
+// the repo was relying on. An empty env value is treated as unset, so it falls through
+// to the file then the default rather than reading as "not false → on" and shadowing
+// the file — parity with the other resolvers (this switch is repo-level policy with no
+// workflow input, so nothing sets the variable empty today, but the guard costs nothing
+// and keeps the "off" rule identical across every reader).
+export function resolveFinalPrReview({ env, file }: ResolveInputs): boolean {
+  const raw = env.FINAL_PR_REVIEW;
+  if (raw !== undefined && raw !== "") return raw !== "false";
+  return file.finalPrReview !== false;
+}
+
 export interface CheckTimings {
   readonly intervalSeconds: number;
   readonly timeoutSeconds: number;
@@ -182,6 +206,7 @@ export interface ResolvedConfig {
   readonly worktreeRoot: string;
   readonly bootstrap: string;
   readonly runCeiling: RunCeiling;
+  readonly finalPrReview: boolean;
 }
 
 // The whole resolved config in one call — what the entrypoints use. Reads the file
@@ -197,6 +222,7 @@ export function resolveConfig(
     worktreeRoot: resolveWorktreeRoot({ env, file }),
     bootstrap: resolveBootstrap({ env, file }),
     runCeiling: resolveRunCeiling({ env, file }),
+    finalPrReview: resolveFinalPrReview({ env, file }),
   };
 }
 

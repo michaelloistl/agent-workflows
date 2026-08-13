@@ -4,7 +4,9 @@ The original `implement-spec` design (grilled, then built in #7) ran an autonomo
 
 ## Status
 
-accepted (supersedes the slice-review-loop portion of #7)
+accepted (supersedes the slice-review-loop portion of #7); amended by #114 — review
+returns as a **human input at the spec boundary** (the final spec→default PR is
+labelled for an advisory review), which does not revive the verdict-driven alternative.
 
 ## Context — why the loop couldn't work
 
@@ -17,7 +19,9 @@ So a clean slice with a nit-level inline comment was routed to `implement-pr`, w
 
 ## Decision
 
-Drop per-slice review. Under a spec, `implement`'s finalize opens a ready PR to the spec branch and merges it immediately (strictly sequential, so the merge is always clean), which fires advance. `review-pr` and `implement-pr` revert to their standalone behaviour and are not part of the spec loop; the `BASE_REF`/`contents: write` plumbing added for the loop (#7, #16) is reverted.
+Drop per-slice review. Under a spec, `implement`'s finalize opens a ready PR to the spec branch and merges it immediately (strictly sequential, so the merge is always clean), which fires advance. `review-pr` and `implement-pr` revert to their standalone behaviour; the `BASE_REF`/`contents: write` plumbing added for the loop (#7, #16) is reverted.
+
+The line the original conflated, drawn explicitly (amended #114): review is dropped as a **machine input** — a verdict-less `COMMENT` that nothing can route on, which is precisely why a per-slice review-driven loop was unsound and why the verdict-driven alternative below stays dead. It returns as a **human input at the spec boundary**: the orchestrator labels the final spec→default PR for an advisory `review-pr` when it opens it (#114), addressed to the human who merges. That review still has no verdict and nothing programmatic reads it — it does not revive per-slice review or the verdict-driven option; advisory is simply the correct register for a review a human, not the sequencer, consumes.
 
 ## Considered alternatives
 

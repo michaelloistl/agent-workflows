@@ -75,7 +75,7 @@ no agent — it sequences a verb over a graph of issues).
 | **`implement-pr.yml`** | `agent:implement` on an open **PR** | reads the PR diff + review comments, makes the requested changes, commits | pushes (plain, never `--force`); posts threaded replies |
 | **`review-pr.yml`** | `agent:review-pr` on an open **PR** | read-only review of the PR | posts a GitHub review (inline comments + summary, advisory `COMMENT`) |
 | **`update-branch.yml`** | `agent:update-branch` on an open **PR** | merges the PR's base branch into the PR branch, resolving conflicts | pushes the merge; comments the outcome |
-| **`implement-spec.yml`** | `agent:implement-spec` on a spec **issue**, plus PR-merge events | orchestrator: sequences `implement` across a spec's tracer-bullets on a shared `agent/spec-…` branch, strictly sequentially | dispatches slices; opens the final spec→default PR |
+| **`implement-spec.yml`** | `agent:implement-spec` on a spec **issue**, plus PR-merge events | orchestrator: sequences `implement` across a spec's tracer-bullets on a shared `agent/spec-…` branch, strictly sequentially | dispatches slices; opens the final spec→default PR and labels it `agent:review-pr` for an advisory review |
 
 A few details worth knowing:
 
@@ -153,7 +153,8 @@ A serializer that turns a report's rows into RFC-4180 CSV…
 ## Labels
 
 The fleet is driven entirely by labels. **Trigger labels** are applied by a human
-to start a run; **state labels** are set and cleared only by the fleet.
+to start a run — or by the orchestrator when it dispatches work; **state labels**
+are set and cleared only by the fleet.
 
 **Trigger labels** (create these in each consuming repo):
 
@@ -167,7 +168,12 @@ to start a run; **state labels** are set and cleared only by the fleet.
 | `agent:implement-spec` | spec issue | `implement-spec` (kickoff) |
 
 The spec **advance** step needs no label — it fires automatically when a
-tracer-bullet PR merges into an `agent/spec-*` branch.
+tracer-bullet PR merges into an `agent/spec-*` branch. When the last tracer-bullet
+lands, advance opens the final spec→default PR and applies `agent:review-pr` to it,
+so the whole feature gets one advisory review at the spec boundary (ADR-0004). It
+creates the label first if the repo lacks it, and applies it only on the PR it just
+opened — a run that finds the final PR already open leaves it alone. Turn that review
+off with `finalPrReview: false` in the config file (or `FINAL_PR_REVIEW=false` per run).
 
 **State labels** (managed by the `<verb>-status` hook; never set these by hand):
 
@@ -259,7 +265,12 @@ because only GitHub Actions can act on them. Every value resolves per-run overri
   // Attended spec loop only. Ceiling on what one run may spend before you see it
   // again — slices attempted, wall-clock (seconds), or both (env overrides win:
   // RUN_CEILING_MAX_SLICES / RUN_CEILING_MAX_WALLCLOCK_SECONDS). Absent → no ceiling.
-  "runCeiling": { "maxSlices": 4, "maxWallClockSeconds": 3600 }
+  "runCeiling": { "maxSlices": 4, "maxWallClockSeconds": 3600 },
+  // Whether the orchestrator labels the final spec→default PR `agent:review-pr` for
+  // an advisory review when it opens it (FINAL_PR_REVIEW overrides). Absent → on.
+  // Set to `false` to skip that review and its agent run; only an explicit `false`
+  // (a real boolean here, the exact string "false" in the env) disables it.
+  "finalPrReview": true
 }
 ```
 
@@ -310,9 +321,10 @@ merged state back from GitHub** before advancing — a queued, blocked, or stale
 halts the run rather than being mistaken for a landed slice. Both CI gates are kept
 (a slice cannot merge on red; the next slice cannot start on a red spec-branch tip),
 a failed slice halts the whole run with no skip and no retry, the spec issue's
-progress comment is posted each iteration, and the final spec→base PR opens when the
-last slice lands. A spec run this way produces the same git history and tracker
-state as the same spec run in CI.
+progress comment is posted each iteration, and the final spec→base PR opens — labelled
+`agent:review-pr` for an advisory review — when the last slice lands. A spec run this
+way produces the same git history and tracker state as the same spec run in CI,
+because both paths open (and label) the final PR through the same shared routine.
 
 **CI stands down while a local run owns the spec.** Merging a slice PR into the spec
 branch is exactly the event the unattended **advance** workflow triggers on — and
@@ -399,8 +411,9 @@ dependency and still runs unchanged in CI and a bare terminal.
 enable (the state labels are created on first use by the hooks).
 
 **4. Add the secrets** (repo or org level): `CLAUDE_CODE_OAUTH_TOKEN` is
-required; `AGENT_PAT`, `RAILS_MASTER_KEY`, `LINEAR_API_KEY` are optional — see
-[Secrets](#secrets).
+required, and `AGENT_PAT` is required for spec orchestration (slice and final PRs
+must be authored by a real collaborator); `RAILS_MASTER_KEY`, `LINEAR_API_KEY` are
+optional — see [Secrets](#secrets).
 
 **5. Add a thin caller per verb** under `.github/workflows/`. See
 [Usage](#usage). Issue-triggered callers must live on the **default branch** to
@@ -532,7 +545,7 @@ standing in, with their tracer-bullets nested beneath (ADR-0007):
 
 ```sh
 yarn agent:status                          # or: agent-workflows status
-yarn agent:status --watch                  # redraw every 30s until ctrl-c
+yarn agent:status --watch                  # check every 5s until ctrl-c
 yarn agent:status --watch --interval 60
 yarn agent:status --no-color
 yarn agent:status --no-hyperlinks          # print the URL column instead of linking
@@ -592,13 +605,17 @@ the trailing URL column comes back instead:
   and the escape is an inert one — hence hyperlinks default off when `HERDR_ENV=1`. This is
   the only terminal the view knows by name, and `--hyperlinks` overrides it, so a Herdr that
   fixes OSC 8 needs a flag rather than a release.
-- **`--watch` redraws in place** — every 30 seconds by default, `--interval <seconds>`
-  to change it (whole seconds, from 5 to 3600: the floor keeps a watch left open all day
-  inside the GitHub rate limit, and past the ceiling the timer overflows into no pause at
-  all). The interval is the gap *between* redraws, so a slow pass simply pushes the next
-  one out. It redraws on its own screen and gives your scrollback back on ctrl-c, and
-  since replacing a frame needs a terminal, `--watch` is refused when stdout is a pipe
-  or a file. There are **no key bindings**: it is a redraw, not a TUI.
+- **`--watch` checks in place** — every 5 seconds by default, `--interval <seconds>` sets
+  how often it checks (whole seconds, from 2 to 3600). A tick costs one conditional read
+  and a branch listing, not a full fetch of the tree, and redraws only when something has
+  changed — so the default is a person's cadence, not a rate-limit budget: a label change
+  shows up in about five seconds. The floor is the round trip of a check itself (a shorter
+  interval would only stack checks on each other, since a `304` is free); past the ceiling
+  the timer overflows into no pause at all. The interval is the gap *between* checks, so a
+  slow pass simply pushes the next one out. It redraws on its own screen and gives your
+  scrollback back on ctrl-c, and since replacing a frame needs a terminal, `--watch` is
+  refused when stdout is a pipe or a file. There are **no key bindings**: it is a redraw,
+  not a TUI.
 - It is **read-only**. It runs no agent and writes nothing — a label write would be a
   dispatch, i.e. a real, billed agent run — so watching it costs reads only.
 - The repo comes from `GH_REPO` or the checkout's `origin` remote; no argument.
@@ -633,7 +650,7 @@ Pass with `secrets: inherit`.
 | Secret | Required | Used for |
 |---|---|---|
 | `CLAUDE_CODE_OAUTH_TOKEN` | **yes** | authenticates the Claude Code agent |
-| `AGENT_PAT` | no | a PAT used for `git push` and PR creation so the resulting PR triggers downstream CI (a `GITHUB_TOKEN` push does not). Falls back to `GITHUB_TOKEN` when unset |
+| `AGENT_PAT` | **yes for spec orchestration**, else no | a PAT used for `git push` and PR creation so the resulting PR triggers downstream CI (a `GITHUB_TOKEN` push does not). Falls back to `GITHUB_TOKEN` when unset. **Required** under `implement-spec`: slice PRs must be authored by a real collaborator (`author_association ∈ {OWNER,MEMBER,COLLABORATOR}`) or the PR-verb callers — including the `agent:review-pr` on the final PR — skip them and the spec stalls |
 | `RAILS_MASTER_KEY` | no | Rails repos that need it to prepare the test DB / run the app |
 | `LINEAR_API_KEY` | no | Linear-tracker repos (consumed by the swapped tracker adapter, not the central YAML) |
 

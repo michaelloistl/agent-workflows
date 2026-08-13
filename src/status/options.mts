@@ -11,7 +11,9 @@ export interface StatusOptions {
   // separate terminal capability from colour (Apple Terminal paints but ignores OSC 8), so
   // it is decided on its own and neither flag implies the other.
   readonly hyperlinks: boolean;
-  // How often to redraw, or null for the one-shot render that is still the default.
+  // How often the view checks for changes, or null for the one-shot render that is still
+  // the default. A tick is a check, not necessarily a redraw (#106): it fetches only when
+  // something changed.
   readonly watchIntervalMs: number | null;
 }
 
@@ -48,20 +50,21 @@ const INTERVAL = "--interval";
 // it the day Herdr fixes this. See the ADR amendment.
 const HERDR = "HERDR_ENV";
 
-// Roughly two to four GitHub calls per redraw (ADR-0007), so 30s is ~480 calls an hour
-// against an authenticated 5,000 — a watch can be left open all day beside the agent
-// runs that share the budget.
-export const DEFAULT_INTERVAL_SECONDS = 30;
+// A tick now costs one conditional read and a branch listing rather than a full fetch of
+// the tree (ADR-0007, #106), so the cadence is what a person watching a spec build wants:
+// a label change shows up in about five seconds — measured detection latency for the
+// conditional read is around four — rather than up to thirty.
+export const DEFAULT_INTERVAL_SECONDS = 5;
 
-// The floor exists for that same shared budget, not as a preference: a one-second watch
-// would spend the hour's calls in minutes and starve the fleet, so it is refused rather
-// than silently raised to something the user did not ask for.
-export const MIN_INTERVAL_SECONDS = 5;
+// The floor is the round trip of the tick itself, not the shared rate limit: a `304` is
+// free, so a tight interval no longer starves the fleet — but an interval shorter than
+// the tick's own round trip would just stack checks on top of each other, so it is refused
+// rather than silently raised to something the user did not ask for.
+export const MIN_INTERVAL_SECONDS = 2;
 
 // The ceiling is the timer's, not a taste: `setTimeout` overflows past ~24.8 days and
-// fires IMMEDIATELY instead, so an absurd interval would turn into the hot redraw loop
-// the floor exists to prevent. An hour is well inside that and past any watch worth
-// leaving open.
+// fires IMMEDIATELY instead, so an absurd interval would turn into the hot loop the floor
+// exists to prevent. An hour is well inside that and past any watch worth leaving open.
 export const MAX_INTERVAL_SECONDS = 3600;
 
 function refuse(message: string): ParseResult {
@@ -84,12 +87,12 @@ function parseInterval(raw: string | undefined): { ms: number } | { message: str
   }
   if (seconds < MIN_INTERVAL_SECONDS) {
     return {
-      message: `${INTERVAL}: ${raw}s is too tight — the floor is ${MIN_INTERVAL_SECONDS}s, so a long watch stays inside the GitHub rate limit.`,
+      message: `${INTERVAL}: ${raw}s is too tight — the floor is ${MIN_INTERVAL_SECONDS}s, shorter than the round trip of a single check.`,
     };
   }
   if (seconds > MAX_INTERVAL_SECONDS) {
     return {
-      message: `${INTERVAL}: ${raw}s is beyond the ${MAX_INTERVAL_SECONDS}s ceiling — past it the timer overflows and redraws without pausing at all.`,
+      message: `${INTERVAL}: ${raw}s is beyond the ${MAX_INTERVAL_SECONDS}s ceiling — past it the timer overflows and fires without pausing at all.`,
     };
   }
   return { ms: seconds * 1000 };
@@ -175,7 +178,7 @@ export function parseStatusArgs(
     return refuse(`${INTERVAL} only means something with ${WATCH} — a single render has no cadence.`);
   }
   // Each redraw REPLACES the last, which a pipe or a file cannot do. Refusing beats
-  // appending a frame every 30 seconds to something nobody is watching.
+  // appending a frame every few seconds to something nobody is watching.
   if (watch && !isTTY) {
     return refuse(`${WATCH} redraws in place, which needs a terminal — stdout here is not one.`);
   }
