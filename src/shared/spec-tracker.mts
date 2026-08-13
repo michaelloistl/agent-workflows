@@ -231,6 +231,63 @@ export function issueLabels(issue: number | string): string[] {
     .filter(Boolean);
 }
 
+// Has anything about the repo's issues changed since the last probe? The cheap half of a
+// `--watch` tick (issue #106): the status view asks this before deciding whether to do the
+// expensive full pass. It is an INVALIDATION SIGNAL and never a source of display data —
+// the full pass remains the only thing that produces a frame.
+//
+// The probe is the repo's issues ordered by most-recently-updated, a single item, replayed
+// with the previous ETag. Any label write, close, reopen, body edit or new issue makes that
+// issue the head of an updated-descending list and changes the payload; a `304 Not Modified`
+// then costs nothing against the primary rate limit, so an idle watch can run indefinitely.
+// It OVER-triggers, by design: the issues endpoint includes pull requests, so an unrelated
+// PR comment causes one extra full pass — the cheap side of the trade.
+//
+// Returns `false` when the tracker is verified unchanged, `true` when it changed, and `null`
+// when the probe cannot tell — a `gh` failure, a missing ETag, an unparseable response, or
+// the first probe with nothing to compare against. The caller fails open on `null`. The
+// ETag is held in memory for the life of the process; there is no cache file.
+let issuesEtag: string | null = null;
+
+export function issuesChanged(repo: string): boolean | null {
+  // `state=all` so a CLOSE is caught too: a close bumps the issue's `updated_at`, which
+  // makes it the head of the list only if closed issues are in it — an `open`-only list
+  // would drop the closed issue and leave an unrelated head unchanged.
+  const path = `/repos/${repo}/issues?state=all&sort=updated&direction=desc&per_page=1`;
+  const conditional = issuesEtag ? ["-H", `If-None-Match: ${issuesEtag}`] : [];
+  // `-i` prints the status line and headers, so both the 304 and the new ETag can be read
+  // off the response. `gh api` exits non-zero on a 304, so the response is read from the
+  // thrown error's captured stdout just as readily as from a clean exit.
+  const response = ghResponse(["api", "-i", ...conditional, path]);
+  if (response === null) return null;
+
+  const status = /^HTTP\/[\d.]+\s+(\d{3})/m.exec(response);
+  if (status?.[1] === "304") return false;
+  if (status?.[1] !== "200") return null;
+
+  const etag = /^etag:\s*(.+)$/im.exec(response)?.[1]?.trim();
+  if (etag === undefined) return null;
+  // A 200 despite `If-None-Match` means the payload really did change; without a prior ETag
+  // there is nothing to compare, so the first probe primes the ETag and defers to the full
+  // pass the first tick performs anyway.
+  const changed = issuesEtag !== null;
+  issuesEtag = etag;
+  return changed ? true : null;
+}
+
+// Run `gh` and return its stdout whether it exits zero or not — `gh api -i` reports a 304
+// as a non-zero exit but still writes the status line to stdout, and a probe reads that as
+// readily as a clean 200. Null only when there is no output at all to parse (a spawn
+// failure, an auth error with an empty stdout).
+function ghResponse(args: readonly string[]): string | null {
+  try {
+    return capture("gh", args, { quiet: true });
+  } catch (error) {
+    const stdout = (error as { stdout?: Buffer | string | null }).stdout;
+    return stdout ? stdout.toString() : null;
+  }
+}
+
 // Short names of the repo's remote branches (no `refs/heads/` prefix). Used to
 // detect a live spec branch (`pickSpecBranch`).
 export function remoteBranches(): string[] {
