@@ -256,8 +256,9 @@ export function issuesChanged(repo: string): boolean | null {
   const path = `/repos/${repo}/issues?state=all&sort=updated&direction=desc&per_page=1`;
   const conditional = issuesEtag ? ["-H", `If-None-Match: ${issuesEtag}`] : [];
   // `-i` prints the status line and headers, so both the 304 and the new ETag can be read
-  // off the response. `gh api` exits non-zero on a 304, so the response is read from the
-  // thrown error's captured stdout just as readily as from a clean exit.
+  // off the response — and `ghResponse` reads that status line whether `gh` treats the 304
+  // as a clean exit or a non-zero one (the observed behaviour varies by `gh` version), so
+  // the probe does not depend on which.
   const response = ghResponse(["api", "-i", ...conditional, path]);
   if (response === null) return null;
 
@@ -275,10 +276,11 @@ export function issuesChanged(repo: string): boolean | null {
   return changed ? true : null;
 }
 
-// Run `gh` and return its stdout whether it exits zero or not — `gh api -i` reports a 304
-// as a non-zero exit but still writes the status line to stdout, and a probe reads that as
-// readily as a clean 200. Null only when there is no output at all to parse (a spawn
-// failure, an auth error with an empty stdout).
+// Run `gh` and return its stdout whether it exits zero or not. `gh api -i` writes the status
+// line to stdout even when it reports a 304 as a non-zero exit (`gh: HTTP 304`) — the exit
+// code for a 304 has varied by `gh` version, so reading stdout from a thrown error as
+// readily as from a clean 200 keeps the probe robust to either. Null only when there is no
+// output at all to parse (a spawn failure, an auth error with an empty stdout).
 function ghResponse(args: readonly string[]): string | null {
   try {
     return capture("gh", args, { quiet: true });
