@@ -601,10 +601,16 @@ the trailing URL column comes back instead:
 - **Inside Herdr the URL column is printed instead**, automatically. A multiplexer owns the
   pane, and Herdr 0.8.0 acts on neither route: ⌘-click reaches Herdr, which does not open
   the link, and ⌘-Shift-click bypasses Herdr to the host terminal, which was never handed
-  one. Plain URLs *are* clickable there on both routes, so the column is the working target
-  and the escape is an inert one — hence hyperlinks default off when `HERDR_ENV=1`. This is
-  the only terminal the view knows by name, and `--hyperlinks` overrides it, so a Herdr that
-  fixes OSC 8 needs a flag rather than a release.
+  one. Plain URLs *are* clickable there, so the column is the working target and the escape
+  is an inert one — hence hyperlinks default off when `HERDR_ENV=1`. This is the only
+  terminal the view knows by name, and `--hyperlinks` overrides it, so a Herdr that fixes
+  OSC 8 needs a flag rather than a release.
+  **Under `--watch` inside Herdr, open a URL with ⌘-Shift-click, not ⌘-click.** `--watch`
+  draws on the alternate screen, which Herdr's own URL clicking does not reach; Shift
+  suppresses mouse reporting so the click goes to the host terminal, which finds the URL as
+  ordinary text on screen. ⌘-click is enough for the one-shot view, which draws on the
+  normal screen. This is the reason the column has to be *text* rather than an escape:
+  the host terminal can only find what Herdr actually drew.
 - **`--watch` checks in place** — every 5 seconds by default, `--interval <seconds>` sets
   how often it checks (whole seconds, from 2 to 3600). A tick costs one conditional read
   and a branch listing, not a full fetch of the tree, and redraws only when something has

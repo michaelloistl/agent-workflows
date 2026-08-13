@@ -8,6 +8,13 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Document that under `--watch` inside Herdr a URL opens with ⌘-Shift-click rather than
+  ⌘-click. `--watch` draws on the alternate screen, which Herdr's own URL clicking does not
+  reach; Shift suppresses mouse reporting so the click reaches the host terminal, which
+  finds the URL as ordinary text. ⌘-click is enough for the one-shot view, on the normal
+  screen. Documentation only — v1.4.0's URL column is what makes the host terminal able to
+  find anything at all, and no change here can reach Herdr's alt-screen handling.
+
 ## v1.4.0 — 2026-08-13
 
 - Label the final spec→default PR `agent:review-pr` when the orchestrator opens it, so
