@@ -292,6 +292,19 @@ test("classifyInvocation routes status to the read-only status view", () => {
   });
 });
 
+// `init` and `sync` set a repo UP to run the fleet rather than running any part of it,
+// so they follow no hook contract and must not be classified as whole-verb sequencer
+// runs. Their flags are forwarded verbatim, as the status view's are.
+test("classifyInvocation routes init and sync to the installer", () => {
+  assert.deepEqual(classifyInvocation(["init"]), { kind: "install", mode: "init", args: [] });
+  assert.deepEqual(classifyInvocation(["sync"]), { kind: "install", mode: "sync", args: [] });
+  assert.deepEqual(classifyInvocation(["init", "--enable=explore", "--dry-run"]), {
+    kind: "install",
+    mode: "init",
+    args: ["--enable=explore", "--dry-run"],
+  });
+});
+
 test("classifyInvocation reports usage when no verb is given", () => {
   assert.deepEqual(classifyInvocation([]), { kind: "usage" });
 });

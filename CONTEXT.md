@@ -32,6 +32,13 @@ _Avoid_: local run vs remote run (describes the machine, not the property that m
 The minimal workflow file in a consuming repo: event triggers + `workflow_dispatch` + `uses:` the central workflow + `with:` config + `secrets: inherit`. One per verb.
 _Avoid_: wrapper, stub
 
+**Installer**:
+`agent-workflows init` and `agent-workflows sync` — the fourth entry point to the package, which sets a *consuming repo* UP to run the fleet (`init`) and moves an installed one to the package's current version (`sync`). Runs no agent and follows no *hook contract*; `init` is the only entry point that runs before the package is a dependency, via `npx`. One planner decides both, so the two cannot disagree about what an installed repo looks like. It writes no secrets, never regenerates a *thin caller* a repo already has, and refuses to run against a checkout of the central repo. See ADR-0008.
+
+**Installable**:
+What the *installer* can enable in a consuming repo: the five *verbs* plus the `implement-spec` *orchestrator* — what `--enable` selects on. It exists so that "verb" keeps meaning the five agent actions: the orchestrator is installed like one but is not one. The set is per-repo — a repo enables what it wants, and the *fleet* is what enabling all of them gives you.
+_Avoid_: sixth verb, workflow (ambiguous with the *reusable workflow* and the *thin caller*)
+
 ### Agent runs
 
 **Verb**:

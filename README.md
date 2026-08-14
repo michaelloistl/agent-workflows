@@ -196,7 +196,65 @@ ends (see the attended spec loop below).
 
 ## Installation
 
-Set up a consuming repo in five steps. The tracker reads need **`gh` 2.94 or
+Run this in the repo you want to set up:
+
+```sh
+npx -y github:michaelloistl/agent-workflows#v1 init
+```
+
+That fetches the package into npm's cache and runs it against your checkout: it
+writes a thin caller per verb, wires the hook scripts, pins the git dependency,
+creates the trigger labels, and installs. It prints the whole plan first and does
+nothing until you accept it (`--dry-run` to look without applying, `--yes` to
+pre-accept in a script). Its last act is to add itself as a devDependency, so
+every later run is `yarn agent-workflows sync` — the installer always ships at the
+same version as the workflows it installs.
+
+```sh
+agent-workflows init --enable=implement,review-pr  # a subset, rather than the whole fleet
+agent-workflows init --dry-run                     # print the plan and stop
+agent-workflows init --base-branch=develop         # also write the config file
+agent-workflows init --help                        # every flag
+agent-workflows sync                               # later: move to the current release
+```
+
+Almost nothing needs an argument. `--enable` defaults to the whole fleet plus the
+orchestrator, the pin to the installer's own major version, the commit identity to
+your `git config user.email`, `enable-ruby` to whether the repo has a `Gemfile`,
+and the `pull_request_target` author gate to whether the repo is public. Override
+any of them with a flag.
+
+Two things `init` deliberately does **not** do:
+
+- **It never writes secrets.** It reports which are missing and how to set them.
+  `AGENT_PAT` cannot be minted outside the GitHub UI anyway, and the installer
+  reads and writes no secret material.
+- **It never regenerates a caller that already exists.** The `with:` inputs are
+  your toolchain and the `if:` is your access policy, so `sync` moves the `uses:`
+  ref and leaves every other line alone, reporting anything else that drifted.
+
+`sync` also reports **overrides**, the one thing that goes stale silently: a file
+under `.sandcastle/agent-workflows/` shadows the packaged entrypoint forever, so a
+prompt copied at v1.1 is still in use at v1.5 with nothing else to say so.
+
+Two things about `sync` worth knowing, because the default pin (`v1`) is a **moving
+tag** and neither is visible in the diff it leaves behind:
+
+- **It re-resolves the dependency rather than installing it** (`yarn up
+  agent-workflows`, or `yarn upgrade` on yarn 1). A plain `yarn install` sees an
+  unchanged `github:…#v1` descriptor and reuses the lockfile's resolution, so the
+  tag would not move. **Commit the updated `yarn.lock`** — the reusable workflows
+  install with `--frozen-lockfile`, so CI runs whatever commit it names.
+- **It runs the copy of the package in `node_modules`**, which is the version you
+  are moving *away* from. So it wires the hooks that version knows about; run
+  `yarn agent-workflows sync` once more afterwards to pick up hook scripts the
+  newer release added. It says so in its own output.
+
+### Installing by hand
+
+`init` automates the five steps below; they are the reference for what an
+installed repo looks like, and the path to take if you want to wire it yourself.
+The tracker reads need **`gh` 2.94 or
 newer** — that is where the `parent` and `blockedBy` JSON projections landed, and
 both the orchestrator and the status view ask for them. GitHub-hosted runners
 have been past that for a while; a local install that is not will fail the read
@@ -419,8 +477,9 @@ fire (label events run workflows from the default branch).
 
 ## Usage
 
-Each verb is one thin caller. Pin `@main` for the latest, or pin a tag/SHA to
-freeze the version.
+Each verb is one thin caller. Pin `@v1` — the moving major tag, and what `init`
+writes — to track compatible releases, or pin an exact tag/SHA to freeze the
+version. `@main` tracks unreleased work and is for this repo's own dogfooding.
 
 ### Issue verbs — `explore`, `implement`
 
@@ -440,10 +499,10 @@ permissions:
 jobs:
   implement:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement'
-    uses: michaelloistl/agent-workflows/.github/workflows/implement.yml@main
+    uses: michaelloistl/agent-workflows/.github/workflows/implement.yml@v1
     with:
       enable-ruby: true            # false on non-Rails repos (ADR-0002)
-      git-author-email: agent@example.com
+      git-author-email: "agent@example.com"
     secrets: inherit
 ```
 
@@ -472,10 +531,10 @@ jobs:
       (github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:review-pr')
       && (github.event_name == 'workflow_dispatch'
           || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
-    uses: michaelloistl/agent-workflows/.github/workflows/review-pr.yml@main
+    uses: michaelloistl/agent-workflows/.github/workflows/review-pr.yml@v1
     with:
       enable-ruby: true
-      git-author-email: agent@example.com
+      git-author-email: "agent@example.com"
     secrets: inherit
 ```
 
@@ -502,10 +561,10 @@ permissions:
 jobs:
   kickoff:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement-spec'
-    uses: michaelloistl/agent-workflows/.github/workflows/implement-spec.yml@main
+    uses: michaelloistl/agent-workflows/.github/workflows/implement-spec.yml@v1
     with:
       mode: kickoff
-      git-author-email: agent@example.com
+      git-author-email: "agent@example.com"
     secrets: inherit
 ```
 
@@ -529,10 +588,10 @@ jobs:
     if: >-
       github.event.pull_request.merged == true
       && startsWith(github.event.pull_request.base.ref, 'agent/spec-')
-    uses: michaelloistl/agent-workflows/.github/workflows/implement-spec.yml@main
+    uses: michaelloistl/agent-workflows/.github/workflows/implement-spec.yml@v1
     with:
       mode: advance
-      git-author-email: agent@example.com
+      git-author-email: "agent@example.com"
     secrets: inherit
 ```
 
@@ -674,16 +733,19 @@ Pass with `secrets: inherit`.
   dependency; a Linear repo swaps the adapter (packaged separately, #33).
 - **`bin/agent-workflows.mjs`** — the dispatcher: maps `<verb> <hook>` to a
   `src/` entrypoint (override-first) and runs it under `tsx`. Also routes the
-  non-verb entry points: the attended local runs and `status`.
+  non-verb entry points: the attended local runs, `status`, and `init`/`sync`.
 - **`src/status/`** — the read-only [status view](#status-view), over the shared
   spec-tree reader (`src/shared/spec-tree.mts`).
+- **`src/install/`** — [`init` and `sync`](#installation): one planner behind two
+  policies, deriving the consumer's hook scripts from this repo's own
+  `package.json` so a new hook needs no second list to update (ADR-0008).
 - **`docs/hook-contract.md`** — the interface every consuming repo implements.
 - **`CONTEXT.md`** — glossary. **`PLAN.md`** — build plan + rollout.
   **[`CHANGELOG.md`](CHANGELOG.md)** — notable changes per release.
   **`docs/adr/`** — architecture decisions (0001 thin reusable workflows; 0002
   toolchain generalization + feedback-loop boundary; 0003 spec strictly
   sequential; 0004 no per-slice review; 0005 one sequencer, two entry points;
-  0006 attended spec runs; 0007 the status view).
+  0006 attended spec runs; 0007 the status view; 0008 `init` and `sync`).
 
 ## Local checks
 
