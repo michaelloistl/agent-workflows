@@ -8,6 +8,8 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+## v1.5.0 — 2026-08-14
+
 - Move the packaged default agent model from `claude-opus-4-8` to `claude-opus-5`. This is
   the value every verb runs on when a consuming repo sets neither the `agent-model` input
   nor `agentModel` in `.sandcastle/agent-workflows/config.json`, so both of those overrides
