@@ -7,6 +7,7 @@ import {
   consumerScripts,
   dependencySpec,
   derivePackagedScripts,
+  dispatcherVerb,
   mergeScripts,
   refFromSpec,
 } from "./scripts.mts";
@@ -89,15 +90,33 @@ test("mergeScripts adds, updates and leaves foreign keys alone", () => {
 });
 
 // A stale hook script is worse than a missing one: the workflow calling it fails at the
-// point of use, long after the install that should have caught it. The namespace is
-// owned wholesale, so a key no longer desired is removed.
-test("mergeScripts removes a sandcastle script that is no longer desired", () => {
+// point of use, long after the install that should have caught it. So a script that
+// calls the dispatcher and is no longer desired is removed.
+test("mergeScripts removes a dispatcher script that is no longer desired", () => {
   const merged = mergeScripts(
     { "sandcastle:implement-prd-kickoff": "agent-workflows implement-prd kickoff" },
     { "sandcastle:implement-spec-kickoff": "agent-workflows implement-spec kickoff" },
   );
   assert.deepEqual(merged.removed, ["sandcastle:implement-prd-kickoff"]);
   assert.ok(!("sandcastle:implement-prd-kickoff" in merged.scripts));
+});
+
+// `.sandcastle/` is the consumer's own hook layer, so the namespace is not the
+// installer's to empty: only the scripts that call the dispatcher are.
+test("mergeScripts keeps a sandcastle script that is not the installer's", () => {
+  const merged = mergeScripts(
+    { "sandcastle:seed": "bin/rails db:seed" },
+    { "sandcastle:explore": "agent-workflows explore run" },
+  );
+  assert.deepEqual(merged.removed, []);
+  assert.equal(merged.scripts["sandcastle:seed"], "bin/rails db:seed");
+});
+
+test("dispatcherVerb reads the verb a hook script drives, and only ours", () => {
+  assert.equal(dispatcherVerb("node bin/agent-workflows.mjs implement-pr guards"), "implement-pr");
+  assert.equal(dispatcherVerb("agent-workflows implement --guards-only"), "implement");
+  assert.equal(dispatcherVerb("yarn agent-workflows status"), "status");
+  assert.equal(dispatcherVerb("bin/rails db:seed"), null);
 });
 
 test("dependencySpec and refFromSpec round-trip a git pin", () => {

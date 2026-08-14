@@ -15,7 +15,8 @@ version without editing their workflow on every release.
   its last act is to add itself as a devDependency, so later updates are
   `yarn agent-workflows sync` and the installer always ships at the version of the
   workflows it installs. One planner serves both commands (the shape of ADR-0005): `init`
-  is told which verbs to enable, `sync` detects the ones a repo already has, and the two
+  is told what to enable (`--enable=`, over the five verbs plus the orchestrator), `sync`
+  detects what a repo already has, and the two
   cannot drift about what an installed repo looks like. The consumer's hook scripts are
   **derived from this repo's own `package.json`** rather than a second table, so a hook
   added here reaches every consumer on their next `sync` — including the asymmetric ones a
@@ -30,10 +31,19 @@ version without editing their workflow on every release.
   the package and never installs itself. `sync` also reports local overrides, the one
   thing that goes stale silently — a file under `.sandcastle/agent-workflows/` shadows the
   packaged entrypoint forever, so a prompt copied at v1.1 is still in use at v1.5 with
-  nothing else to say so. Defaults come from the repo: the whole fleet of verbs, the
+  nothing else to say so. `sync` **re-resolves** the git dependency (`yarn up
+  agent-workflows`) rather than installing it: the default pin is a moving major tag, so a
+  plain `yarn install` reuses the lockfile's resolution and the tag never moves — and the
+  workflows install with `--frozen-lockfile`, so CI would keep running the commit the repo
+  was installed at. It says to commit the updated lockfile, and states the one ordering it
+  cannot escape: `sync` runs the copy in `node_modules`, so a hook added in the release it
+  is moving to arrives on the run after. Defaults come from the repo: everything the
+  package installs, the
   installer's own major version as the pin, `git config user.email` for the identity, a
   `Gemfile` for `enable-ruby`, and repo visibility for the `pull_request_target` author
-  gate — so the common install takes no arguments at all.
+  gate — so the common install takes no arguments at all. See ADR-0008; `CONTEXT.md` gains
+  **installer** and **installable** (the thing `--enable` selects — the verbs plus the
+  orchestrator, which is still not a sixth verb).
 
 ## v1.5.0 — 2026-08-14
 

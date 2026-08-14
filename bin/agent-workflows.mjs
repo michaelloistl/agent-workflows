@@ -268,7 +268,7 @@ function main() {
     console.error(
       "usage: agent-workflows <verb> [hook | issue-number] [args...]\n" +
         "       agent-workflows status [--watch]\n" +
-        "       agent-workflows init|sync [--verbs=…] [--ref=…] [--dry-run] [--yes]",
+        "       agent-workflows init|sync [--enable=…] [--ref=…] [--dry-run] [--yes] (--help for the rest)",
     );
     process.exit(2);
   }

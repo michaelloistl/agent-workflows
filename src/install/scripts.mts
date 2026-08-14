@@ -13,7 +13,7 @@
 // itself, so it runs `node bin/agent-workflows.mjs`; a consumer has the package in
 // `node_modules` and runs the `agent-workflows` bin on the yarn PATH.
 
-import type { Verb } from "./catalog.mts";
+import type { Installable } from "./catalog.mts";
 
 // How the central repo's own scripts invoke the dispatcher. Located by the bin path
 // (not by a `node ` prefix) so the split keeps working if the invocation ever picks up
@@ -22,6 +22,21 @@ const PACKAGED_BIN = "bin/agent-workflows.mjs";
 
 // The bin as a consumer reaches it: yarn puts `node_modules/.bin` on PATH.
 const CONSUMER_BIN = "agent-workflows";
+
+// A script that goes through the dispatcher, however it reaches the bin —
+// `agent-workflows <verb>`, `node bin/agent-workflows.mjs <verb>`, `yarn agent-workflows
+// <verb>`. The first argument after the bin is exactly what the dispatcher classifies.
+const DISPATCHER = /(?:^|[\s/])agent-workflows(?:\.mjs)?\s+([\w-]+)/;
+
+// The verb a script drives, or null when it does not call the dispatcher at all.
+//
+// Read from the COMMAND, never the script name: `sandcastle:implement-spec-kickoff`
+// could be read as verb `implement` with hook `spec-kickoff`, while the command says
+// which it is. It is also how the installer tells its own scripts from a consumer's.
+export function dispatcherVerb(command: string): string | null {
+  const match = DISPATCHER.exec(command);
+  return match ? match[1] : null;
+}
 
 export interface DerivedScript {
   readonly name: string;
@@ -56,7 +71,7 @@ export function derivePackagedScripts(
 // The scripts a consumer that enabled `verbs` should have, in the packaged order.
 export function consumerScripts(
   packagedScripts: Readonly<Record<string, string>>,
-  verbs: readonly Verb[],
+  verbs: readonly Installable[],
 ): Record<string, string> {
   const scripts: Record<string, string> = {};
   for (const script of derivePackagedScripts(packagedScripts)) {
@@ -75,11 +90,14 @@ export interface ScriptMerge {
 
 // Merge the desired scripts into a consumer's existing ones.
 //
-// The `sandcastle:` NAMESPACE is owned wholesale by the installer: a stale key left
-// behind by a removed verb or a renamed hook is worse than a missing one, because the
-// workflow that calls it fails at the point of use rather than at install time. So a
-// `sandcastle:*` key that is no longer desired is REMOVED, while every key outside the
-// namespace is left exactly as it was.
+// What the installer owns is not the `sandcastle:` namespace — `.sandcastle/` is the
+// consumer's own hook layer and a repo may keep its own `sandcastle:seed` there — but
+// the scripts that CALL THE DISPATCHER. Those it owns wholesale, because a stale one
+// left behind by a removed verb or a renamed hook is worse than a missing one: the
+// workflow calling it fails at the point of use rather than at install time. So a
+// `sandcastle:*` key whose command calls `agent-workflows` and is no longer desired is
+// REMOVED, and every other key — inside the namespace or out of it — is left exactly
+// as it was.
 //
 // A consumer who wants a different implementation for one hook overrides the
 // entrypoint under `.sandcastle/agent-workflows/` — the seam the dispatcher already
@@ -94,7 +112,7 @@ export function mergeScripts(
   const scripts: Record<string, string> = {};
 
   for (const [name, command] of Object.entries(existing)) {
-    if (name.startsWith("sandcastle:") && !(name in desired)) {
+    if (name.startsWith("sandcastle:") && dispatcherVerb(command) !== null && !(name in desired)) {
       removed.push(name);
       continue;
     }

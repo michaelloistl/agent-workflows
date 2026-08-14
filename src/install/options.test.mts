@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { defaultRef, parseInstallArgs } from "./options.mts";
+import { INSTALL_USAGE, defaultRef, parseInstallArgs } from "./options.mts";
 
 function ok(args: readonly string[]) {
   const parsed = parseInstallArgs(args);
@@ -17,24 +17,37 @@ function err(args: readonly string[]): string {
 
 test("no arguments leaves every choice to the repo", () => {
   const options = ok([]);
-  assert.equal(options.verbs, null);
+  assert.equal(options.installables, null);
   assert.equal(options.ref, null);
   assert.equal(options.enableRuby, null);
   assert.equal(options.gitAuthorEmail, null);
   assert.equal(options.dryRun, false);
   assert.equal(options.yes, false);
+  assert.equal(options.help, false);
 });
 
-test("--verbs is order-independent and deduplicated", () => {
-  assert.deepEqual(ok(["--verbs=implement,explore"]).verbs, ["explore", "implement"]);
-  assert.deepEqual(ok(["--verbs=explore,implement"]).verbs, ["explore", "implement"]);
-  assert.deepEqual(ok(["--verbs=explore,explore"]).verbs, ["explore"]);
+test("--enable is order-independent and deduplicated", () => {
+  assert.deepEqual(ok(["--enable=implement,explore"]).installables, ["explore", "implement"]);
+  assert.deepEqual(ok(["--enable=explore,implement"]).installables, ["explore", "implement"]);
+  assert.deepEqual(ok(["--enable=explore,explore"]).installables, ["explore"]);
 });
 
-test("an unknown verb is rejected with the known ones listed", () => {
-  const message = err(["--verbs=explore,implement-prd"]);
-  assert.match(message, /unknown verb implement-prd/);
+test("an unknown workflow is rejected with the known ones listed", () => {
+  const message = err(["--enable=explore,implement-prd"]);
+  assert.match(message, /cannot enable implement-prd/);
   assert.match(message, /implement-spec/);
+});
+
+// The command the README leads with is reached through `npx`, before the package is
+// installed and before there is anything else to read the flag list off.
+test("--help and -h ask for the usage text rather than being rejected", () => {
+  assert.equal(ok(["--help"]).help, true);
+  assert.equal(ok(["-h"]).help, true);
+  // Still parsed alongside the rest, so `init --enable=explore --help` explains
+  // itself rather than complaining about the flag it did not reach.
+  assert.equal(ok(["--enable=explore", "--help"]).help, true);
+  assert.match(INSTALL_USAGE, /--enable=/);
+  assert.match(INSTALL_USAGE, /--dry-run/);
 });
 
 test("--enable-ruby and --no-enable-ruby both override the detected default", () => {

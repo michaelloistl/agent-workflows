@@ -6,13 +6,32 @@
 // questionnaire, because a setup command that can only be driven by answering six
 // prompts cannot be put in a script or handed to an agent.
 
-import type { Verb } from "./catalog.mts";
-import { VERBS, isVerb } from "./catalog.mts";
+import type { Installable } from "./catalog.mts";
+import { INSTALLABLES, isInstallable } from "./catalog.mts";
+
+// What `--help` prints. Kept here rather than in the entry point because it is the
+// flag list this file defines, and the two going out of step is the whole hazard.
+export const INSTALL_USAGE = [
+  "usage: agent-workflows init|sync [flags]",
+  "",
+  "  init   set this repo up to run the fleet",
+  "  sync   move an installed repo to this package's version",
+  "",
+  `  --enable=<a,b>        which workflows to enable (default: all — ${INSTALLABLES.join(", ")})`,
+  "  --ref=<git-ref>       the ref callers and the dependency pin at (default: the installer's major)",
+  "  --email=<address>     the identity the workflows commit as (default: git config user.email)",
+  "  --workflows-repo=<owner/name>  install from a fork of the central repo",
+  "  --base-branch=<name>  write `.sandcastle/agent-workflows/config.json` with this integration branch",
+  "  --enable-ruby, --no-enable-ruby  toolchain override (default: whether the repo has a Gemfile)",
+  "  --dry-run             print the plan and stop",
+  "  --yes, -y             pre-accept the plan (a non-interactive stdin otherwise declines)",
+  "  --help, -h            print this",
+].join("\n");
 
 export interface InstallOptions {
-  // Null means "decide from the repo": every verb on `init`, the already-enabled ones
+  // Null means "decide from the repo": everything on `init`, the already-enabled ones
   // on `sync`.
-  readonly verbs: readonly Verb[] | null;
+  readonly installables: readonly Installable[] | null;
   // Null means "the major version of the package doing the installing".
   readonly ref: string | null;
   // Null means "the packaged default, or the repo's Gemfile" — see the entry point.
@@ -26,6 +45,8 @@ export interface InstallOptions {
   // Pre-accept the plan. Without it a non-interactive stdin DECLINES, so a scripted
   // run cannot start a repo-modifying install by accident.
   readonly yes: boolean;
+  // Print the flag list and stop, reading nothing.
+  readonly help: boolean;
 }
 
 export type ParsedOptions =
@@ -33,7 +54,7 @@ export type ParsedOptions =
   | { readonly ok: false; readonly message: string };
 
 const FLAGS_WITH_VALUES = [
-  "verbs",
+  "enable",
   "ref",
   "email",
   "workflows-repo",
@@ -41,7 +62,7 @@ const FLAGS_WITH_VALUES = [
 ] as const;
 
 export function parseInstallArgs(args: readonly string[]): ParsedOptions {
-  let verbs: readonly Verb[] | null = null;
+  let installables: readonly Installable[] | null = null;
   let ref: string | null = null;
   let enableRuby: boolean | null = null;
   let gitAuthorEmail: string | null = null;
@@ -49,8 +70,13 @@ export function parseInstallArgs(args: readonly string[]): ParsedOptions {
   let baseBranch: string | null = null;
   let dryRun = false;
   let yes = false;
+  let help = false;
 
   for (const arg of args) {
+    if (arg === "--help" || arg === "-h") {
+      help = true;
+      continue;
+    }
     if (arg === "--dry-run") {
       dryRun = true;
       continue;
@@ -91,18 +117,18 @@ export function parseInstallArgs(args: readonly string[]): ParsedOptions {
     }
 
     switch (name) {
-      case "verbs": {
+      case "enable": {
         const requested = value.split(",").map((v) => v.trim()).filter((v) => v !== "");
-        const unknown = requested.filter((v) => !isVerb(v));
+        const unknown = requested.filter((v) => !isInstallable(v));
         if (unknown.length > 0) {
           return {
             ok: false,
-            message: `unknown verb${unknown.length === 1 ? "" : "s"} ${unknown.join(", ")} — known verbs are ${VERBS.join(", ")}`,
+            message: `cannot enable ${unknown.join(", ")} — this package installs ${INSTALLABLES.join(", ")}`,
           };
         }
-        // Deduplicated and put back in catalog order, so `--verbs=implement,explore`
-        // and `--verbs=explore,implement` plan identically.
-        verbs = VERBS.filter((v) => requested.includes(v));
+        // Deduplicated and put back in catalog order, so `--enable=implement,explore`
+        // and `--enable=explore,implement` plan identically.
+        installables = INSTALLABLES.filter((v) => requested.includes(v));
         break;
       }
       case "ref":
@@ -125,7 +151,17 @@ export function parseInstallArgs(args: readonly string[]): ParsedOptions {
 
   return {
     ok: true,
-    options: { verbs, ref, enableRuby, gitAuthorEmail, workflowsRepo, baseBranch, dryRun, yes },
+    options: {
+      installables,
+      ref,
+      enableRuby,
+      gitAuthorEmail,
+      workflowsRepo,
+      baseBranch,
+      dryRun,
+      yes,
+      help,
+    },
   };
 }
 

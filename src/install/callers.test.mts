@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { CALLERS, callersFor, labelsFor, secretsFor } from "./catalog.mts";
-import { renderCaller, renderCallers, repinCaller } from "./callers.mts";
+import { isGeneratedCaller, renderCaller, repinCaller } from "./callers.mts";
 
 const OPTIONS = {
   workflowsRepo: "michaelloistl/agent-workflows",
@@ -96,11 +96,11 @@ test("repinCaller moves only the ref and reports the old one", () => {
 test("repinCaller preserves hand-edited inputs and guards", () => {
   const edited = renderCaller(caller("agent-implement.yml"), OPTIONS)
     .replace("enable-ruby: false", "enable-ruby: true\n      system-packages: libvips")
-    .replace("git-author-email: agent@example.com", "git-author-email: bot@corp.example");
+    .replace('git-author-email: "agent@example.com"', 'git-author-email: "bot@corp.example"');
 
   const after = repinCaller(edited, OPTIONS.workflowsRepo, "v1.6.0");
   assert.match(after.content, /system-packages: libvips/);
-  assert.match(after.content, /git-author-email: bot@corp\.example/);
+  assert.match(after.content, /git-author-email: "bot@corp\.example"/);
   assert.match(after.content, /implement\.yml@v1\.6\.0/);
 });
 
@@ -109,6 +109,56 @@ test("repinCaller leaves a caller that points somewhere else alone", () => {
   const after = repinCaller(foreign, OPTIONS.workflowsRepo, "v1");
   assert.equal(after.from, null);
   assert.equal(after.content, foreign);
+});
+
+// A consumer is free to put two jobs in one caller file. Moving the first `uses:` and
+// reporting the whole file as re-pinned would leave half of it on the old release —
+// with the plan saying otherwise.
+test("repinCaller moves every uses: into the workflows repo, not just the first", () => {
+  const two = [
+    "jobs:",
+    "  a:",
+    "    uses: michaelloistl/agent-workflows/.github/workflows/explore.yml@v1.2.0",
+    "  b:",
+    "    uses: michaelloistl/agent-workflows/.github/workflows/implement.yml@v1.2.0",
+    "  c:",
+    "    uses: someone-else/actions/.github/workflows/build.yml@v3",
+    "",
+  ].join("\n");
+
+  const after = repinCaller(two, OPTIONS.workflowsRepo, "v1.3.0");
+  assert.equal(after.from, "v1.2.0");
+  assert.match(after.content, /explore\.yml@v1\.3\.0/);
+  assert.match(after.content, /implement\.yml@v1\.3\.0/);
+  assert.match(after.content, /build\.yml@v3/, "a third-party pin is left alone");
+});
+
+// The ref reaches `String.replace` as a replacement string, where `$&` and `$1` mean
+// something. A branch name may legitimately contain a `$`.
+test("repinCaller inserts a ref containing $ literally", () => {
+  const before = renderCaller(caller("agent-explore.yml"), OPTIONS);
+  const after = repinCaller(before, OPTIONS.workflowsRepo, "feature/$1-spike");
+  assert.match(after.content, /explore\.yml@feature\/\$1-spike$/m);
+});
+
+// The commit identity is the one value in a generated caller that comes from outside
+// the catalog, so it is the one that can carry a `#` or a `:` into the YAML.
+test("the commit identity is written as a quoted scalar", () => {
+  const yaml = renderCaller(caller("agent-explore.yml"), {
+    ...OPTIONS,
+    gitAuthorEmail: "agent+bot@example.com # not a comment",
+  });
+  assert.match(yaml, /git-author-email: "agent\+bot@example\.com # not a comment"/);
+});
+
+// `sync` tells a file it generated from one a human wrote, so it can say whose drift
+// it is reporting (see `callerWarnings` in plan.mts).
+test("isGeneratedCaller recognises the installer's own marker", () => {
+  assert.equal(isGeneratedCaller(renderCaller(caller("agent-explore.yml"), OPTIONS)), true);
+  assert.equal(
+    isGeneratedCaller("jobs:\n  x:\n    uses: michaelloistl/agent-workflows/x.yml@v1\n"),
+    false,
+  );
 });
 
 test("callersFor expands implement-spec into its two callers", () => {
@@ -134,14 +184,5 @@ test("secretsFor asks for a PAT only when the orchestrator is enabled", () => {
   assert.deepEqual(secretsFor(["implement-spec"]).map((s) => s.name), [
     "CLAUDE_CODE_OAUTH_TOKEN",
     "AGENT_PAT",
-  ]);
-});
-
-test("renderCallers renders one file per caller of the selected verbs", () => {
-  const rendered = renderCallers(["explore", "implement-spec"], OPTIONS);
-  assert.deepEqual(rendered.map((r) => r.file), [
-    "agent-explore.yml",
-    "agent-implement-spec-kickoff.yml",
-    "agent-implement-spec-advance.yml",
   ]);
 });

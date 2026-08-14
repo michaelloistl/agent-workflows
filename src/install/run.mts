@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { CALLERS } from "./catalog.mts";
 import type { PackageJson, Plan, RepoState } from "./plan.mts";
 import { buildPlan } from "./plan.mts";
-import { defaultRef, parseInstallArgs } from "./options.mts";
+import { INSTALL_USAGE, defaultRef, parseInstallArgs } from "./options.mts";
 
 // The repo these workflows live in, for consumers who install from the canonical
 // source. A fork overrides it with `--workflows-repo`, and the packaged
@@ -36,6 +36,13 @@ if (!parsed.ok) {
   process.exit(2);
 }
 const options = parsed.options;
+
+// Answered before anything is read: `--help` is what a human reaches for from the
+// `npx` one-liner, when there is no installed package to read a flag list off.
+if (options.help) {
+  console.log(INSTALL_USAGE);
+  process.exit(0);
+}
 
 // ---------------------------------------------------------------------------
 // Reading the world
@@ -70,11 +77,19 @@ const packaged = JSON.parse(readFileSync(packagedPath, "utf8")) as PackageJson &
 };
 const packagedVersion = packaged.version ?? "0.0.0";
 
-function readJson(path: string): PackageJson | null {
+// A manifest read has three outcomes, and the planner needs all three: absent (init
+// writes one), parsed, and there-but-unreadable (block — see `RepoState`). Collapsing
+// the last two into `null` is what would let `init` write over a real manifest it
+// merely failed to parse.
+function readPackageJson(path: string): {
+  readonly parsed: PackageJson | null;
+  readonly unreadable: boolean;
+} {
+  if (!existsSync(path)) return { parsed: null, unreadable: false };
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as PackageJson;
+    return { parsed: JSON.parse(readFileSync(path, "utf8")) as PackageJson, unreadable: false };
   } catch {
-    return null;
+    return { parsed: null, unreadable: true };
   }
 }
 
@@ -119,8 +134,11 @@ for (const caller of CALLERS) {
   if (content !== null) callers[caller.file] = content;
 }
 
+const manifest = readPackageJson(join(repoRoot, "package.json"));
+
 const state: RepoState = {
-  packageJson: readJson(join(repoRoot, "package.json")),
+  packageJson: manifest.parsed,
+  packageJsonUnreadable: manifest.unreadable,
   hasYarnLock: existsSync(join(repoRoot, "yarn.lock")),
   nodeVersion: readText(join(repoRoot, ".node-version"))?.trim() ?? null,
   callers,
@@ -167,7 +185,7 @@ const plan = buildPlan({
   state,
   packagedScripts: packaged.scripts ?? {},
   packagedVersion,
-  verbs: options.verbs,
+  installables: options.installables,
   workflowsRepo,
   ref: options.ref ?? defaultRef(packagedVersion),
   enableRuby,
@@ -182,10 +200,11 @@ const plan = buildPlan({
 
 function describe(plan: Plan): string {
   const lines: string[] = [];
-  const ref = options.ref ?? defaultRef(packagedVersion);
+  // `plan.ref`, never a second `options.ref ?? defaultRef(…)`: this is the line that
+  // tells the human what they are accepting, so it reads the value that was used.
   lines.push(`agent-workflows ${plan.mode} — ${relative(process.cwd(), repoRoot) || "."}`);
-  lines.push(`  package   ${workflowsRepo}@${ref} (installer v${packagedVersion})`);
-  lines.push(`  verbs     ${plan.verbs.join(", ") || "none"}`);
+  lines.push(`  package   ${workflowsRepo}@${plan.ref} (installer v${packagedVersion})`);
+  lines.push(`  enabling  ${plan.installables.join(", ") || "none"}`);
   lines.push(`  toolchain ${enableRuby ? "Node + Ruby/Postgres/Redis" : "Node only"}`);
   lines.push(`  identity  ${gitAuthorEmail}`);
   lines.push("");
@@ -209,9 +228,15 @@ function describe(plan: Plan): string {
     lines.push(`  ${write.path} ${write.existing ? "(edit)" : "(create)"} — ${write.reason}`);
   }
   if (plan.labels.length > 0) lines.push(`  labels (create) — ${plan.labels.join(", ")}`);
-  if (plan.install) lines.push("  yarn install");
+  if (plan.refresh) lines.push(`  ${upgradeCommand().join(" ")} — re-resolve the pin`);
+  else if (plan.install) lines.push("  yarn install");
 
-  if (plan.writes.length === 0 && plan.packageJson === null && plan.labels.length === 0) {
+  if (
+    plan.writes.length === 0 &&
+    plan.packageJson === null &&
+    plan.labels.length === 0 &&
+    !plan.refresh
+  ) {
     lines.push("  nothing to change — already up to date");
   }
 
@@ -227,6 +252,21 @@ function describe(plan: Plan): string {
   return lines.join("\n");
 }
 
+// How this repo's yarn is told to RE-RESOLVE one dependency. Classic and berry spell
+// it differently, and neither spelling is a no-op on the other, so the version decides.
+// Unknown yarn is treated as berry: `yarn up` is the current spelling, and a wrong
+// guess fails loudly at the point of use rather than silently doing nothing.
+let upgrade: readonly string[] | null = null;
+function upgradeCommand(): readonly string[] {
+  if (upgrade === null) {
+    const version = tryCapture("yarn", ["--version"]) ?? "";
+    upgrade = version.startsWith("1.")
+      ? ["yarn", "upgrade", "agent-workflows"]
+      : ["yarn", "up", "agent-workflows"];
+  }
+  return upgrade;
+}
+
 console.log(describe(plan));
 
 if (plan.blocked !== null) {
@@ -235,7 +275,11 @@ if (plan.blocked !== null) {
 }
 
 const hasChanges =
-  plan.writes.length > 0 || plan.packageJson !== null || plan.labels.length > 0 || plan.install;
+  plan.writes.length > 0 ||
+  plan.packageJson !== null ||
+  plan.labels.length > 0 ||
+  plan.install ||
+  plan.refresh;
 
 if (options.dryRun) {
   console.log("\ndry run — nothing was changed.");
@@ -294,7 +338,23 @@ for (const label of plan.labels) {
   else console.log(`could not create label ${label} — ${(created.stderr ?? "").trim()}`);
 }
 
-if (plan.install || !existsSync(join(repoRoot, "node_modules", "agent-workflows"))) {
+// `sync` re-resolves rather than installs. A git dependency whose descriptor has not
+// changed — the default pin is a MOVING major tag, so it usually has not — resolves
+// straight out of `yarn.lock` to the commit it was installed at, which is also the
+// commit CI's `--frozen-lockfile` would keep using. Without this, `sync` updates the
+// manifest and moves nothing.
+if (plan.refresh) {
+  const [file, ...args] = upgradeCommand();
+  console.log(`running ${[file, ...args].join(" ")}…`);
+  const upgraded = spawnSync(file, args, { cwd: repoRoot, stdio: "inherit" });
+  if (upgraded.status !== 0) {
+    console.error(
+      `\n${[file, ...args].join(" ")} failed — the manifest is updated but the pin has not moved.` +
+        "\nRe-resolve it by hand, or the workflows keep running the commit you were on.",
+    );
+    process.exit(1);
+  }
+} else if (plan.install || !existsSync(join(repoRoot, "node_modules", "agent-workflows"))) {
   console.log("running yarn install…");
   const installed = spawnSync("yarn", ["install"], { cwd: repoRoot, stdio: "inherit" });
   if (installed.status !== 0) {

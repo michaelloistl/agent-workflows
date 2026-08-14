@@ -1,4 +1,4 @@
-// The INSTALL CATALOG: what a consuming repo needs, per verb, to run the fleet.
+// The INSTALL CATALOG: what a consuming repo needs, per installable, to run the fleet.
 //
 // `init` and `sync` are the fourth entry point to this package (after the workflow
 // sequencer, the local sequencer, and the status view). They set a repo UP to use
@@ -6,14 +6,17 @@
 // contract — this is the data the five manual Installation steps in the README were
 // asking a human to transcribe by hand.
 //
-// Everything the installer knows about a verb lives in one row below, and both the
-// caller renderer and the label step read the same row. The alternative — a label
+// Everything the installer knows about an installable lives in one row below, and both
+// the caller renderer and the label step read the same row. The alternative — a label
 // list here, a permissions table there — is exactly how a repo ends up with a caller
 // that triggers on a label nothing creates.
 
-// The verbs a consumer can enable. `implement-spec` is the orchestrator; it is
-// selected like a verb but expands to TWO callers (kickoff and advance).
-export const VERBS = [
+// What a consumer can enable: the five VERBS plus the `implement-spec` ORCHESTRATOR.
+// Deliberately not called a verb — the orchestrator triggers no agent action and
+// follows no hook contract (CONTEXT.md), so the selectable unit here is the union of
+// the two, and `implement-spec` is the one entry that expands to TWO callers (kickoff
+// and advance).
+export const INSTALLABLES = [
   "explore",
   "implement",
   "implement-pr",
@@ -22,10 +25,10 @@ export const VERBS = [
   "implement-spec",
 ] as const;
 
-export type Verb = (typeof VERBS)[number];
+export type Installable = (typeof INSTALLABLES)[number];
 
-export function isVerb(value: string): value is Verb {
-  return (VERBS as readonly string[]).includes(value);
+export function isInstallable(value: string): value is Installable {
+  return (INSTALLABLES as readonly string[]).includes(value);
 }
 
 // How a caller is triggered. The three shapes differ in more than their `on:` block —
@@ -46,11 +49,11 @@ export interface Permissions {
   readonly "pull-requests": "read" | "write";
 }
 
-// One caller file to write. Most verbs produce one; `implement-spec` produces two,
-// which is why the catalog is keyed by caller rather than by verb.
+// One caller file to write. Most installables produce one; `implement-spec` produces
+// two, which is why the catalog is keyed by caller rather than by installable.
 export interface CallerSpec {
-  // The verb this caller belongs to — what `--verbs` selects on.
-  readonly verb: Verb;
+  // The installable this caller belongs to — what `--enable` selects on.
+  readonly installable: Installable;
   // `.github/workflows/<file>`.
   readonly file: string;
   // The `name:` of the workflow.
@@ -77,7 +80,7 @@ export interface CallerSpec {
 
 export const CALLERS: readonly CallerSpec[] = [
   {
-    verb: "explore",
+    installable: "explore",
     file: "agent-explore.yml",
     name: "Agent Explore",
     job: "explore",
@@ -95,7 +98,7 @@ export const CALLERS: readonly CallerSpec[] = [
     ],
   },
   {
-    verb: "implement",
+    installable: "implement",
     file: "agent-implement.yml",
     name: "Agent Implement",
     job: "implement",
@@ -114,7 +117,7 @@ export const CALLERS: readonly CallerSpec[] = [
     ],
   },
   {
-    verb: "implement-pr",
+    installable: "implement-pr",
     file: "agent-implement-pr.yml",
     name: "Agent Implement PR",
     job: "implement-pr",
@@ -131,7 +134,7 @@ export const CALLERS: readonly CallerSpec[] = [
     ],
   },
   {
-    verb: "review-pr",
+    installable: "review-pr",
     file: "agent-review-pr.yml",
     name: "Agent Review PR",
     job: "review-pr",
@@ -146,7 +149,7 @@ export const CALLERS: readonly CallerSpec[] = [
     ],
   },
   {
-    verb: "update-branch",
+    installable: "update-branch",
     file: "agent-update-branch.yml",
     name: "Agent Update Branch",
     job: "update-branch",
@@ -162,7 +165,7 @@ export const CALLERS: readonly CallerSpec[] = [
     ],
   },
   {
-    verb: "implement-spec",
+    installable: "implement-spec",
     file: "agent-implement-spec-kickoff.yml",
     name: "Agent Implement spec (kickoff)",
     job: "kickoff",
@@ -180,7 +183,7 @@ export const CALLERS: readonly CallerSpec[] = [
     ],
   },
   {
-    verb: "implement-spec",
+    installable: "implement-spec",
     file: "agent-implement-spec-advance.yml",
     name: "Agent Implement spec (advance)",
     job: "advance",
@@ -200,26 +203,26 @@ export const CALLERS: readonly CallerSpec[] = [
   },
 ];
 
-// The callers a selection of verbs implies, in catalog order.
-export function callersFor(verbs: readonly Verb[]): readonly CallerSpec[] {
-  return CALLERS.filter((caller) => verbs.includes(caller.verb));
+// The callers a selection of installables implies, in catalog order.
+export function callersFor(installables: readonly Installable[]): readonly CallerSpec[] {
+  return CALLERS.filter((caller) => installables.includes(caller.installable));
 }
 
-// The trigger labels a selection of verbs implies — deduplicated, because
+// The trigger labels a selection of installables implies — deduplicated, because
 // `implement` and `implement-pr` deliberately share `agent:implement` (they are told
 // apart by the trigger event, not the label).
 //
 // STATE labels (`agent:in-progress`, `agent:review`, `agent:blocked`) and the
 // `agent:local` run marker are deliberately absent: the hooks create those on first
 // use, so creating them here would only duplicate a step that already works.
-export function labelsFor(verbs: readonly Verb[]): readonly string[] {
-  const labels = callersFor(verbs)
+export function labelsFor(installables: readonly Installable[]): readonly string[] {
+  const labels = callersFor(installables)
     .map((caller) => caller.label)
     .filter((label): label is string => label !== null);
   return [...new Set(labels)];
 }
 
-// The secrets a selection of verbs needs, and why. Reported, never written: the
+// The secrets a selection of installables needs, and why. Reported, never written: the
 // installer reads and writes no secret material, and `AGENT_PAT` cannot be minted
 // without a human in the GitHub UI.
 export interface SecretRequirement {
@@ -228,7 +231,7 @@ export interface SecretRequirement {
   readonly why: string;
 }
 
-export function secretsFor(verbs: readonly Verb[]): readonly SecretRequirement[] {
+export function secretsFor(installables: readonly Installable[]): readonly SecretRequirement[] {
   const secrets: SecretRequirement[] = [
     {
       name: "CLAUDE_CODE_OAUTH_TOKEN",
@@ -238,7 +241,7 @@ export function secretsFor(verbs: readonly Verb[]): readonly SecretRequirement[]
       why: "every agent run authenticates with it",
     },
   ];
-  if (verbs.includes("implement-spec")) {
+  if (installables.includes("implement-spec")) {
     secrets.push({
       name: "AGENT_PAT",
       required: true,

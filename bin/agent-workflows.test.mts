@@ -298,10 +298,10 @@ test("classifyInvocation routes status to the read-only status view", () => {
 test("classifyInvocation routes init and sync to the installer", () => {
   assert.deepEqual(classifyInvocation(["init"]), { kind: "install", mode: "init", args: [] });
   assert.deepEqual(classifyInvocation(["sync"]), { kind: "install", mode: "sync", args: [] });
-  assert.deepEqual(classifyInvocation(["init", "--verbs=explore", "--dry-run"]), {
+  assert.deepEqual(classifyInvocation(["init", "--enable=explore", "--dry-run"]), {
     kind: "install",
     mode: "init",
-    args: ["--verbs=explore", "--dry-run"],
+    args: ["--enable=explore", "--dry-run"],
   });
 });
 

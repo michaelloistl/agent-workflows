@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { renderCaller } from "./callers.mts";
 import { CALLERS } from "./catalog.mts";
 import type { PlanInput, RepoState } from "./plan.mts";
-import { buildPlan, detectVerbs } from "./plan.mts";
+import { buildPlan, detectInstallables } from "./plan.mts";
 
 const PACKAGED_SCRIPTS = {
   "sandcastle:explore": "node bin/agent-workflows.mjs explore run",
@@ -16,6 +16,7 @@ const PACKAGED_SCRIPTS = {
 
 const EMPTY: RepoState = {
   packageJson: null,
+  packageJsonUnreadable: false,
   hasYarnLock: false,
   nodeVersion: null,
   callers: {},
@@ -31,7 +32,7 @@ function input(overrides: Partial<PlanInput> = {}): PlanInput {
     state: EMPTY,
     packagedScripts: PACKAGED_SCRIPTS,
     packagedVersion: "1.5.0",
-    verbs: ["explore"],
+    installables: ["explore"],
     workflowsRepo: "michaelloistl/agent-workflows",
     ref: "v1",
     enableRuby: false,
@@ -85,8 +86,8 @@ test("init creates a minimal package.json rather than refusing", () => {
 });
 
 test("init defaults to every verb when none is selected", () => {
-  const plan = buildPlan(input({ verbs: null }));
-  assert.deepEqual(plan.verbs, [
+  const plan = buildPlan(input({ installables: null }));
+  assert.deepEqual(plan.installables, [
     "explore",
     "implement",
     "implement-pr",
@@ -130,7 +131,7 @@ test("init re-pins a caller that is already there instead of regenerating it", (
 test("neither command touches the central package's own checkout", () => {
   for (const mode of ["init", "sync"] as const) {
     const state: RepoState = { ...EMPTY, packageJson: { name: "agent-workflows" } };
-    const plan = buildPlan(input({ mode, state, verbs: null }));
+    const plan = buildPlan(input({ mode, state, installables: null }));
     assert.match(plan.blocked ?? "", /never installs itself/);
     assert.deepEqual(plan.writes, []);
     assert.equal(plan.packageJson, null);
@@ -138,7 +139,7 @@ test("neither command touches the central package's own checkout", () => {
 });
 
 test("sync refuses on a repo that was never installed", () => {
-  const plan = buildPlan(input({ mode: "sync", verbs: null }));
+  const plan = buildPlan(input({ mode: "sync", installables: null }));
   assert.match(plan.blocked ?? "", /run `agent-workflows init` first/);
   assert.deepEqual(plan.writes, []);
 });
@@ -149,17 +150,17 @@ test("sync detects the enabled verbs from the callers and the scripts", () => {
     callers: { "agent-explore.yml": renderCaller(callerFor("agent-explore.yml"), RENDER_OPTIONS) },
     packageJson: { scripts: { "sandcastle:implement": "agent-workflows implement run" } },
   };
-  assert.deepEqual(detectVerbs(state), ["explore", "implement"]);
+  assert.deepEqual(detectInstallables(state), ["explore", "implement"]);
 });
 
 // The verb is read from the command's first argument, so a hyphenated verb is not
 // mistaken for a shorter one that prefixes it.
-test("detectVerbs does not read implement-pr scripts as implement", () => {
+test("detectInstallables does not read implement-pr scripts as implement", () => {
   const state: RepoState = {
     ...EMPTY,
     packageJson: { scripts: { "sandcastle:implement-pr": "agent-workflows implement-pr run" } },
   };
-  assert.deepEqual(detectVerbs(state), ["implement-pr"]);
+  assert.deepEqual(detectInstallables(state), ["implement-pr"]);
 });
 
 // The self-maintaining half: a hook added to the central package reaches consumers on
@@ -172,7 +173,7 @@ test("sync adds hooks that the package gained since the last install", () => {
       devDependencies: { "agent-workflows": "github:michaelloistl/agent-workflows#v1" },
     },
   };
-  const plan = buildPlan(input({ mode: "sync", verbs: null, state }));
+  const plan = buildPlan(input({ mode: "sync", installables: null, state }));
   assert.deepEqual(plan.packageJson?.scripts.added, ["sandcastle:explore-guards"]);
 });
 
@@ -186,7 +187,7 @@ test("sync never creates a caller, but says the verb has nothing to trigger it",
       devDependencies: { "agent-workflows": "github:michaelloistl/agent-workflows#v1" },
     },
   };
-  const plan = buildPlan(input({ mode: "sync", verbs: null, state }));
+  const plan = buildPlan(input({ mode: "sync", installables: null, state }));
 
   assert.deepEqual(plan.writes, []);
   assert.ok(
@@ -211,14 +212,42 @@ test("sync moves the dependency pin and asks for a reinstall", () => {
       devDependencies: { "agent-workflows": "github:michaelloistl/agent-workflows#v1.2.0" },
     },
   };
-  const plan = buildPlan(input({ mode: "sync", verbs: null, state }));
+  const plan = buildPlan(input({ mode: "sync", installables: null, state }));
 
   assert.equal(plan.packageJson?.dependency.from, "v1.2.0");
   assert.equal(plan.packageJson?.dependency.to, "v1");
   assert.equal(plan.install, true);
 });
 
-test("sync on an up-to-date repo plans nothing", () => {
+// The pin is the whole dependency spec, not just the ref: a fork installed at the same
+// ref is a different package, and a plan that reports "already up to date" would leave
+// `node_modules` pointing at the repo the consumer just moved away from.
+test("moving to a fork at the same ref still changes the dependency", () => {
+  const state: RepoState = {
+    ...EMPTY,
+    callers: { "agent-explore.yml": renderCaller(callerFor("agent-explore.yml"), RENDER_OPTIONS) },
+    packageJson: {
+      scripts: {
+        "sandcastle:explore": "agent-workflows explore run",
+        "sandcastle:explore-guards": "agent-workflows explore guards",
+      },
+      devDependencies: { "agent-workflows": "github:michaelloistl/agent-workflows#v1" },
+    },
+  };
+  const plan = buildPlan(input({ mode: "sync", installables: null, state, workflowsRepo: "fork/agent-workflows" }));
+
+  assert.equal(
+    plan.packageJson?.content.devDependencies?.["agent-workflows"],
+    "github:fork/agent-workflows#v1",
+  );
+  assert.equal(plan.install, true);
+});
+
+// The default pin is a MOVING major tag, so `sync`'s whole job — "move to the current
+// release" — is a no-op for `yarn install`: the descriptor is unchanged, so the
+// lockfile's resolution stands and CI's `--frozen-lockfile` keeps the old commit. The
+// plan therefore asks for a re-resolve rather than an install.
+test("sync re-resolves the dependency even when the pin does not move", () => {
   const state: RepoState = {
     ...EMPTY,
     hasYarnLock: true,
@@ -234,7 +263,41 @@ test("sync on an up-to-date repo plans nothing", () => {
       devDependencies: { "agent-workflows": "github:michaelloistl/agent-workflows#v1" },
     },
   };
-  const plan = buildPlan(input({ mode: "sync", verbs: null, state }));
+  const plan = buildPlan(input({ mode: "sync", installables: null, state }));
+
+  assert.equal(plan.install, false, "the manifest is already right");
+  assert.equal(plan.refresh, true, "…but the ref it names has moved under it");
+  assert.ok(plan.notes.some((n) => /yarn\.lock/.test(n)));
+  // `sync` runs the copy in node_modules, so hooks added in the release it is moving
+  // TO arrive on the run after this one.
+  assert.ok(plan.notes.some((n) => /run `agent-workflows sync` again/.test(n)));
+});
+
+test("init does not force a re-resolve", () => {
+  assert.equal(buildPlan(input()).refresh, false);
+});
+
+test("the plan carries the ref it was built with", () => {
+  assert.equal(buildPlan(input({ ref: "v1.6.0" })).ref, "v1.6.0");
+});
+
+test("sync on an up-to-date repo plans no file or manifest change", () => {
+  const state: RepoState = {
+    ...EMPTY,
+    hasYarnLock: true,
+    nodeVersion: "22",
+    labels: ["agent:explore"],
+    secrets: ["CLAUDE_CODE_OAUTH_TOKEN"],
+    callers: { "agent-explore.yml": renderCaller(callerFor("agent-explore.yml"), RENDER_OPTIONS) },
+    packageJson: {
+      scripts: {
+        "sandcastle:explore": "agent-workflows explore run",
+        "sandcastle:explore-guards": "agent-workflows explore guards",
+      },
+      devDependencies: { "agent-workflows": "github:michaelloistl/agent-workflows#v1" },
+    },
+  };
+  const plan = buildPlan(input({ mode: "sync", installables: null, state }));
 
   assert.deepEqual(plan.writes, []);
   assert.equal(plan.packageJson, null);
@@ -258,7 +321,7 @@ test("overrides are reported against the version that is being installed", () =>
 });
 
 test("a missing secret is reported but never written", () => {
-  const plan = buildPlan(input({ verbs: ["implement-spec"] }));
+  const plan = buildPlan(input({ installables: ["implement-spec"] }));
   const names = plan.warnings.map((w) => w.message);
   assert.ok(names.some((m) => /CLAUDE_CODE_OAUTH_TOKEN is not set/.test(m)));
   assert.ok(names.some((m) => /AGENT_PAT is not set/.test(m)));
@@ -282,7 +345,46 @@ test("a caller pointing at a different repo is reported, not rewritten", () => {
   const plan = buildPlan(input({ state: { ...EMPTY, callers: { "agent-explore.yml": foreign } } }));
 
   assert.deepEqual(plan.writes, []);
-  assert.ok(plan.warnings.some((w) => /does not call michaelloistl\/agent-workflows/.test(w.message)));
+  assert.ok(
+    plan.warnings.some((w) =>
+      /does not `uses:` michaelloistl\/agent-workflows/.test(w.message),
+    ),
+  );
+});
+
+// The generated-file marker earns its place here: a file the installer wrote and can no
+// longer re-pin is its own mess to explain, while one a human wrote is theirs to keep.
+test("a repointed caller is told apart from one the installer never wrote", () => {
+  const generated = renderCaller(callerFor("agent-explore.yml"), RENDER_OPTIONS).replace(
+    "michaelloistl/agent-workflows/.github/workflows/explore.yml@v1",
+    "fork/agent-workflows/.github/workflows/explore.yml@v1",
+  );
+  const generatedPlan = buildPlan(
+    input({ state: { ...EMPTY, callers: { "agent-explore.yml": generated } } }),
+  );
+  assert.ok(
+    generatedPlan.warnings.some((w) => /was generated here but now calls/.test(w.message)),
+  );
+
+  const handWritten = "jobs:\n  x:\n    uses: fork/agent-workflows/.github/workflows/explore.yml@v1\n";
+  const handPlan = buildPlan(
+    input({ state: { ...EMPTY, callers: { "agent-explore.yml": handWritten } } }),
+  );
+  assert.ok(handPlan.warnings.some((w) => /is not the installer's/.test(w.message)));
+});
+
+// Three cases collapsed into one `null` is how a consumer's manifest gets replaced by a
+// four-line stub: a BOM, a mid-edit syntax error and an unreadable file all parse to
+// "no package.json", which `init` reads as "create one".
+test("a package.json that cannot be read blocks rather than being overwritten", () => {
+  for (const mode of ["init", "sync"] as const) {
+    const plan = buildPlan(
+      input({ mode, installables: null, state: { ...EMPTY, packageJsonUnreadable: true } }),
+    );
+    assert.match(plan.blocked ?? "", /package\.json/);
+    assert.deepEqual(plan.writes, []);
+    assert.equal(plan.packageJson, null);
+  }
 });
 
 // Narrowing the verb selection removes hook scripts, but the installer will not delete
@@ -295,7 +397,7 @@ test("a caller for an unselected verb is reported rather than deleted", () => {
       "agent-implement.yml": renderCaller(callerFor("agent-implement.yml"), RENDER_OPTIONS),
     },
   };
-  const plan = buildPlan(input({ verbs: ["explore"], state }));
+  const plan = buildPlan(input({ installables: ["explore"], state }));
 
   assert.ok(!plan.writes.some((w) => w.path.endsWith("agent-implement.yml")));
   assert.ok(
@@ -304,7 +406,7 @@ test("a caller for an unselected verb is reported rather than deleted", () => {
 });
 
 test("every warning carries an instruction", () => {
-  const plan = buildPlan(input({ verbs: null }));
+  const plan = buildPlan(input({ installables: null }));
   for (const warning of plan.warnings) {
     assert.ok(warning.fix.length > 0, `no fix for: ${warning.message}`);
   }
