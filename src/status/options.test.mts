@@ -24,8 +24,18 @@ function refusal(argv: string[], isTTY = true, env: NodeJS.ProcessEnv = {}) {
 const HERDR = { HERDR_ENV: "1" };
 
 test("colour is on for a terminal and off for a pipe", () => {
-  assert.deepEqual(options([], true), { colour: true, hyperlinks: true, watchIntervalMs: null });
-  assert.deepEqual(options([], false), { colour: false, hyperlinks: false, watchIntervalMs: null });
+  assert.deepEqual(options([], true), {
+    colour: true,
+    hyperlinks: true,
+    usage: true,
+    watchIntervalMs: null,
+  });
+  assert.deepEqual(options([], false), {
+    colour: false,
+    hyperlinks: false,
+    usage: true,
+    watchIntervalMs: null,
+  });
 });
 
 // Hyperlinks (issue #105). Like colour, they are a terminal capability decided from the
@@ -161,8 +171,27 @@ test("--watch and --no-color are orthogonal", () => {
   assert.deepEqual(options(["--watch", "--no-color"]), {
     colour: false,
     hyperlinks: true,
+    usage: true,
     watchIntervalMs: DEFAULT_INTERVAL_SECONDS * 1000,
   });
+});
+
+// Quota headroom. NOT a terminal capability, so — unlike colour and hyperlinks — it does
+// not follow the TTY: a redirected view keeps the line, because it is information rather
+// than decoration and a pipe has nothing to strip from it.
+test("the quota line is on by default, terminal or not", () => {
+  assert.equal(options([], true).usage, true);
+  assert.equal(options([], false).usage, true);
+});
+
+test("--no-usage suppresses the quota line, and needs no terminal to do it", () => {
+  assert.equal(options(["--no-usage"], true).usage, false);
+  assert.equal(options(["--no-usage"], false).usage, false);
+  assert.equal(options(["--watch", "--no-usage"], true).usage, false);
+});
+
+test("--no-usage is named among the options the view takes", () => {
+  assert.match(refusal(["--nope"]), /--no-usage/);
 });
 
 // Each redraw REPLACES the last, which a pipe or a file cannot do — so the flag is

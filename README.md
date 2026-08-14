@@ -548,9 +548,12 @@ yarn agent:status --watch --interval 60
 yarn agent:status --no-color
 yarn agent:status --no-hyperlinks          # print the URL column instead of linking
 yarn agent:status --hyperlinks             # link anyway (overrides the Herdr default)
+yarn agent:status --no-usage               # drop the quota headroom line
 ```
 
 ```
+quota · session 21% (resets Aug 14 9:20pm) · week 39% (resets Aug 15 6am)
+
 madebyon/on-vantage — 2 specs in flight
 
 #1438      Spec: Default views in platform          2/5 · building
@@ -620,6 +623,27 @@ the trailing URL column comes back instead:
   scrollback back on ctrl-c, and since replacing a frame needs a terminal, `--watch` is
   refused when stdout is a pipe or a file. There are **no key bindings**: it is a redraw,
   not a TUI.
+- **The view leads with your quota headroom** — how much of the account's rolling session
+  and weekly limits is left, above the tree. It is there because the tracker structurally
+  cannot tell you: every verb runs on a subscription token, so the fleet drains the same
+  windows your interactive work does, and it drains them without moving a single label. The
+  tree says what is building; the quota line says whether you can afford to let it finish.
+  Windows the plan lists but you have not touched are dropped, and each is dimmed, yellow
+  or bold red as it passes 60% and 85%.
+- **The headroom line is your *local* account's.** It comes from the `claude` CLI on the
+  machine you are standing at. Where a repo's CI runs on a different subscription from the
+  person reading the view, the number is true but says nothing about the fleet on screen —
+  `--no-usage` is the switch for that case, and for saving the read.
+- **It fails quiet.** No `claude` on the PATH, not logged in, an API key or Bedrock or
+  Vertex (which have no subscription windows), a slow read, or a future release wording its
+  output differently — any of these drops the line and prints the tree exactly as it always
+  did. Nothing about the headroom read can fail the view. The trade is that its absence is
+  silent: there is no message distinguishing "not authenticated" from `--no-usage`.
+- **It costs about 1.5 seconds**, almost all of it CLI startup — the read itself makes no
+  model call and consumes no tokens, so looking at your headroom never spends it. Under
+  `--watch` a read is reused for 30s rather than taken every tick: a weekly window moves in
+  fractions of a percent per minute, so the reuse is invisible while blocking a quarter of
+  every redraw would not be.
 - It is **read-only**. It runs no agent and writes nothing — a label write would be a
   dispatch, i.e. a real, billed agent run — so watching it costs reads only.
 - The repo comes from `GH_REPO` or the checkout's `origin` remote; no argument.
