@@ -82,6 +82,13 @@ export function classifyInvocation(args) {
   // so it never reaches the (verb, hook) table. Classified before everything else
   // because its own flags would otherwise be read as hook names.
   if (verb === "status") return { kind: "status", args: args.slice(1) };
+  // `init` and `sync` are not verbs either: they SET UP a repo to run the fleet rather
+  // than running any part of it, so they follow no hook contract and reach no (verb,
+  // hook) table. Classified here for the same reason `status` is — their flags would
+  // otherwise be read as hook names, and a bare `init` as a whole-verb sequencer run.
+  if (verb === "init" || verb === "sync") {
+    return { kind: "install", mode: verb, args: args.slice(1) };
+  }
   if (second === undefined) return { kind: "verb", verb };
   if (second === "--guards-only") return { kind: "verb", verb, guardsOnly: true };
   if (/^\d+$/.test(second)) {
@@ -231,14 +238,46 @@ function runStatusView(args) {
   child.on("exit", (code, signal) => process.exit(code ?? (signal ? 0 : 1)));
 }
 
+// Set a repo up to run the fleet (`init`), or bring an installed one up to this
+// package's version (`sync`). Spawned under tsx like every other entry point.
+//
+// This is the one command that runs BEFORE the package is a dependency — via
+// `npx github:<owner>/agent-workflows#v1 init` — so it must not assume anything about
+// the cwd beyond it being a git checkout. It gets that for free: tsx and the source
+// both resolve relative to this file, in npm's cache, while the entry point reads and
+// writes the cwd.
+function runInstall(mode, args) {
+  const runner = fileURLToPath(new URL("../src/install/run.mts", import.meta.url));
+  const require = createRequire(import.meta.url);
+  const tsxCli = require.resolve("tsx/cli");
+
+  const child = spawnSync(process.execPath, [tsxCli, runner, mode, ...args], {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (child.error) {
+    console.error(`agent-workflows: failed to run ${mode}:`, child.error);
+    process.exit(1);
+  }
+  process.exit(child.status ?? 1);
+}
+
 function main() {
   const invocation = classifyInvocation(process.argv.slice(2));
   if (invocation.kind === "usage") {
-    console.error("usage: agent-workflows <verb> [hook | issue-number] [args...]");
+    console.error(
+      "usage: agent-workflows <verb> [hook | issue-number] [args...]\n" +
+        "       agent-workflows status [--watch]\n" +
+        "       agent-workflows init|sync [--verbs=…] [--ref=…] [--dry-run] [--yes]",
+    );
     process.exit(2);
   }
   if (invocation.kind === "status") {
     runStatusView(invocation.args);
+    return;
+  }
+  if (invocation.kind === "install") {
+    runInstall(invocation.mode, invocation.args);
     return;
   }
   if (invocation.kind === "verb") {

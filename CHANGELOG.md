@@ -8,6 +8,33 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Add `agent-workflows init` and `agent-workflows sync`, so setting a repo up no longer
+  means transcribing five README steps by hand. `npx github:michaelloistl/agent-workflows#v1 init`
+  runs before the package is a dependency and writes the thin callers, wires the
+  `sandcastle:*` scripts, pins the git dependency, creates the trigger labels and installs;
+  its last act is to add itself as a devDependency, so later updates are
+  `yarn agent-workflows sync` and the installer always ships at the version of the
+  workflows it installs. One planner serves both commands (the shape of ADR-0005): `init`
+  is told which verbs to enable, `sync` detects the ones a repo already has, and the two
+  cannot drift about what an installed repo looks like. The consumer's hook scripts are
+  **derived from this repo's own `package.json`** rather than a second table, so a hook
+  added here reaches every consumer on their next `sync` — including the asymmetric ones a
+  hand-written matrix gets wrong (`explore` has a `-sequence`, the PR verbs have a
+  `-guards-sequence` instead, the orchestrator has neither).
+  Both commands print the whole plan and change nothing until it is accepted; a
+  non-interactive stdin declines and `--yes` pre-accepts, as the spec loop does.
+  Three things they deliberately refuse to do: write secrets (reported, never set —
+  `AGENT_PAT` cannot be minted outside the GitHub UI); regenerate a caller that already
+  exists (`sync` moves the `uses:` ref and leaves the consumer's `with:` inputs and `if:`
+  guard alone, reporting other drift); and run against a checkout of this repo, which is
+  the package and never installs itself. `sync` also reports local overrides, the one
+  thing that goes stale silently — a file under `.sandcastle/agent-workflows/` shadows the
+  packaged entrypoint forever, so a prompt copied at v1.1 is still in use at v1.5 with
+  nothing else to say so. Defaults come from the repo: the whole fleet of verbs, the
+  installer's own major version as the pin, `git config user.email` for the identity, a
+  `Gemfile` for `enable-ruby`, and repo visibility for the `pull_request_target` author
+  gate — so the common install takes no arguments at all.
+
 ## v1.5.0 — 2026-08-14
 
 - Move the packaged default agent model from `claude-opus-4-8` to `claude-opus-5`. This is

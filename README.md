@@ -196,7 +196,51 @@ ends (see the attended spec loop below).
 
 ## Installation
 
-Set up a consuming repo in five steps. The tracker reads need **`gh` 2.94 or
+Run this in the repo you want to set up:
+
+```sh
+npx -y github:michaelloistl/agent-workflows#v1 init
+```
+
+That fetches the package into npm's cache and runs it against your checkout: it
+writes a thin caller per verb, wires the hook scripts, pins the git dependency,
+creates the trigger labels, and installs. It prints the whole plan first and does
+nothing until you accept it (`--dry-run` to look without applying, `--yes` to
+pre-accept in a script). Its last act is to add itself as a devDependency, so
+every later run is `yarn agent-workflows sync` — the installer always ships at the
+same version as the workflows it installs.
+
+```sh
+agent-workflows init --verbs=implement,review-pr   # a subset, rather than the whole fleet
+agent-workflows init --dry-run                     # print the plan and stop
+agent-workflows init --base-branch=develop         # also write the config file
+agent-workflows sync                               # later: move to the current release
+```
+
+Almost nothing needs an argument. The verbs default to the whole fleet, the pin to
+the installer's own major version, the commit identity to your `git config
+user.email`, `enable-ruby` to whether the repo has a `Gemfile`, and the
+`pull_request_target` author gate to whether the repo is public. Override any of
+them with a flag.
+
+Two things `init` deliberately does **not** do:
+
+- **It never writes secrets.** It reports which are missing and how to set them.
+  `AGENT_PAT` cannot be minted outside the GitHub UI anyway, and the installer
+  reads and writes no secret material.
+- **It never regenerates a caller that already exists.** The `with:` inputs are
+  your toolchain and the `if:` is your access policy, so `sync` moves the `uses:`
+  ref and leaves every other line alone, reporting anything else that drifted.
+
+`sync` also reports **overrides**, the one thing that goes stale silently: a file
+under `.sandcastle/agent-workflows/` shadows the packaged entrypoint forever, so a
+prompt copied at v1.1 is still in use at v1.5 with nothing else to say so.
+
+### Installing by hand
+
+`init` automates the five steps below; they are the reference for what an
+installed repo looks like, and the path to take if you want to wire it yourself.
+The tracker reads need **`gh` 2.94 or
 newer** — that is where the `parent` and `blockedBy` JSON projections landed, and
 both the orchestrator and the status view ask for them. GitHub-hosted runners
 have been past that for a while; a local install that is not will fail the read
@@ -674,9 +718,12 @@ Pass with `secrets: inherit`.
   dependency; a Linear repo swaps the adapter (packaged separately, #33).
 - **`bin/agent-workflows.mjs`** — the dispatcher: maps `<verb> <hook>` to a
   `src/` entrypoint (override-first) and runs it under `tsx`. Also routes the
-  non-verb entry points: the attended local runs and `status`.
+  non-verb entry points: the attended local runs, `status`, and `init`/`sync`.
 - **`src/status/`** — the read-only [status view](#status-view), over the shared
   spec-tree reader (`src/shared/spec-tree.mts`).
+- **`src/install/`** — [`init` and `sync`](#installation): one planner behind two
+  policies, deriving the consumer's hook scripts from this repo's own
+  `package.json` so a new hook needs no second list to update.
 - **`docs/hook-contract.md`** — the interface every consuming repo implements.
 - **`CONTEXT.md`** — glossary. **`PLAN.md`** — build plan + rollout.
   **[`CHANGELOG.md`](CHANGELOG.md)** — notable changes per release.
