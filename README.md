@@ -250,7 +250,7 @@ because only GitHub Actions can act on them. Every value resolves per-run overri
   // tracer-bullet under a spec still bases on its spec branch.
   "baseBranch": "develop",
   // Model the fleet's agents run on. Absent → the packaged default.
-  "agentModel": "claude-opus-4-8",
+  "agentModel": "claude-opus-5",
   // CI check-poll timings for the merge gates, in seconds (env overrides win:
   // CHECKS_INTERVAL_SECONDS / CHECKS_TIMEOUT_SECONDS / CHECKS_GRACE_SECONDS).
   "checks": { "intervalSeconds": 15, "timeoutSeconds": 1200, "graceSeconds": 180 },

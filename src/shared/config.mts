@@ -58,7 +58,7 @@ export interface ConfigFile {
 
 // The model default lives here (not agent.mts) so the file/override resolution and
 // the agent factory cannot drift to two different defaults.
-export const DEFAULT_AGENT_MODEL = "claude-opus-4-8";
+export const DEFAULT_AGENT_MODEL = "claude-opus-5";
 
 // Default worktree root for attended local runs (issue #55): a subdirectory of the
 // OS temp dir, so a run never touches the developer's checkout even with no config.
