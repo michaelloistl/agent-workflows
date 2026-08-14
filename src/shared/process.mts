@@ -22,9 +22,10 @@ export interface CaptureOptions {
   // must still say why.
   readonly quiet?: boolean;
   // Kill the child and throw if it has not finished in this long. For the few calls whose
-  // caller would rather have nothing than wait — the status view's quota read runs on every
-  // watch tick and must never outlive the tick. Unset by default: a `gh` call that is slow
-  // is still a call whose answer the run needs.
+  // caller would rather have nothing than wait — the status view's quota read decorates a
+  // redraw loop and must never hang it, however wedged the CLI behind it is. The bound is
+  // the caller's to choose and is not the watch interval: see `status/run.mts`. Unset by
+  // default: a `gh` call that is slow is still a call whose answer the run needs.
   readonly timeoutMs?: number;
 }
 

@@ -104,19 +104,23 @@ test("refuses anything that is not recognisably the usage command's output", () 
   assert.equal(parseQuota(envelope(RESULT, { is_error: true })), null);
 });
 
-test("renders one compact line, dropping untouched model windows", () => {
+// Every percentage carries the word `used`, because the figure is CONSUMPTION while the
+// feature is its complement: a bare `week 37%` beside a line labelled quota is read as
+// "37% left" as readily as "37% gone", and it is the second reading the colour ramp and
+// every decision made from the line depend on.
+test("renders one compact line, stating each window as the share used", () => {
   const quota = parseQuota(envelope(RESULT));
   assert.ok(quota);
   assert.equal(
     formatQuota(quota),
-    "quota · session 6% (resets Aug 14 4:19pm) · week 37% (resets Aug 15 5:59am)",
+    "quota · session 6% used (resets Aug 14 4:19pm) · week 37% used (resets Aug 15 5:59am)",
   );
 });
 
 test("keeps a model window once it has been used", () => {
   const quota = parseQuota(envelope(RESULT.replace("(Fable): 0%", "(Fable): 12%")));
   assert.ok(quota);
-  assert.match(formatQuota(quota), /· Fable 12%$/);
+  assert.match(formatQuota(quota), /· Fable 12% used$/);
 });
 
 test("paints each window on its own threshold, and only when asked", () => {
@@ -166,11 +170,12 @@ test("throttling reads once per window and reuses the answer in between", () => 
   assert.equal(reads, 2);
 });
 
-test("throttling caches a failed read too", () => {
+test("throttling costs one read per window when every read fails", () => {
   let reads = 0;
   let at = 0;
   // A machine with no `claude` on its PATH resolves to `null` every time, and must pay for
-  // discovering that once per window rather than on every redraw.
+  // discovering that once per window rather than on every redraw. With nothing good ever
+  // held, there is nothing to carry either: the view simply has no line.
   const read = throttled(
     () => {
       reads++;
@@ -184,4 +189,49 @@ test("throttling caches a failed read too", () => {
   at = 10_000;
   assert.equal(read(), null);
   assert.equal(reads, 1);
+  at = 30_000;
+  assert.equal(read(), null);
+  assert.equal(reads, 2);
+});
+
+// A blip — one 4s timeout, one wedged startup — must not blank the line, because dropping
+// it shifts the whole tree up two rows on the surface where the number is being watched
+// hardest. The last good read is carried across exactly ONE failed window: long enough to
+// absorb a blip, short enough that a CLI which has genuinely stopped answering cannot leave
+// a stale percentage on screen all night.
+test("throttling carries the last good read across a single failed window", () => {
+  let at = 0;
+  let answer: string | null = "quota · session 6% used";
+  const read = throttled(() => answer, 30_000, () => at);
+
+  assert.equal(read(), "quota · session 6% used");
+
+  answer = null;
+  at = 30_000;
+  assert.equal(read(), "quota · session 6% used", "one failure is absorbed, not shown");
+
+  at = 60_000;
+  assert.equal(read(), null, "a second consecutive failure drops the line");
+});
+
+test("throttling starts carrying again once a read succeeds", () => {
+  let at = 0;
+  let answer: string | null = "first";
+  const read = throttled(() => answer, 30_000, () => at);
+
+  assert.equal(read(), "first");
+  answer = null;
+  at = 30_000;
+  assert.equal(read(), "first");
+
+  // Recovery resets the allowance rather than leaving it spent: the next blip after a
+  // good read is a first failure again.
+  answer = "second";
+  at = 60_000;
+  assert.equal(read(), "second");
+  answer = null;
+  at = 90_000;
+  assert.equal(read(), "second");
+  at = 120_000;
+  assert.equal(read(), null);
 });

@@ -27,13 +27,13 @@ test("colour is on for a terminal and off for a pipe", () => {
   assert.deepEqual(options([], true), {
     colour: true,
     hyperlinks: true,
-    usage: true,
+    headroom: true,
     watchIntervalMs: null,
   });
   assert.deepEqual(options([], false), {
     colour: false,
     hyperlinks: false,
-    usage: true,
+    headroom: true,
     watchIntervalMs: null,
   });
 });
@@ -171,7 +171,7 @@ test("--watch and --no-color are orthogonal", () => {
   assert.deepEqual(options(["--watch", "--no-color"]), {
     colour: false,
     hyperlinks: true,
-    usage: true,
+    headroom: true,
     watchIntervalMs: DEFAULT_INTERVAL_SECONDS * 1000,
   });
 });
@@ -180,18 +180,18 @@ test("--watch and --no-color are orthogonal", () => {
 // not follow the TTY: a redirected view keeps the line, because it is information rather
 // than decoration and a pipe has nothing to strip from it.
 test("the quota line is on by default, terminal or not", () => {
-  assert.equal(options([], true).usage, true);
-  assert.equal(options([], false).usage, true);
+  assert.equal(options([], true).headroom, true);
+  assert.equal(options([], false).headroom, true);
 });
 
-test("--no-usage suppresses the quota line, and needs no terminal to do it", () => {
-  assert.equal(options(["--no-usage"], true).usage, false);
-  assert.equal(options(["--no-usage"], false).usage, false);
-  assert.equal(options(["--watch", "--no-usage"], true).usage, false);
+test("--no-headroom suppresses the quota line, and needs no terminal to do it", () => {
+  assert.equal(options(["--no-headroom"], true).headroom, false);
+  assert.equal(options(["--no-headroom"], false).headroom, false);
+  assert.equal(options(["--watch", "--no-headroom"], true).headroom, false);
 });
 
-test("--no-usage is named among the options the view takes", () => {
-  assert.match(refusal(["--nope"]), /--no-usage/);
+test("--no-headroom is named among the options the view takes", () => {
+  assert.match(refusal(["--nope"]), /--no-headroom/);
 });
 
 // Each redraw REPLACES the last, which a pipe or a file cannot do — so the flag is

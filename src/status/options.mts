@@ -18,7 +18,7 @@ export interface StatusOptions {
   // Whether to lead the view with the account's quota headroom. Unlike colour and
   // hyperlinks this is not a terminal capability, so it does not follow the TTY: piping
   // the view to a file keeps the line, because it is information rather than decoration.
-  readonly usage: boolean;
+  readonly headroom: boolean;
 }
 
 export type ParseResult =
@@ -44,7 +44,12 @@ const INTERVAL = "--interval";
 // runs on a different subscription from the person reading the view, the number is true but
 // says nothing about the fleet on screen, and printing it beside the tree would imply
 // otherwise.
-const NO_USAGE = "--no-usage";
+//
+// Named for what it suppresses in the vocabulary `CONTEXT.md` sets — *quota headroom* — and
+// deliberately NOT `--no-usage`: that glossary entry rules the word out precisely because
+// consumption already incurred points at the opposite decision from the one this line is
+// read to make.
+const NO_HEADROOM = "--no-headroom";
 
 // Herdr (a terminal multiplexer for coding agents) sets `HERDR_ENV=1` in every pane it
 // owns. Measured against Herdr 0.8.0 under Ghostty: an OSC 8 hyperlink inside a pane opens
@@ -135,7 +140,7 @@ export function parseStatusArgs(
   let forced = false;
   let suppressed = false;
   let watch = false;
-  let usage = true;
+  let headroom = true;
   let interval: number | null = null;
   const unknown: string[] = [];
   // Held rather than thrown at once, so a command with both a bad interval AND an
@@ -154,8 +159,8 @@ export function parseStatusArgs(
       hyperlinks = true;
     } else if (arg === WATCH) {
       watch = true;
-    } else if (arg === NO_USAGE) {
-      usage = false;
+    } else if (arg === NO_HEADROOM) {
+      headroom = false;
     } else if (arg === INTERVAL || arg.startsWith(`${INTERVAL}=`)) {
       // `--interval 30` and `--interval=30` both, since a user who guesses the other
       // form is asking for the same thing.
@@ -172,7 +177,7 @@ export function parseStatusArgs(
   // appearing to work.
   if (unknown.length > 0) {
     return refuse(
-      `unknown option(s): ${unknown.join(" ")} — the status view takes ${WATCH}, ${INTERVAL} <seconds>, ${NO_COLOUR[0]}, ${NO_HYPERLINKS}, ${HYPERLINKS} and ${NO_USAGE}.`,
+      `unknown option(s): ${unknown.join(" ")} — the status view takes ${WATCH}, ${INTERVAL} <seconds>, ${NO_COLOUR[0]}, ${NO_HYPERLINKS}, ${HYPERLINKS} and ${NO_HEADROOM}.`,
     );
   }
   if (intervalError !== null) return refuse(intervalError);
@@ -206,7 +211,7 @@ export function parseStatusArgs(
       colour,
       hyperlinks,
       watchIntervalMs: watch ? (interval ?? DEFAULT_INTERVAL_SECONDS * 1000) : null,
-      usage,
+      headroom,
     },
   };
 }

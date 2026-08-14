@@ -38,7 +38,7 @@ if (!parsed.ok) {
   console.error(`agent-workflows status: ${parsed.message}`);
   process.exit(2);
 }
-const { colour, hyperlinks, usage, watchIntervalMs } = parsed.options;
+const { colour, headroom, hyperlinks, watchIntervalMs } = parsed.options;
 
 // The repo you are standing in, from `GH_REPO` or the checkout's own origin remote —
 // no argument, because the view is scoped to the repo it runs in.
@@ -86,10 +86,20 @@ function pass(branches: readonly string[]): string {
 }
 
 // How long the quota read gets before it is abandoned. Measured at ~1.4s of wall clock with
-// MCP off, so this is roughly 3x headroom for a cold start. Note the figure the command
-// REPORTS of itself (`duration_ms`, ~280ms) is not this: it excludes process startup, which
-// is nearly all of the real cost. This is the one read here that is worth nothing if it is
-// slow — it decorates the view rather than being the view.
+// MCP off, so this is roughly 3x slack for a cold start. Note the figure the command REPORTS
+// of itself (`duration_ms`, ~280ms) is not this: it excludes process startup, which is nearly
+// all of the real cost. This is the one read here that is worth nothing if it is slow — it
+// decorates the view rather than being the view.
+//
+// It is NOT bounded by the watch interval, and the worst case is worth stating rather than
+// implying otherwise: 4s is twice the 2s `--interval` floor, so on a machine where `claude`
+// is installed but wedged — a hung keychain prompt, a stalled call during startup — one tick
+// in every `QUOTA_TTL_MS` blocks for 4s before sleeping the interval on top, and a
+// `--watch --interval 2` pane visibly hitches while its footer still says 2s. Accepted over
+// the alternative: a timeout under the floor would be ~2s against a 1.4s measured read,
+// which is not slack at all — a cold start on a slow disk would time out and blank the line
+// on exactly the machines least able to spare the confusion. The hitch is rare, bounded, and
+// the throttle's one-window carry (`quota.mts`) keeps the number on screen through it.
 const QUOTA_TIMEOUT_MS = 4000;
 
 // The quota read has no use for MCP servers, and loading a consumer's — a Linear plugin, a
@@ -112,7 +122,7 @@ const QUOTA_ARGS = [
 // `quiet` because the failure is expected and handled: a machine without `claude` on its
 // PATH must not have the status view spraying stderr at it on every redraw.
 function quotaLine(): string | null {
-  if (!usage) return null;
+  if (!headroom) return null;
   try {
     const stdout = capture("claude", QUOTA_ARGS, {
       quiet: true,
@@ -158,7 +168,9 @@ if (watchIntervalMs === null) {
   //
   // It gets its own throttle instead, because the read costs ~1.4s of wall clock and a
   // default tick is 5s. Half a minute of reuse is invisible on a window that moves in
-  // fractions of a percent per minute; blocking a quarter of every redraw would not be.
+  // fractions of a percent per minute; blocking a quarter of every redraw would not be. The
+  // throttle also carries the last good line across one failed window, so a single timeout
+  // does not blank the line and shift the tree up two rows mid-watch.
   const quota = throttled(quotaLine);
 
   const tree = freshRender({

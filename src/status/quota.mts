@@ -5,10 +5,14 @@
 // the spec tree answers the question the tree alone cannot: not "what is building" but
 // "can I afford to let it finish".
 //
-// The source is `claude --print --output-format json "/usage"`, which costs no tokens and
-// makes no model call (`num_turns: 0`, `duration_api_ms: 0`) and returns in well under a
-// second — cheaper than any of the GitHub reads the view already makes, which is why the
-// watch loop refreshes it on every tick rather than behind the freshness gate.
+// The source is `claude --strict-mcp-config --print --output-format json "/usage"`, which
+// makes no model call (`num_turns: 0`, `duration_api_ms: 0`), so reading headroom does not
+// spend it. What it does cost is WALL CLOCK: ~1.4s, nearly all of it process startup, and
+// ~3.4s if a consumer's MCP servers are loaded — which is why the call disables them. That
+// price is what shapes the rest of this file: a `--watch` tick does NOT take a fresh read
+// every time, it reuses one for `QUOTA_TTL_MS` (see `throttled` at the foot). The read
+// stays outside the #106 freshness gate all the same — that gate rations the shared GitHub
+// rate limit, and this number moves precisely when the tree does not.
 //
 // Pure throughout: raw stdout in, a line out. The subprocess belongs to `run.mts`, the
 // dispatch half, exactly as the `gh` calls do.
@@ -63,8 +67,6 @@ const MODEL = /^Current week \(([^)]*)\):\s*(\d+(?:\.\d+)?)%\s*used\b(.*)$/gm;
 const ALL_MODELS = "all models";
 
 type Paint = (text: string) => string;
-
-const PLAIN: Paint = (text) => text;
 
 // The same escape construction and the same codes as `render.mts`, deliberately duplicated
 // rather than imported: that module's palette is keyed by spec-tree tone, and widening it
@@ -146,9 +148,13 @@ export function parseQuota(stdout: string): Quota | null {
   };
 }
 
+// `used` is not decoration and is never dropped: the figure is CONSUMPTION while the thing
+// it is read for is the complement, so a bare `week 37%` under a line labelled quota is read
+// as "37% left" exactly as readily as "37% gone". The word is what makes the colour ramp
+// legible too — rising red only means anything on the used reading.
 function segment(window: QuotaWindow, colour: boolean): string {
   const resets = window.resets === null ? "" : ` (resets ${window.resets})`;
-  const text = `${window.label} ${window.percent}%${resets}`;
+  const text = `${window.label} ${window.percent}% used${resets}`;
   return colour ? tone(window.percent)(text) : text;
 }
 
@@ -191,21 +197,41 @@ export function withQuota(body: string, line: string | null): string {
 export const QUOTA_TTL_MS = 30_000;
 
 // Wraps a read so it is taken at most once per `ttlMs`, with the clock injected so the
-// behaviour is testable without wall-clock. The first call always reads; a failed read is
-// cached like any other, so a machine without `claude` pays its cost once per window rather
-// than on every redraw.
+// behaviour is testable without wall-clock. The first call always reads, and a failing read
+// costs one attempt per window like any other — a machine with no `claude` on its PATH
+// discovers that once per window rather than on every redraw.
+//
+// A failure does NOT immediately blank the answer, though, and that asymmetry is the point:
+// on the surface where this matters — a `--watch` pane left open — one 4s timeout or one
+// wedged startup would otherwise drop the line and shift the whole tree up two rows, with no
+// message saying why, exactly while the window is being watched hardest. So the last good
+// value is carried across exactly ONE failed window. Two consecutive failures drop it: a CLI
+// that has genuinely stopped answering must not leave a percentage on screen all night that
+// the reader has no way to tell is an hour stale.
 export function throttled<T>(
-  read: () => T,
+  read: () => T | null,
   ttlMs: number = QUOTA_TTL_MS,
   now: () => number = () => Date.now(),
-): () => T {
+): () => T | null {
   let at: number | null = null;
-  let last: T;
+  let last: T | null = null;
+  // Whether `last` is being carried past a failure rather than freshly read — which is what
+  // makes the allowance one window rather than indefinite, and resets it on recovery.
+  let carried = false;
   return () => {
     const stamp = now();
     if (at === null || stamp - at >= ttlMs) {
-      last = read();
+      const fresh = read();
       at = stamp;
+      if (fresh !== null) {
+        last = fresh;
+        carried = false;
+      } else if (last !== null && !carried) {
+        carried = true;
+      } else {
+        last = null;
+        carried = false;
+      }
     }
     return last;
   };

@@ -21,8 +21,11 @@ version without editing their workflow on every release.
   the local account about its own rate limits cost 2 seconds of startup for byte-identical
   output. Rendered as a line rather than a column, since the figure is account-global and
   belongs to no row; each window is dimmed, yellow or bold red past 60% and 85%, matching
-  what those colours already mean in the tree. Adds `--no-usage`, which exists less for the
-  ~1.5s than for the case it cannot detect: the read is of whichever account is
+  what those colours already mean in the tree. The line states each window in the complement
+  of the concept — `week 39% used` — because that is the direction the source reports and
+  the direction the colours ramp, and the word `used` is never dropped: a bare `39%` under a
+  line labelled quota reads either way round. Adds `--no-headroom`, which exists less for
+  the ~1.5s than for the case it cannot detect: the read is of whichever account is
   authenticated *locally*, so in a repo whose CI runs on a different subscription the number
   is true and tells you nothing about the fleet on screen. Every failure — no `claude` on
   the PATH, unauthenticated, an API key or Bedrock or Vertex, a timeout, or prose a future
@@ -31,7 +34,9 @@ version without editing their workflow on every release.
   is refused as hard as a failed one, because a session bar with no weekly bar reads as "the
   week is fine". Under `--watch` a read is reused for 30s rather than taken every tick, and
   deliberately outside the `--watch` freshness gate: that gate spends the shared GitHub rate
-  limit, while this number moves precisely when the tree does not. Amends ADR-0007, whose
+  limit, while this number moves precisely when the tree does not. The last good line is
+  carried across one failed window and no further, so a single timeout neither blanks the
+  line nor leaves a stale percentage on screen all night. Amends ADR-0007, whose
   "reads GitHub and nothing else" rule this breaks — the stronger rule, that the view
   *writes* nothing, is untouched. `CONTEXT.md` gains **quota headroom**, held apart from
   **run ceiling**: a ceiling bounds one run, headroom bounds all work everywhere.
