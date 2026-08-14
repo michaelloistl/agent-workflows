@@ -25,6 +25,7 @@ import { buildSpecTree } from "../shared/spec-tree.mts";
 import { freshRender } from "./freshness.mts";
 import { gatherIssues } from "./gather.mts";
 import { parseStatusArgs } from "./options.mts";
+import { formatQuota, parseQuota, throttled, withQuota } from "./quota.mts";
 import { renderStatus } from "./render.mts";
 import { terminalScreen, watchStatus } from "./watch.mts";
 
@@ -37,7 +38,7 @@ if (!parsed.ok) {
   console.error(`agent-workflows status: ${parsed.message}`);
   process.exit(2);
 }
-const { colour, hyperlinks, watchIntervalMs } = parsed.options;
+const { colour, headroom, hyperlinks, watchIntervalMs } = parsed.options;
 
 // The repo you are standing in, from `GH_REPO` or the checkout's own origin remote —
 // no argument, because the view is scoped to the repo it runs in.
@@ -84,13 +85,63 @@ function pass(branches: readonly string[]): string {
   return renderStatus({ repo, specs: buildSpecTree(issues, branches) }, { colour, hyperlinks });
 }
 
+// How long the quota read gets before it is abandoned. Measured at ~1.4s of wall clock with
+// MCP off, so this is roughly 3x slack for a cold start. Note the figure the command REPORTS
+// of itself (`duration_ms`, ~280ms) is not this: it excludes process startup, which is nearly
+// all of the real cost. This is the one read here that is worth nothing if it is slow — it
+// decorates the view rather than being the view.
+//
+// It is NOT bounded by the watch interval, and the worst case is worth stating rather than
+// implying otherwise: 4s is twice the 2s `--interval` floor, so on a machine where `claude`
+// is installed but wedged — a hung keychain prompt, a stalled call during startup — one tick
+// in every `QUOTA_TTL_MS` blocks for 4s before sleeping the interval on top, and a
+// `--watch --interval 2` pane visibly hitches while its footer still says 2s. Accepted over
+// the alternative: a timeout under the floor would be ~2s against a 1.4s measured read,
+// which is not slack at all — a cold start on a slow disk would time out and blank the line
+// on exactly the machines least able to spare the confusion. The hitch is rare, bounded, and
+// the throttle's one-window carry (`quota.mts`) keeps the number on screen through it.
+const QUOTA_TIMEOUT_MS = 4000;
+
+// The quota read has no use for MCP servers, and loading a consumer's — a Linear plugin, a
+// database server — to ask the local account about its own rate limits is pure startup cost
+// on every render. Measured: ~3.4s with them, ~1.4s without, for byte-identical output.
+const QUOTA_ARGS = [
+  "--strict-mcp-config",
+  "--print",
+  "--output-format",
+  "json",
+  "/usage",
+] as const;
+
+// The quota line, or `null` for every way this can fail to produce one: `claude` not
+// installed, not authenticated, authenticated to something with no subscription windows
+// (an API key, Bedrock, Vertex), timed out, or prose this release no longer recognises.
+// Silent in all of them — the view degrades to exactly what it printed before this existed,
+// because headroom is context for the tree and never a reason to withhold it.
+//
+// `quiet` because the failure is expected and handled: a machine without `claude` on its
+// PATH must not have the status view spraying stderr at it on every redraw.
+function quotaLine(): string | null {
+  if (!headroom) return null;
+  try {
+    const stdout = capture("claude", QUOTA_ARGS, {
+      quiet: true,
+      timeoutMs: QUOTA_TIMEOUT_MS,
+    });
+    const quota = parseQuota(stdout);
+    return quota === null ? null : formatQuota(quota, { colour });
+  } catch {
+    return null;
+  }
+}
+
 if (watchIntervalMs === null) {
   // The one-shot path is unchanged: it always performs a full pass. A failure has to read
   // differently from an empty view: "nothing is building" is the renderer's job and a good
   // outcome, while an unauthenticated `gh` or a missing remote is an error with its own
   // message. A watch, by contrast, keeps going and shows it.
   try {
-    console.log(pass(remoteBranches()));
+    console.log(withQuota(pass(remoteBranches()), quotaLine()));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`agent-workflows status: could not read ${repo}: ${message}`);
@@ -109,13 +160,28 @@ if (watchIntervalMs === null) {
   // calls now decides whether the tick is worth a full pass — a cheap change probe against
   // the last frame's state — and only then fetches. An unchanged tracker redraws the frame
   // it already has (issue #106).
+  // The quota read sits OUTSIDE the freshness gate, deliberately: that gate exists to spend
+  // the GitHub rate limit the fleet's agent runs share, and this read touches neither GitHub
+  // nor a token. It matters that it is ungated, because the number moves precisely when the
+  // tree does NOT — a CI run eating the weekly window changes no label — so a tick that
+  // reused the frame would otherwise show a frozen bar for up to the five-minute ceiling.
+  //
+  // It gets its own throttle instead, because the read costs ~1.4s of wall clock and a
+  // default tick is 5s. Half a minute of reuse is invisible on a window that moves in
+  // fractions of a percent per minute; blocking a quarter of every redraw would not be. The
+  // throttle also carries the last good line across one failed window, so a single timeout
+  // does not blank the line and shift the tree up two rows mid-watch.
+  const quota = throttled(quotaLine);
+
+  const tree = freshRender({
+    branches: remoteBranches,
+    changed: () => issuesChanged(repo),
+    pass,
+    now: () => Date.now(),
+  });
+
   await watchStatus({
-    render: freshRender({
-      branches: remoteBranches,
-      changed: () => issuesChanged(repo),
-      pass,
-      now: () => Date.now(),
-    }),
+    render: () => withQuota(tree(), quota()),
     screen: terminalScreen(process.stdout),
     intervalMs: watchIntervalMs,
     signal: stopping.signal,

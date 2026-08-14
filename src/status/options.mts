@@ -15,6 +15,10 @@ export interface StatusOptions {
   // the default. A tick is a check, not necessarily a redraw (#106): it fetches only when
   // something changed.
   readonly watchIntervalMs: number | null;
+  // Whether to lead the view with the account's quota headroom. Unlike colour and
+  // hyperlinks this is not a terminal capability, so it does not follow the TTY: piping
+  // the view to a file keeps the line, because it is information rather than decoration.
+  readonly headroom: boolean;
 }
 
 export type ParseResult =
@@ -34,6 +38,18 @@ const NO_HYPERLINKS = "--no-hyperlinks";
 const HYPERLINKS = "--hyperlinks";
 const WATCH = "--watch";
 const INTERVAL = "--interval";
+// The escape hatch for the quota line. Two reasons a consumer wants it, and the second is
+// the load-bearing one: the line costs a subprocess per render, and — more importantly —
+// it reports the headroom of whichever account is authenticated LOCALLY. Where a repo's CI
+// runs on a different subscription from the person reading the view, the number is true but
+// says nothing about the fleet on screen, and printing it beside the tree would imply
+// otherwise.
+//
+// Named for what it suppresses in the vocabulary `CONTEXT.md` sets — *quota headroom* — and
+// deliberately NOT `--no-usage`: that glossary entry rules the word out precisely because
+// consumption already incurred points at the opposite decision from the one this line is
+// read to make.
+const NO_HEADROOM = "--no-headroom";
 
 // Herdr (a terminal multiplexer for coding agents) sets `HERDR_ENV=1` in every pane it
 // owns. Measured against Herdr 0.8.0 under Ghostty: an OSC 8 hyperlink inside a pane opens
@@ -124,6 +140,7 @@ export function parseStatusArgs(
   let forced = false;
   let suppressed = false;
   let watch = false;
+  let headroom = true;
   let interval: number | null = null;
   const unknown: string[] = [];
   // Held rather than thrown at once, so a command with both a bad interval AND an
@@ -142,6 +159,8 @@ export function parseStatusArgs(
       hyperlinks = true;
     } else if (arg === WATCH) {
       watch = true;
+    } else if (arg === NO_HEADROOM) {
+      headroom = false;
     } else if (arg === INTERVAL || arg.startsWith(`${INTERVAL}=`)) {
       // `--interval 30` and `--interval=30` both, since a user who guesses the other
       // form is asking for the same thing.
@@ -158,7 +177,7 @@ export function parseStatusArgs(
   // appearing to work.
   if (unknown.length > 0) {
     return refuse(
-      `unknown option(s): ${unknown.join(" ")} — the status view takes ${WATCH}, ${INTERVAL} <seconds>, ${NO_COLOUR[0]}, ${NO_HYPERLINKS} and ${HYPERLINKS}.`,
+      `unknown option(s): ${unknown.join(" ")} — the status view takes ${WATCH}, ${INTERVAL} <seconds>, ${NO_COLOUR[0]}, ${NO_HYPERLINKS}, ${HYPERLINKS} and ${NO_HEADROOM}.`,
     );
   }
   if (intervalError !== null) return refuse(intervalError);
@@ -192,6 +211,7 @@ export function parseStatusArgs(
       colour,
       hyperlinks,
       watchIntervalMs: watch ? (interval ?? DEFAULT_INTERVAL_SECONDS * 1000) : null,
+      headroom,
     },
   };
 }

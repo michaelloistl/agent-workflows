@@ -21,6 +21,12 @@ export interface CaptureOptions {
   // stderr on the common path. Off by default: a command that fails unexpectedly
   // must still say why.
   readonly quiet?: boolean;
+  // Kill the child and throw if it has not finished in this long. For the few calls whose
+  // caller would rather have nothing than wait — the status view's quota read decorates a
+  // redraw loop and must never hang it, however wedged the CLI behind it is. The bound is
+  // the caller's to choose and is not the watch interval: see `status/run.mts`. Unset by
+  // default: a `gh` call that is slow is still a call whose answer the run needs.
+  readonly timeoutMs?: number;
 }
 
 // Run a command and capture its stdout as a string. Used by PR-context gathering
@@ -38,6 +44,7 @@ export function capture(
   return execFileSync(file, [...args], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    ...(opts.timeoutMs === undefined ? {} : { timeout: opts.timeoutMs }),
     ...(opts.quiet ? { stdio: ["ignore", "pipe", "ignore"] as const } : {}),
   });
 }

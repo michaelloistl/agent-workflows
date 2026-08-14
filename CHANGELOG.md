@@ -8,6 +8,38 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Lead `agent-workflows status` with the account's **quota headroom** — the share of its
+  rolling session and weekly limits still unconsumed — as one line above the spec tree. The
+  tracker structurally cannot answer this: every verb runs the `claude` CLI under a
+  subscription token rather than a metered API key, so the fleet drains the same windows
+  interactive work does, and it drains them without moving a label, closing an issue or
+  changing a row. "Five specs in flight" and "39% of the week gone" are only worth anything
+  together. Read from `claude --strict-mcp-config --print --output-format json "/usage"`,
+  which makes no model call — so looking at headroom never consumes it — and needs no
+  persistence, which is what keeps the rule that state is derived and never written locally
+  intact. MCP servers are disabled for the call because loading a consumer's plugins to ask
+  the local account about its own rate limits cost 2 seconds of startup for byte-identical
+  output. Rendered as a line rather than a column, since the figure is account-global and
+  belongs to no row; each window is dimmed, yellow or bold red past 60% and 85%, matching
+  what those colours already mean in the tree. The line states each window in the complement
+  of the concept — `week 39% used` — because that is the direction the source reports and
+  the direction the colours ramp, and the word `used` is never dropped: a bare `39%` under a
+  line labelled quota reads either way round. Adds `--no-headroom`, which exists less for
+  the ~1.5s than for the case it cannot detect: the read is of whichever account is
+  authenticated *locally*, so in a repo whose CI runs on a different subscription the number
+  is true and tells you nothing about the fleet on screen. Every failure — no `claude` on
+  the PATH, unauthenticated, an API key or Bedrock or Vertex, a timeout, or prose a future
+  release has reworded — omits the line in silence and prints exactly what the view printed
+  before, so CI and consumers who never authenticate the CLI are unaffected. A partial parse
+  is refused as hard as a failed one, because a session bar with no weekly bar reads as "the
+  week is fine". Under `--watch` a read is reused for 30s rather than taken every tick, and
+  deliberately outside the `--watch` freshness gate: that gate spends the shared GitHub rate
+  limit, while this number moves precisely when the tree does not. The last good line is
+  carried across one failed window and no further, so a single timeout neither blanks the
+  line nor leaves a stale percentage on screen all night. Amends ADR-0007, whose
+  "reads GitHub and nothing else" rule this breaks — the stronger rule, that the view
+  *writes* nothing, is untouched. `CONTEXT.md` gains **quota headroom**, held apart from
+  **run ceiling**: a ceiling bounds one run, headroom bounds all work everywhere.
 - Add `agent-workflows init` and `agent-workflows sync`, so setting a repo up no longer
   means transcribing five README steps by hand. `npx github:michaelloistl/agent-workflows#v1 init`
   runs before the package is a dependency and writes the thin callers, wires the
