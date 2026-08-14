@@ -8,6 +8,8 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+## v1.6.0 — 2026-08-14
+
 - Lead `agent-workflows status` with the account's **quota headroom** — the share of its
   rolling session and weekly limits still unconsumed — as one line above the spec tree. The
   tracker structurally cannot answer this: every verb runs the `claude` CLI under a
