@@ -40,6 +40,42 @@ version without editing their workflow on every release.
   "reads GitHub and nothing else" rule this breaks — the stronger rule, that the view
   *writes* nothing, is untouched. `CONTEXT.md` gains **quota headroom**, held apart from
   **run ceiling**: a ceiling bounds one run, headroom bounds all work everywhere.
+- Add `agent-workflows init` and `agent-workflows sync`, so setting a repo up no longer
+  means transcribing five README steps by hand. `npx github:michaelloistl/agent-workflows#v1 init`
+  runs before the package is a dependency and writes the thin callers, wires the
+  `sandcastle:*` scripts, pins the git dependency, creates the trigger labels and installs;
+  its last act is to add itself as a devDependency, so later updates are
+  `yarn agent-workflows sync` and the installer always ships at the version of the
+  workflows it installs. One planner serves both commands (the shape of ADR-0005): `init`
+  is told what to enable (`--enable=`, over the five verbs plus the orchestrator), `sync`
+  detects what a repo already has, and the two
+  cannot drift about what an installed repo looks like. The consumer's hook scripts are
+  **derived from this repo's own `package.json`** rather than a second table, so a hook
+  added here reaches every consumer on their next `sync` — including the asymmetric ones a
+  hand-written matrix gets wrong (`explore` has a `-sequence`, the PR verbs have a
+  `-guards-sequence` instead, the orchestrator has neither).
+  Both commands print the whole plan and change nothing until it is accepted; a
+  non-interactive stdin declines and `--yes` pre-accepts, as the spec loop does.
+  Three things they deliberately refuse to do: write secrets (reported, never set —
+  `AGENT_PAT` cannot be minted outside the GitHub UI); regenerate a caller that already
+  exists (`sync` moves the `uses:` ref and leaves the consumer's `with:` inputs and `if:`
+  guard alone, reporting other drift); and run against a checkout of this repo, which is
+  the package and never installs itself. `sync` also reports local overrides, the one
+  thing that goes stale silently — a file under `.sandcastle/agent-workflows/` shadows the
+  packaged entrypoint forever, so a prompt copied at v1.1 is still in use at v1.5 with
+  nothing else to say so. `sync` **re-resolves** the git dependency (`yarn up
+  agent-workflows`) rather than installing it: the default pin is a moving major tag, so a
+  plain `yarn install` reuses the lockfile's resolution and the tag never moves — and the
+  workflows install with `--frozen-lockfile`, so CI would keep running the commit the repo
+  was installed at. It says to commit the updated lockfile, and states the one ordering it
+  cannot escape: `sync` runs the copy in `node_modules`, so a hook added in the release it
+  is moving to arrives on the run after. Defaults come from the repo: everything the
+  package installs, the
+  installer's own major version as the pin, `git config user.email` for the identity, a
+  `Gemfile` for `enable-ruby`, and repo visibility for the `pull_request_target` author
+  gate — so the common install takes no arguments at all. See ADR-0008; `CONTEXT.md` gains
+  **installer** and **installable** (the thing `--enable` selects — the verbs plus the
+  orchestrator, which is still not a sixth verb).
 
 ## v1.5.0 — 2026-08-14
 

@@ -4,6 +4,7 @@
   "private": true,
   "description": "Central reusable agent workflows — distributed to consuming repos as a git dependency exposing the agent-workflows hook dispatcher.",
   "license": "MIT",
+  "repository": "michaelloistl/agent-workflows",
   "bin": {
     "agent-workflows": "bin/agent-workflows.mjs"
   },
