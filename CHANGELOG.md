@@ -8,40 +8,10 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
-- `agent-workflows status` answers `-h` and `--help` with its own option reference, printed
-  to stdout and exited `0`. The view had grown seven options discoverable only from the
-  README, and the conventional flags for finding them out returned an unknown-option
-  refusal. Help is resolved before the options are parsed and before the repo is resolved,
-  so it needs no checkout, no `GH_REPO`, and no `git`, `gh` or `claude` on the PATH — and so
-  it wins over every companion argument in any order, valid or not: the person typing
-  `status --json -h` is asking what the options are, and answering with a second refusal
-  about `--json` is the one answer that helps least. It names both invocation forms
-  (`agent-workflows status` and `yarn agent:status`), every option in both spellings where
-  there are two, the 5s watch default and the 2–3600s interval range, what changes when
-  stdout is not a terminal, and the `HERDR_ENV=1` hyperlink default with its override. The
-  text is built from the same constants the parser validates against, so a renamed flag or a
-  moved bound cannot leave the help describing the last release. Tested at the executable
-  boundary — the real bin, run outside a checkout with an empty PATH — since exit status,
-  the stream written to, and the reads that did not happen are the whole feature and none of
-  them is visible to a parser test. The dispatcher's own usage now presents `status
-  [options]` and points at that help instead of implying `--watch` is all there is. Nothing
-  changes when neither flag is present.
+## v1.7.0 — 2026-08-15
 
-- End every successfully rendered `agent-workflows status` view with its **running package
-  version** — the version declared by the exact package copy that executed the command, not
-  the consuming repo's dependency range, a git ref or the newest release available. A
-  one-shot view closes with `agent-workflows v1.7.0` after one blank line; a `--watch` frame
-  leads its footer with the same identity (`agent-workflows v1.7.0 · watching every 5s ·
-  updated 11:31:02 · ctrl-c to stop`). Both compose through one pure frame formatter
-  (`src/status/frame.mts`), so the wording, the spacing and the version concept cannot drift
-  between a pane and a screenshot. The version is resolved once at process startup, so a
-  watch left open across a `yarn install` never claims a release it is not running. The
-  footer is plain text on every device — no colour, no dimming, no hyperlink — so a piped or
-  redirected view keeps it verbatim. An absent, unreadable, non-string or empty manifest
-  version prints `agent-workflows version unknown` rather than `vunknown`: optional metadata
-  cannot suppress the view it decorates. The failure path is untouched — a repo that cannot
-  be resolved or a tracker read that fails keeps its concise error and its non-zero exit, and
-  gains no success footer.
+- Added `-h` and `--help` option reference to `agent-workflows status`
+- Added the running package version to successful status views
 
 ## v1.6.0 — 2026-08-14
 
