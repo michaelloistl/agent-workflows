@@ -22,11 +22,13 @@ import {
   remoteBranches,
 } from "../shared/spec-tracker.mts";
 import { buildSpecTree } from "../shared/spec-tree.mts";
+import { statusFrame, type RunningVersion } from "./frame.mts";
 import { freshRender } from "./freshness.mts";
 import { gatherIssues } from "./gather.mts";
 import { STATUS_USAGE, parseStatusArgs, wantsHelp } from "./options.mts";
 import { formatQuota, parseQuota, throttled, withQuota } from "./quota.mts";
 import { renderStatus } from "./render.mts";
+import { runningVersion } from "./version.mts";
 import { terminalScreen, watchStatus } from "./watch.mts";
 
 // Answered first, above the parse and everything under it (issue #123): help is what a
@@ -38,6 +40,13 @@ if (wantsHelp(process.argv.slice(2))) {
   console.log(STATUS_USAGE);
   process.exit(0);
 }
+
+// The RUNNING PACKAGE VERSION the footer states, read ONCE before the status view runs and
+// held for the life of the process (`version.mts` owns the read, `frame.mts` the wording):
+// a `--watch` left open across a `yarn install` keeps the version of the code it is actually
+// still running rather than one that changed underneath it. Help exits above without reading
+// even optional view metadata.
+const version: RunningVersion = runningVersion();
 
 // Colour follows the output device: `isTTY` is undefined when stdout is a pipe or a
 // file, so a redirected view is clean text with nothing to strip. The environment goes in
@@ -150,8 +159,11 @@ if (watchIntervalMs === null) {
   // differently from an empty view: "nothing is building" is the renderer's job and a good
   // outcome, while an unauthenticated `gh` or a missing remote is an error with its own
   // message. A watch, by contrast, keeps going and shows it.
+  // The footer goes on the SUCCESS path only, and through the same formatter the watch frames
+  // use: a failed read below keeps its concise error and its non-zero exit rather than being
+  // dressed up as a completed view.
   try {
-    console.log(withQuota(pass(remoteBranches()), quotaLine()));
+    console.log(statusFrame(withQuota(pass(remoteBranches()), quotaLine()), version));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`agent-workflows status: could not read ${repo}: ${message}`);
@@ -194,6 +206,7 @@ if (watchIntervalMs === null) {
     render: () => withQuota(tree(), quota()),
     screen: terminalScreen(process.stdout),
     intervalMs: watchIntervalMs,
+    version,
     signal: stopping.signal,
   });
 }

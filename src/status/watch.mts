@@ -11,6 +11,8 @@
 
 import { setTimeout as delay } from "node:timers/promises";
 
+import { statusFrame, type RunningVersion } from "./frame.mts";
+
 // The terminal, as this loop uses it. Three calls, so a fake in a test is three lines.
 export interface Screen {
   readonly enter: () => void;
@@ -24,6 +26,10 @@ export interface WatchLoop {
   readonly render: () => string;
   readonly screen: Screen;
   readonly intervalMs: number;
+  // Resolved once by the entry point, before the loop starts, and held for the life of the
+  // process: one watch must never claim to have changed release while still running the code
+  // it started with.
+  readonly version: RunningVersion;
   // Aborted by the entry point's SIGINT/SIGTERM handler. The wait ends early on abort,
   // so Ctrl-C is felt at once rather than at the end of the interval.
   readonly signal: AbortSignal;
@@ -37,6 +43,7 @@ export async function watchStatus({
   render,
   screen,
   intervalMs,
+  version,
   signal,
   sleep = abortableSleep,
   now = () => new Date(),
@@ -49,7 +56,11 @@ export async function watchStatus({
       // one. Painting the frame it produced would put a screen up that nobody is there
       // for and undo the restore below.
       if (signal.aborted) break;
-      screen.draw(`${body}\n\n${watchFooter(intervalMs, now())}`);
+      // The footer is the shared frame formatter's (`frame.mts`), not this loop's: without a
+      // clock and an interval on it, a screen that has not changed in an hour is
+      // indistinguishable from a watch that died — and its wording has to be the one-shot
+      // view's, so the two surfaces cannot imply different version concepts.
+      screen.draw(statusFrame(body, version, { intervalMs, at: now() }));
       await sleep(intervalMs, signal);
     }
   } finally {
@@ -83,14 +94,6 @@ async function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   } catch {
     // Aborted mid-wait: the loop condition sees it.
   }
-}
-
-// The one line the loop adds to the view: without it a screen that has not changed in an
-// hour is indistinguishable from a watch that died. Composed here rather than in
-// `render.mts`, which stays a pure function of the tree and knows nothing about watching.
-export function watchFooter(intervalMs: number, at: Date): string {
-  const clock = at.toTimeString().slice(0, 8);
-  return `watching every ${Math.round(intervalMs / 1000)}s · updated ${clock} · ctrl-c to stop`;
 }
 
 // The alternate screen buffer: the watch gets a screen of its own and the scrollback the
