@@ -8,6 +8,25 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- `agent-workflows status` answers `-h` and `--help` with its own option reference, printed
+  to stdout and exited `0`. The view had grown seven options discoverable only from the
+  README, and the conventional flags for finding them out returned an unknown-option
+  refusal. Help is resolved before the options are parsed and before the repo is resolved,
+  so it needs no checkout, no `GH_REPO`, and no `git`, `gh` or `claude` on the PATH — and so
+  it wins over every companion argument in any order, valid or not: the person typing
+  `status --json -h` is asking what the options are, and answering with a second refusal
+  about `--json` is the one answer that helps least. It names both invocation forms
+  (`agent-workflows status` and `yarn agent:status`), every option in both spellings where
+  there are two, the 5s watch default and the 2–3600s interval range, what changes when
+  stdout is not a terminal, and the `HERDR_ENV=1` hyperlink default with its override. The
+  text is built from the same constants the parser validates against, so a renamed flag or a
+  moved bound cannot leave the help describing the last release. Tested at the executable
+  boundary — the real bin, run outside a checkout with an empty PATH — since exit status,
+  the stream written to, and the reads that did not happen are the whole feature and none of
+  them is visible to a parser test. The dispatcher's own usage now presents `status
+  [options]` and points at that help instead of implying `--watch` is all there is. Nothing
+  changes when neither flag is present.
+
 ## v1.6.0 — 2026-08-14
 
 - Lead `agent-workflows status` with the account's **quota headroom** — the share of its

@@ -38,6 +38,9 @@ const NO_HYPERLINKS = "--no-hyperlinks";
 const HYPERLINKS = "--hyperlinks";
 const WATCH = "--watch";
 const INTERVAL = "--interval";
+// Both conventional spellings, because a person reaching for help is by definition not
+// reading a flag list to find out which one this command wants.
+const HELP = ["-h", "--help"];
 // The escape hatch for the quota line. Two reasons a consumer wants it, and the second is
 // the load-bearing one: the line costs a subprocess per render, and — more importantly —
 // it reports the headroom of whichever account is authenticated LOCALLY. Where a repo's CI
@@ -82,6 +85,58 @@ export const MIN_INTERVAL_SECONDS = 2;
 // fires IMMEDIATELY instead, so an absurd interval would turn into the hot loop the floor
 // exists to prevent. An hour is well inside that and past any watch worth leaving open.
 export const MAX_INTERVAL_SECONDS = 3600;
+
+// Whether the command was asked for its help, answered WITHOUT parsing (issue #123).
+//
+// Separate from `parseStatusArgs` on purpose, and this is the whole of the precedence
+// rule: a help flag is looked for before anything is validated, so `status --json -h`
+// prints the option list rather than a refusal naming `--json`. Someone asking what the
+// options are is exactly the person who just got one wrong.
+export function wantsHelp(argv: readonly string[]): boolean {
+  return argv.some((arg) => HELP.includes(arg));
+}
+
+// The option table, in the order a person meets the options: what to do, then how it
+// should look, then the way out. Built from the constants above rather than restating
+// them, so a renamed flag or a moved bound cannot leave the help describing the last
+// release — the same reason `INSTALL_USAGE` lives beside the installer's parser.
+const OPTIONS: readonly (readonly [string, string])[] = [
+  [WATCH, `redraw every ${DEFAULT_INTERVAL_SECONDS}s until ctrl-c (needs a terminal)`],
+  [
+    `${INTERVAL} <seconds>`,
+    `how often ${WATCH} checks — ${MIN_INTERVAL_SECONDS} to ${MAX_INTERVAL_SECONDS} whole seconds`,
+  ],
+  [NO_COLOUR.join(", "), "print without colour"],
+  [NO_HYPERLINKS, "print the URL column instead of linking the reference"],
+  [HYPERLINKS, "link the reference anyway (needs a terminal)"],
+  [NO_HEADROOM, "drop the quota headroom line"],
+  [HELP.join(", "), "print this and exit, reading nothing"],
+];
+
+const FLAG_COLUMN = Math.max(...OPTIONS.map(([flags]) => flags.length));
+
+// What `-h` prints, wrapped inside 80 columns so it survives the narrow terminal a help
+// flag tends to be typed into. Both invocation forms are named because a consuming repo's
+// developer meets this view through the package script and has no reason to know the
+// binary behind it — and the person who typed the binary has no reason to know the script.
+export const STATUS_USAGE = [
+  "usage: agent-workflows status [options]",
+  "       yarn agent:status [options]",
+  "",
+  "Prints the specs currently building in the repo you are standing in, with",
+  "their tracer-bullets nested beneath. Read-only: it runs no agent and writes",
+  "nothing.",
+  "",
+  ...OPTIONS.map(([flags, description]) => `  ${flags.padEnd(FLAG_COLUMN)}  ${description}`),
+  "",
+  "Colour and hyperlinks follow the output device: both are off when stdout is",
+  "not a terminal, so redirected output is clean text carrying the URL column in",
+  `place of the links. ${WATCH} needs a terminal for its own reason — each redraw`,
+  "replaces the last.",
+  "",
+  `Inside Herdr (${HERDR}=1) hyperlinks default off: there the escape is inert`,
+  `while the URL column is a working click target. ${HYPERLINKS} overrides that.`,
+].join("\n");
 
 function refuse(message: string): ParseResult {
   return { ok: false, message };
