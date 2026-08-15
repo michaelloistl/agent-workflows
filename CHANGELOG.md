@@ -8,6 +8,22 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- End every successfully rendered `agent-workflows status` view with its **running package
+  version** — the version declared by the exact package copy that executed the command, not
+  the consuming repo's dependency range, a git ref or the newest release available. A
+  one-shot view closes with `agent-workflows v1.6.0` after one blank line; a `--watch` frame
+  leads its footer with the same identity (`agent-workflows v1.6.0 · watching every 5s ·
+  updated 11:31:02 · ctrl-c to stop`). Both compose through one pure frame formatter
+  (`src/status/frame.mts`), so the wording, the spacing and the version concept cannot drift
+  between a pane and a screenshot. The version is resolved once at process startup, so a
+  watch left open across a `yarn install` never claims a release it is not running. The
+  footer is plain text on every device — no colour, no dimming, no hyperlink — so a piped or
+  redirected view keeps it verbatim. An absent, unreadable, non-string or empty manifest
+  version prints `agent-workflows version unknown` rather than `vunknown`: optional metadata
+  cannot suppress the view it decorates. The failure path is untouched — a repo that cannot
+  be resolved or a tracker read that fails keeps its concise error and its non-zero exit, and
+  gains no success footer.
+
 ## v1.6.0 — 2026-08-14
 
 - Lead `agent-workflows status` with the account's **quota headroom** — the share of its

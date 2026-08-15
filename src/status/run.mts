@@ -11,6 +11,9 @@
 // This file is the DISPATCH half throughout: it owns `process.argv`, `process.stdout`
 // and the `gh` calls, and every decision it makes lives in a tested module next door.
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { repoFromRemoteUrl, resolveRepoSlug } from "../shared/github.mts";
 import { capture } from "../shared/process.mts";
 import {
@@ -22,6 +25,7 @@ import {
   remoteBranches,
 } from "../shared/spec-tracker.mts";
 import { buildSpecTree } from "../shared/spec-tree.mts";
+import { packageVersion, statusFrame, type RunningVersion } from "./frame.mts";
 import { freshRender } from "./freshness.mts";
 import { gatherIssues } from "./gather.mts";
 import { parseStatusArgs } from "./options.mts";
@@ -33,6 +37,23 @@ import { terminalScreen, watchStatus } from "./watch.mts";
 // file, so a redirected view is clean text with nothing to strip. The environment goes in
 // too, because hyperlinks need more than a TTY — a multiplexer can own the terminal and
 // swallow the escape (see `options.mts`), and this is the dispatch half that owns `process`.
+// The RUNNING PACKAGE VERSION: the version declared by the exact package copy executing this
+// command — resolved from this file's own manifest rather than the consuming repo's
+// dependency range, a git ref or a remote release, because what the footer answers is "which
+// copy produced this view". Read ONCE, here, before anything else runs: a `--watch` left open
+// across a `yarn install` keeps the version of the code it is actually still running.
+//
+// Every failure is unknown rather than fatal (`packageVersion` decides what counts as a
+// version): a damaged manifest costs the footer its number, never the operator their view.
+const version: RunningVersion = (() => {
+  try {
+    const path = fileURLToPath(new URL("../../package.json", import.meta.url));
+    return packageVersion(JSON.parse(readFileSync(path, "utf8")));
+  } catch {
+    return null;
+  }
+})();
+
 const parsed = parseStatusArgs(process.argv.slice(2), process.stdout.isTTY === true, process.env);
 if (!parsed.ok) {
   console.error(`agent-workflows status: ${parsed.message}`);
@@ -140,8 +161,11 @@ if (watchIntervalMs === null) {
   // differently from an empty view: "nothing is building" is the renderer's job and a good
   // outcome, while an unauthenticated `gh` or a missing remote is an error with its own
   // message. A watch, by contrast, keeps going and shows it.
+  // The footer goes on the SUCCESS path only, and through the same formatter the watch frames
+  // use: a failed read below keeps its concise error and its non-zero exit rather than being
+  // dressed up as a completed view.
   try {
-    console.log(withQuota(pass(remoteBranches()), quotaLine()));
+    console.log(statusFrame(withQuota(pass(remoteBranches()), quotaLine()), version));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`agent-workflows status: could not read ${repo}: ${message}`);
@@ -184,6 +208,7 @@ if (watchIntervalMs === null) {
     render: () => withQuota(tree(), quota()),
     screen: terminalScreen(process.stdout),
     intervalMs: watchIntervalMs,
+    version,
     signal: stopping.signal,
   });
 }
