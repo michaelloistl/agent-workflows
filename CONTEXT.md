@@ -102,7 +102,7 @@ _Avoid_: dashboard (that word now belongs to the *status view*), progress report
 ### Observability
 
 **Status view**:
-The read-only terminal view of specs currently building and their tracer-bullets' states — `agent-workflows status`, a third entry point to the package alongside the workflow and local sequencers. Runs no agent, follows no hook contract, and writes nothing: a label write would be a dispatch. Scoped to the repo it is standing in. Reads the tracker for the tree and the local Claude Code CLI for *quota headroom*, and nothing else — the second source is what the tracker structurally cannot answer. See ADR-0007.
+The read-only terminal view of specs currently building and their tracer-bullets' states — `agent-workflows status`, a third entry point to the package alongside the workflow and local sequencers. Runs no agent, follows no hook contract, and writes nothing: a label write would be a dispatch. Scoped to the repo it is standing in. Reads three sources and nothing else: the tracker for the tree, the local Claude Code CLI for *quota headroom*, and the executing package's own manifest for the *running package version* in the footer — the second is what the tracker structurally cannot answer, the third what nothing on the network can, since the question is which copy of the code is producing this view. What holds across all three is the stronger rule: it still writes nothing, and neither of the two local reads touches the network or a token. See ADR-0007.
 _Avoid_: dashboard (ambiguous while the *progress comment* was also called one), monitor, TUI
 
 **Quota headroom**:

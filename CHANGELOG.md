@@ -11,8 +11,8 @@ version without editing their workflow on every release.
 - End every successfully rendered `agent-workflows status` view with its **running package
   version** — the version declared by the exact package copy that executed the command, not
   the consuming repo's dependency range, a git ref or the newest release available. A
-  one-shot view closes with `agent-workflows v1.6.0` after one blank line; a `--watch` frame
-  leads its footer with the same identity (`agent-workflows v1.6.0 · watching every 5s ·
+  one-shot view closes with `agent-workflows v1.7.0` after one blank line; a `--watch` frame
+  leads its footer with the same identity (`agent-workflows v1.7.0 · watching every 5s ·
   updated 11:31:02 · ctrl-c to stop`). Both compose through one pure frame formatter
   (`src/status/frame.mts`), so the wording, the spacing and the version concept cannot drift
   between a pane and a screenshot. The version is resolved once at process startup, so a

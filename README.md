@@ -622,7 +622,7 @@ madebyon/on-vantage — 2 specs in flight
 
 #1485      Spec: Port the Utilization report        5/5 · awaiting final PR
 
-agent-workflows v1.6.0
+agent-workflows v1.7.0
 ```
 
 On a terminal each `#1521` is itself the link to the issue — the state marker beside it
@@ -674,10 +674,10 @@ the trailing URL column comes back instead:
   normal screen. This is the reason the column has to be *text* rather than an escape:
   the host terminal can only find what Herdr actually drew.
 - **Every rendered view says which release produced it.** The last line of a one-shot view is
-  `agent-workflows v1.6.0` — the version of the exact package copy that ran, not the
+  `agent-workflows v1.7.0` — the version of the exact package copy that ran, not the
   dependency range the repo declares or the newest release out there, so a screenshot or a
   redirected file keeps its release context and a synced repo can be told from an unsynced
-  one. Under `--watch` the same identity leads the footer (`agent-workflows v1.6.0 · watching
+  one. Under `--watch` the same identity leads the footer (`agent-workflows v1.7.0 · watching
   every 5s · updated 11:31:02 · ctrl-c to stop`), resolved once when the process starts, so a
   pane left open never claims a release it is not running. It is plain text everywhere — no
   colour, no link — and a manifest that cannot be read prints `agent-workflows version

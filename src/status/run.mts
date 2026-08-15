@@ -11,9 +11,6 @@
 // This file is the DISPATCH half throughout: it owns `process.argv`, `process.stdout`
 // and the `gh` calls, and every decision it makes lives in a tested module next door.
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import { repoFromRemoteUrl, resolveRepoSlug } from "../shared/github.mts";
 import { capture } from "../shared/process.mts";
 import {
@@ -25,35 +22,25 @@ import {
   remoteBranches,
 } from "../shared/spec-tracker.mts";
 import { buildSpecTree } from "../shared/spec-tree.mts";
-import { packageVersion, statusFrame, type RunningVersion } from "./frame.mts";
+import { statusFrame, type RunningVersion } from "./frame.mts";
 import { freshRender } from "./freshness.mts";
 import { gatherIssues } from "./gather.mts";
 import { parseStatusArgs } from "./options.mts";
 import { formatQuota, parseQuota, throttled, withQuota } from "./quota.mts";
 import { renderStatus } from "./render.mts";
+import { runningVersion } from "./version.mts";
 import { terminalScreen, watchStatus } from "./watch.mts";
+
+// The RUNNING PACKAGE VERSION the footer states, read ONCE before anything else runs and
+// held for the life of the process (`version.mts` owns the read, `frame.mts` the wording):
+// a `--watch` left open across a `yarn install` keeps the version of the code it is actually
+// still running rather than one that changed underneath it.
+const version: RunningVersion = runningVersion();
 
 // Colour follows the output device: `isTTY` is undefined when stdout is a pipe or a
 // file, so a redirected view is clean text with nothing to strip. The environment goes in
 // too, because hyperlinks need more than a TTY — a multiplexer can own the terminal and
 // swallow the escape (see `options.mts`), and this is the dispatch half that owns `process`.
-// The RUNNING PACKAGE VERSION: the version declared by the exact package copy executing this
-// command — resolved from this file's own manifest rather than the consuming repo's
-// dependency range, a git ref or a remote release, because what the footer answers is "which
-// copy produced this view". Read ONCE, here, before anything else runs: a `--watch` left open
-// across a `yarn install` keeps the version of the code it is actually still running.
-//
-// Every failure is unknown rather than fatal (`packageVersion` decides what counts as a
-// version): a damaged manifest costs the footer its number, never the operator their view.
-const version: RunningVersion = (() => {
-  try {
-    const path = fileURLToPath(new URL("../../package.json", import.meta.url));
-    return packageVersion(JSON.parse(readFileSync(path, "utf8")));
-  } catch {
-    return null;
-  }
-})();
-
 const parsed = parseStatusArgs(process.argv.slice(2), process.stdout.isTTY === true, process.env);
 if (!parsed.ok) {
   console.error(`agent-workflows status: ${parsed.message}`);
