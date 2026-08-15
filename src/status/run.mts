@@ -25,16 +25,27 @@ import { buildSpecTree } from "../shared/spec-tree.mts";
 import { statusFrame, type RunningVersion } from "./frame.mts";
 import { freshRender } from "./freshness.mts";
 import { gatherIssues } from "./gather.mts";
-import { parseStatusArgs } from "./options.mts";
+import { STATUS_USAGE, parseStatusArgs, wantsHelp } from "./options.mts";
 import { formatQuota, parseQuota, throttled, withQuota } from "./quota.mts";
 import { renderStatus } from "./render.mts";
 import { runningVersion } from "./version.mts";
 import { terminalScreen, watchStatus } from "./watch.mts";
 
-// The RUNNING PACKAGE VERSION the footer states, read ONCE before anything else runs and
+// Answered first, above the parse and everything under it (issue #123): help is what a
+// person reaches for when they do not yet know whether they are somewhere this command can
+// run at all, so it must not depend on a repo, a remote, `gh` or `claude` — and it must not
+// be refused for the very argument it would explain. To stdout and exit 0, because it is
+// the output that was asked for rather than a failure.
+if (wantsHelp(process.argv.slice(2))) {
+  console.log(STATUS_USAGE);
+  process.exit(0);
+}
+
+// The RUNNING PACKAGE VERSION the footer states, read ONCE before the status view runs and
 // held for the life of the process (`version.mts` owns the read, `frame.mts` the wording):
 // a `--watch` left open across a `yarn install` keeps the version of the code it is actually
-// still running rather than one that changed underneath it.
+// still running rather than one that changed underneath it. Help exits above without reading
+// even optional view metadata.
 const version: RunningVersion = runningVersion();
 
 // Colour follows the output device: `isTTY` is undefined when stdout is a pipe or a

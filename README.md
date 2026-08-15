@@ -602,6 +602,7 @@ standing in, with their tracer-bullets nested beneath (ADR-0007):
 
 ```sh
 yarn agent:status                          # or: agent-workflows status
+yarn agent:status --help                   # the full option reference (or -h)
 yarn agent:status --watch                  # check every 5s until ctrl-c
 yarn agent:status --watch --interval 60
 yarn agent:status --no-color
