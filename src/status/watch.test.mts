@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
-import { terminalScreen, watchFooter, watchStatus, type Screen } from "./watch.mts";
+import { statusFrame } from "./frame.mts";
+import { terminalScreen, watchStatus, type Screen } from "./watch.mts";
 
 function fakeScreen() {
   const log: string[] = [];
@@ -32,6 +33,7 @@ function fakeSleep(ticks: number, controller: AbortController) {
 }
 
 const AT = new Date("2026-08-12T09:04:05");
+const VERSION = "1.6.0";
 
 async function run(ticks: number, render: () => string, intervalMs = 30_000) {
   const controller = new AbortController();
@@ -41,12 +43,15 @@ async function run(ticks: number, render: () => string, intervalMs = 30_000) {
     render,
     screen,
     intervalMs,
+    version: VERSION,
     sleep,
     now: () => AT,
     signal: controller.signal,
   });
-  // The footer is the loop's own line; the tests below are about the view above it.
-  return { log, waits, frames: frames.map((f) => f.split("\n\nwatching")[0]!) };
+  // The footer is composed by the shared frame formatter (`frame.mts`, tested there); the
+  // tests below are about the view above it, so `frames` is the body and `full` the frame
+  // as it was drawn.
+  return { log, waits, full: frames, frames: frames.map((f) => f.split("\n\nagent-workflows")[0]!) };
 }
 
 test("the first frame is drawn before the first wait", async () => {
@@ -73,18 +78,20 @@ test("an abort ends the loop and restores the terminal", async () => {
   assert.equal(log.at(-1), "leave");
 });
 
-test("every frame carries the footer, so a still screen is not a dead one", async () => {
+test("every frame carries the shared versioned footer, so a still screen is not a dead one", async () => {
   const controller = new AbortController();
   const { screen, frames } = fakeScreen();
   await watchStatus({
     render: () => "view",
     screen,
     intervalMs: 30_000,
+    version: VERSION,
     sleep: async () => controller.abort(),
     now: () => AT,
     signal: controller.signal,
   });
-  assert.equal(frames[0], `view\n\n${watchFooter(30_000, AT)}`);
+  assert.equal(frames[0], statusFrame("view", VERSION, { intervalMs: 30_000, at: AT }));
+  assert.match(frames[0], /agent-workflows v1\.6\.0 · watching every 30s/);
 });
 
 // The pass is seconds of blocking `gh` calls; an abort landing mid-fetch must not put a
@@ -100,6 +107,7 @@ test("a frame computed before an abort is not drawn after it", async () => {
     screen,
     intervalMs: 30_000,
     sleep: async () => assert.fail("should not wait"),
+    version: VERSION,
     signal: controller.signal,
   });
   assert.deepEqual(log, ["enter", "leave"]);
@@ -114,6 +122,7 @@ test("a signal already aborted draws nothing, and still restores the terminal", 
     screen,
     intervalMs: 30_000,
     sleep: async () => assert.fail("should not wait"),
+    version: VERSION,
     signal: controller.signal,
   });
   assert.deepEqual(log, ["enter", "leave"]);
@@ -123,12 +132,15 @@ test("a signal already aborted draws nothing, and still restores the terminal", 
 // tear the pane down. The failure is shown in place and the next redraw recovers.
 test("a failed read is drawn in place and the watch keeps going", async () => {
   let pass = 0;
-  const { frames } = await run(2, () => {
+  const { frames, full } = await run(2, () => {
     if (++pass === 1) throw new Error("gh: could not resolve host");
     return "view";
   });
   assert.match(frames[0], /could not resolve host/);
   assert.equal(frames[1], "view");
+  // The recovery screen still says which release is retrying: the failure replaces the body,
+  // never the frame around it.
+  assert.equal(full[0], statusFrame(frames[0], VERSION, { intervalMs: 30_000, at: AT }));
 });
 
 // The one failure that must NOT be swallowed: if the loop itself breaks, an unrestored
@@ -149,6 +161,7 @@ test("the terminal is restored even when drawing throws", async () => {
       screen,
       intervalMs: 30_000,
       sleep: async () => controller.abort(),
+      version: VERSION,
       signal: controller.signal,
     }),
     /broken pipe/,
@@ -168,6 +181,7 @@ test("the real wait ends at once on abort rather than running out the interval",
     render: () => "view",
     screen,
     intervalMs: 60_000,
+    version: VERSION,
     signal: controller.signal,
   });
   setTimeout(() => controller.abort(), 10);
@@ -187,6 +201,7 @@ test("the real wait takes its abort listener off again after each redraw", async
     },
     screen,
     intervalMs: 1,
+    version: VERSION,
     signal: controller.signal,
   });
   assert.equal(passes, 3, "the loop really did redraw more than once");
@@ -198,11 +213,24 @@ test("the real wait takes its abort listener off again after each redraw", async
   assert.ok(frames.length >= 2);
 });
 
-test("the footer says how often it redraws and how to stop", () => {
-  const footer = watchFooter(30_000, new Date("2026-08-12T09:04:05"));
-  assert.match(footer, /30s/);
-  assert.match(footer, /ctrl-c/i);
-  assert.match(footer, /09:04:05/);
+// An unresolved version still leaves the loop with a footer, since the interval, the clock
+// and the stop instruction are what a still screen is read for.
+test("a watch with no resolvable version still says so and keeps its footer", async () => {
+  const controller = new AbortController();
+  const { screen, frames } = fakeScreen();
+  await watchStatus({
+    render: () => "view",
+    screen,
+    intervalMs: 5_000,
+    version: null,
+    sleep: async () => controller.abort(),
+    now: () => AT,
+    signal: controller.signal,
+  });
+  assert.equal(
+    frames[0],
+    "view\n\nagent-workflows version unknown · watching every 5s · updated 09:04:05 · ctrl-c to stop",
+  );
 });
 
 test("the terminal screen switches buffers so the scrollback survives the watch", () => {

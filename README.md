@@ -621,6 +621,8 @@ madebyon/on-vantage — 2 specs in flight
     #1522  Replace Retainer and internal toggles    pending
 
 #1485      Spec: Port the Utilization report        5/5 · awaiting final PR
+
+agent-workflows v1.7.0
 ```
 
 On a terminal each `#1521` is itself the link to the issue — the state marker beside it
@@ -671,6 +673,16 @@ the trailing URL column comes back instead:
   ordinary text on screen. ⌘-click is enough for the one-shot view, which draws on the
   normal screen. This is the reason the column has to be *text* rather than an escape:
   the host terminal can only find what Herdr actually drew.
+- **Every rendered view says which release produced it.** The last line of a one-shot view is
+  `agent-workflows v1.7.0` — the version of the exact package copy that ran, not the
+  dependency range the repo declares or the newest release out there, so a screenshot or a
+  redirected file keeps its release context and a synced repo can be told from an unsynced
+  one. Under `--watch` the same identity leads the footer (`agent-workflows v1.7.0 · watching
+  every 5s · updated 11:31:02 · ctrl-c to stop`), resolved once when the process starts, so a
+  pane left open never claims a release it is not running. It is plain text everywhere — no
+  colour, no link — and a manifest that cannot be read prints `agent-workflows version
+  unknown` rather than withholding the view. A failed read is still an error with a non-zero
+  exit and no footer.
 - **`--watch` checks in place** — every 5 seconds by default, `--interval <seconds>` sets
   how often it checks (whole seconds, from 2 to 3600). A tick costs one conditional read
   and a branch listing, not a full fetch of the tree, and redraws only when something has
