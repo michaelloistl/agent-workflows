@@ -10,24 +10,33 @@ version without editing their workflow on every release.
 
 - Bounded the `Install system packages` step in all five verbs (`explore`, `implement`,
   `implement-pr`, `review-pr`, `update-branch`). The step was a bare `apt-get update &&
-  apt-get install` with no ceiling, and the runner image's default mirror
+  apt-get install` with no step ceiling, and the runner image's default mirror
   (`azure.archive.ubuntu.com`) intermittently black-holes connections — apt's stock 120s
-  timeout and retry policy then spend half an hour re-Ign'ing the same five suites before
-  the step either succeeds or the job hits the account's default limit. Observed at 34m26s
-  on an `implement-pr` run that had not yet written a prompt, so the whole cost was runner
+  timeout and retry policy then spend half an hour re-Ign'ing the same five suites, with
+  only the job's own `timeout-minutes: 90` underneath it. Observed at 34m26s on an
+  `implement-pr` run that had not yet written a prompt, so the whole cost was runner
   minutes spent before the agent existed. Now: `Acquire::ForceIPv4=true`, because it is the
   mirror's AAAA records that stall and IPv4 to the same host answers immediately;
   `Acquire::http::Timeout=15` so a dead socket is abandoned in seconds rather than minutes;
-  and three outer attempts, since the failure is
-  transient often enough that a retry is usually the whole fix. The image's six extra index
-  fetches from its pre-configured chrome/microsoft/azure-cli sources are left alone:
-  narrowing apt to `/etc/apt/sources.list` also drops `universe`, which the runner enables
-  from `sources.list.d`, and a consumer asking for anything outside `main` then gets
-  `Unable to locate package` — a break this repo's own CI cannot see, since it never
-  installs a system package. `timeout-minutes: 5` is the
-  backstop for when it is not — the run fails fast and visibly with a re-appliable label,
-  which is strictly better than a silent hang, because a hung verb holds its
-  `agent:in-progress` label and looks indistinguishable from a working one.
+  and three attempts, since the failure is transient often enough that a retry is usually
+  the whole fix. Each attempt's `apt-get update` is bounded by `timeout 120`, so a stalled
+  index fetch costs one attempt rather than the whole budget and attempts 2 and 3 actually
+  run. `apt-get install` is deliberately left unbounded except by the step's
+  `timeout-minutes: 10` — a consumer pulling a heavy set (browser deps, texlive) is
+  legitimately slow on a cold mirror and must not fail for it. The install runs at `-q`
+  rather than `-qq` so a successful run still records what it put on the box, and
+  `system-packages` reaches the script through `env:` rather than direct interpolation,
+  which closes the shell-injection surface a caller value could otherwise reach through the
+  retry loop. The image's six extra index fetches from its pre-configured
+  chrome/microsoft/azure-cli sources are left alone: narrowing apt to
+  `/etc/apt/sources.list` also drops `ubuntu.sources` — on 24.04 that file *is* the Ubuntu
+  archive — and a consumer then gets `Unable to locate package` for anything not already on
+  the image, a break this repo's own CI cannot see, since it never installs a system
+  package. Note that a failure here is not a graceful stop: the step runs before
+  `Set up Node`, so `Report blocked on failure` has no `node_modules` and fails too — the
+  run is red, no `agent:blocked` label is posted, and the trigger label sits on the issue
+  until a human removes and re-adds it. That is pre-existing for any pre-Node failure and
+  still preferable to a silent hang billed in full.
 
 ## v1.7.0 — 2026-08-15
 

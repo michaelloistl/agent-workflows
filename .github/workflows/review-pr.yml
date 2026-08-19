@@ -178,32 +178,48 @@ jobs:
         # black-holes connections, and apt's defaults turn that into ~30 min of silent
         # retries with no step ceiling — an agent run that has not yet written a line
         # burning most of a billing hour. So: force IPv4 (the mirror's AAAA records are
-        # what stall), cap each request at 15s, and retry the whole thing.
-        # `timeout-minutes` is the backstop: fail in 5 and let the label be re-applied,
-        # rather than hang.
+        # what stall), cap each request at 15s, bound the index fetch per attempt, and
+        # retry. `timeout` is on `update` only — the index fetch is what stalls, and
+        # bounding it per attempt is what lets attempts 2 and 3 actually run rather than
+        # be cut off mid-flight by the step ceiling. A heavy package set (browser deps,
+        # texlive) is legitimately slow to install, so `timeout-minutes` is its only
+        # ceiling and is deliberately loose.
         #
-        # Do NOT narrow the sources with `-o Dir::Etc::sourceparts=/dev/null` to skip
-        # the image's pre-configured chrome/microsoft/azure-cli lists. It also drops
-        # `universe`, which the runner enables from sources.list.d — consumers asking
-        # for anything outside main (libvips, for one) then get `Unable to locate
-        # package`, and no CI here would catch it.
-        timeout-minutes: 5
+        # Failing here is not tidy: this step runs before `Set up Node`, so `Report
+        # blocked on failure` runs without `node_modules` and fails too — a red run, no
+        # `agent:blocked` state label, and the trigger label still on the issue, which a
+        # human has to REMOVE and re-add to fire another run (re-adding a label that is
+        # already there raises no event). Still better than the silent half-hour hang it
+        # replaces, which was billed in full.
+        #
+        # Do NOT narrow the sources with `-o Dir::Etc::sourceparts=/dev/null` to skip the
+        # image's pre-configured chrome/microsoft/azure-cli lists: on 24.04 that directory
+        # also holds `ubuntu.sources`, the entire Ubuntu archive (`/etc/apt/sources.list`
+        # is only a comment stub), so apt is left with no sources at all and can locate
+        # nothing that is not already on the image.
+        timeout-minutes: 10
+        env:
+          # Via env, never interpolated into the run script, to avoid shell injection.
+          # The expansion below stays unquoted so a space-separated list still splits.
+          SYSTEM_PACKAGES: ${{ inputs.system-packages }}
         run: |
-          apt_run() {
-            sudo apt-get "$@" -qq \
-              -o Acquire::ForceIPv4=true \
-              -o Acquire::Retries=3 \
-              -o Acquire::http::Timeout=15 \
-              -o Acquire::https::Timeout=15 \
-              -o Acquire::Languages=none
-          }
+          apt_opts=(
+            -o Acquire::ForceIPv4=true
+            -o Acquire::Retries=3
+            -o Acquire::http::Timeout=15
+            -o Acquire::https::Timeout=15
+            -o Acquire::Languages=none
+          )
           for attempt in 1 2 3; do
-            if apt_run update && apt_run install -y --no-install-recommends ${{ inputs.system-packages }}; then
+            if sudo timeout 120 apt-get update -qq "${apt_opts[@]}" &&
+              sudo apt-get install -q -y --no-install-recommends "${apt_opts[@]}" \
+                $SYSTEM_PACKAGES; then
               exit 0
             fi
-            echo "::warning::apt attempt ${attempt} failed, retrying"
+            echo "::warning::apt attempt ${attempt} of 3 failed"
             sleep 5
           done
+          echo "::error::apt failed after 3 attempts"
           exit 1
 
       - name: Set up Ruby
