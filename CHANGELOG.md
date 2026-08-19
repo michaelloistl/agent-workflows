@@ -18,10 +18,13 @@ version without editing their workflow on every release.
   minutes spent before the agent existed. Now: `Acquire::ForceIPv4=true`, because it is the
   mirror's AAAA records that stall and IPv4 to the same host answers immediately;
   `Acquire::http::Timeout=15` so a dead socket is abandoned in seconds rather than minutes;
-  `Dir::Etc::sourceparts=/dev/null` to skip the six index fetches from the image's
-  pre-configured chrome/microsoft/azure-cli sources, which no consumer installs from and
-  which are themselves a flake surface; and three outer attempts, since the failure is
-  transient often enough that a retry is usually the whole fix. `timeout-minutes: 5` is the
+  and three outer attempts, since the failure is
+  transient often enough that a retry is usually the whole fix. The image's six extra index
+  fetches from its pre-configured chrome/microsoft/azure-cli sources are left alone:
+  narrowing apt to `/etc/apt/sources.list` also drops `universe`, which the runner enables
+  from `sources.list.d`, and a consumer asking for anything outside `main` then gets
+  `Unable to locate package` — a break this repo's own CI cannot see, since it never
+  installs a system package. `timeout-minutes: 5` is the
   backstop for when it is not — the run fails fast and visibly with a re-appliable label,
   which is strictly better than a silent hang, because a hung verb holds its
   `agent:in-progress` label and looks indistinguishable from a working one.

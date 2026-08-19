@@ -118,10 +118,15 @@ jobs:
         # black-holes connections, and apt's defaults turn that into ~30 min of silent
         # retries with no step ceiling — an agent run that has not yet written a line
         # burning most of a billing hour. So: force IPv4 (the mirror's AAAA records are
-        # what stall), cap each request at 15s, ignore the image's pre-configured
-        # third-party sources (chrome/microsoft/azure-cli) that we never install from,
-        # and retry the whole thing. `timeout-minutes` is the backstop: fail in 5 and
-        # let the label be re-applied, rather than hang.
+        # what stall), cap each request at 15s, and retry the whole thing.
+        # `timeout-minutes` is the backstop: fail in 5 and let the label be re-applied,
+        # rather than hang.
+        #
+        # Do NOT narrow the sources with `-o Dir::Etc::sourceparts=/dev/null` to skip
+        # the image's pre-configured chrome/microsoft/azure-cli lists. It also drops
+        # `universe`, which the runner enables from sources.list.d — consumers asking
+        # for anything outside main (libvips, for one) then get `Unable to locate
+        # package`, and no CI here would catch it.
         timeout-minutes: 5
         run: |
           apt_run() {
@@ -130,8 +135,7 @@ jobs:
               -o Acquire::Retries=3 \
               -o Acquire::http::Timeout=15 \
               -o Acquire::https::Timeout=15 \
-              -o Acquire::Languages=none \
-              -o Dir::Etc::sourceparts=/dev/null
+              -o Acquire::Languages=none
           }
           for attempt in 1 2 3; do
             if apt_run update && apt_run install -y --no-install-recommends ${{ inputs.system-packages }}; then
