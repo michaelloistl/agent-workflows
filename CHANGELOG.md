@@ -37,6 +37,19 @@ version without editing their workflow on every release.
   run is red, no `agent:blocked` label is posted, and the trigger label sits on the issue
   until a human removes and re-adds it. That is pre-existing for any pre-Node failure and
   still preferable to a silent hang billed in full.
+- Guarded the five copies of that step against drift. It is ~30 identical lines in five
+  files where it used to be one, and a composite action is not available to collapse them:
+  a called reusable workflow resolves `uses: ./…` against the *caller's* checkout, and this
+  repo is never on disk in a consumer's job, so the shared copy would have to be checked out
+  into the consumer's tree — which these verbs avoid on purpose, since they run an agent that
+  stages and pushes commits. The `github.job_workflow_sha` route would honour the single
+  `@v1` pin, but not without that untracked directory. So the copies stay and a test asserts
+  they stay identical, since nothing else in CI reads the verb YAML and an edit landing in
+  four of five files is otherwise silent — *accidental drift* as CONTEXT.md defines it. A
+  second assertion forbids `Dir::Etc::sourceparts` in the executable lines specifically,
+  because reintroducing it uniformly across all five would satisfy the parity check while
+  breaking every consumer, and because it is the one failure mode this repo's CI structurally
+  cannot observe.
 
 ## v1.7.0 — 2026-08-15
 
