@@ -114,7 +114,33 @@ jobs:
 
       - name: Install system packages
         if: inputs.system-packages != ''
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ${{ inputs.system-packages }}
+        # The runner's default apt mirror (azure.archive.ubuntu.com) intermittently
+        # black-holes connections, and apt's defaults turn that into ~30 min of silent
+        # retries with no step ceiling — an agent run that has not yet written a line
+        # burning most of a billing hour. So: force IPv4 (the mirror's AAAA records are
+        # what stall), cap each request at 15s, ignore the image's pre-configured
+        # third-party sources (chrome/microsoft/azure-cli) that we never install from,
+        # and retry the whole thing. `timeout-minutes` is the backstop: fail in 5 and
+        # let the label be re-applied, rather than hang.
+        timeout-minutes: 5
+        run: |
+          apt_run() {
+            sudo apt-get "$@" -qq \
+              -o Acquire::ForceIPv4=true \
+              -o Acquire::Retries=3 \
+              -o Acquire::http::Timeout=15 \
+              -o Acquire::https::Timeout=15 \
+              -o Acquire::Languages=none \
+              -o Dir::Etc::sourceparts=/dev/null
+          }
+          for attempt in 1 2 3; do
+            if apt_run update && apt_run install -y --no-install-recommends ${{ inputs.system-packages }}; then
+              exit 0
+            fi
+            echo "::warning::apt attempt ${attempt} failed, retrying"
+            sleep 5
+          done
+          exit 1
 
       - name: Set up Ruby
         if: inputs.enable-ruby

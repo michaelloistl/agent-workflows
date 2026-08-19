@@ -8,6 +8,24 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Bounded the `Install system packages` step in all five verbs (`explore`, `implement`,
+  `implement-pr`, `review-pr`, `update-branch`). The step was a bare `apt-get update &&
+  apt-get install` with no ceiling, and the runner image's default mirror
+  (`azure.archive.ubuntu.com`) intermittently black-holes connections — apt's stock 120s
+  timeout and retry policy then spend half an hour re-Ign'ing the same five suites before
+  the step either succeeds or the job hits the account's default limit. Observed at 34m26s
+  on an `implement-pr` run that had not yet written a prompt, so the whole cost was runner
+  minutes spent before the agent existed. Now: `Acquire::ForceIPv4=true`, because it is the
+  mirror's AAAA records that stall and IPv4 to the same host answers immediately;
+  `Acquire::http::Timeout=15` so a dead socket is abandoned in seconds rather than minutes;
+  `Dir::Etc::sourceparts=/dev/null` to skip the six index fetches from the image's
+  pre-configured chrome/microsoft/azure-cli sources, which no consumer installs from and
+  which are themselves a flake surface; and three outer attempts, since the failure is
+  transient often enough that a retry is usually the whole fix. `timeout-minutes: 5` is the
+  backstop for when it is not — the run fails fast and visibly with a re-appliable label,
+  which is strictly better than a silent hang, because a hung verb holds its
+  `agent:in-progress` label and looks indistinguishable from a working one.
+
 ## v1.7.0 — 2026-08-15
 
 - Added `-h` and `--help` option reference to `agent-workflows status`
