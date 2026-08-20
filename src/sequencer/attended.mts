@@ -1,20 +1,22 @@
-// Attended local sequencer (issue #55, extended for `implement` in #57). The SECOND
-// entry point: `agent-workflows <verb> <issue-number>` runs a verb on the
-// developer's own machine, streaming to the terminal. It began with the read-only
-// `explore`; `implement` now builds an issue end to end — commits on an agent branch
-// and, by default, a finalize with full parity to the unattended path (push, open
-// the draft PR, update the tracker), because what provides inspection is the
-// surviving worktree, not a withheld push. A `--finalize=ask|never` flag holds
+// Attended local sequencer (issue #55, extended for `implement` in #57 and for the
+// first PR verb in #141). The SECOND entry point: `agent-workflows <verb> <number>`
+// runs a verb on the developer's own machine, streaming to the terminal. It began
+// with the read-only `explore`; `implement` builds an issue end to end — commits on an
+// agent branch and, by default, a finalize with full parity to the unattended path
+// (push, open the draft PR, update the tracker), because what provides inspection is
+// the surviving worktree, not a withheld push. A `--finalize=ask|never` flag holds
 // everything off GitHub for the runs where the developer wants to look first.
+// `review-pr` reviews a pull request the same way, finalizing with full parity too —
+// the review posts through the reviews API, exactly as the unattended run's does.
 //
 // It creates a git worktree UNDER the configured root — never the checkout the
 // developer is sitting in — invokes the repo's own opaque bootstrap command to make
 // that tree runnable, then hands the SAME sequence the reusable workflow runs to the
-// sequencer inside the worktree (`yarn sandcastle:<verb>-sequence`), so the attended
-// and unattended paths share one implementation and cannot drift. An `implement`
-// worktree survives a successful run (it is what the developer inspects); every run
-// retains its tree on failure or a Ctrl-C abort, and `explore` removes a clean one.
-// The run closes with a printed summary so the outcome is legible at a glance.
+// sequencer inside the worktree, so the attended and unattended paths share one
+// implementation and cannot drift. An `implement` worktree survives a successful run
+// (it is what the developer inspects); every run retains its tree on failure or a
+// Ctrl-C abort, and the read-only verbs remove a clean one. The run closes with a
+// printed summary so the outcome is legible at a glance.
 //
 // Credentials come from the developer's already-authenticated `gh` and existing
 // agent credentials, inherited through the ambient environment: this sequencer
@@ -24,6 +26,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   worktreePath,
   retainWorktree,
@@ -55,7 +58,8 @@ const force = process.argv.includes("--force");
 const interactive = process.argv.includes("--interactive");
 if (!verb || !issue) {
   console.error(
-    "attended: usage: agent-workflows <verb> <issue-number> [--force] [--finalize=auto|ask|never] [--interactive]",
+    "attended: usage: agent-workflows <verb> <issue-or-pr-number> [--force] " +
+      "[--finalize=auto|ask|never] [--interactive]",
   );
   process.exit(2);
 }
@@ -78,17 +82,18 @@ if (!attendable(verb)) {
   process.exit(2);
 }
 
-// The shape of this run (issue #140): which environment variable carries the number, which
-// `gh` subcommand reads the subject's title and labels — and so which object carries the
-// `agent:in-progress` mutex — and what the worktree checks out. A pure derivation from the
-// verb, read here rather than restated as branches; both attendable verbs are issue-numbered
-// today, so this run reads an issue.
+// The shape of this run (issue #140): which environment variables carry the number and the
+// title, which `gh` subcommand reads the subject's title and labels — and so which object
+// carries the `agent:in-progress` mutex — and what the worktree checks out. A pure
+// derivation from the verb, read here rather than restated as per-verb branches: every
+// difference between an attended issue run and an attended pull-request run follows from it.
 const shape = attendedRunShape(verb);
 
-// How this run finalizes (issue #57). Only `implement` finalizes to GitHub, so the
-// flag is read for it alone; `explore`'s read-only comment always posts. `auto`
-// (the default) is full parity with the unattended path; `never` stops with the
-// commits on the agent branch; `ask` finalizes only on confirmation.
+// How this run finalizes (issue #57). Only `implement` reads the flag — a PR verb's
+// finalize is full parity for now (issue #141: withholding it is a later slice), and
+// `explore`'s read-only comment always posts. `auto` (the default) is full parity with
+// the unattended path; `never` stops with the commits on the agent branch; `ask`
+// finalizes only on confirmation.
 let finalizeMode: FinalizeMode = "auto";
 if (verb === "implement") {
   try {
@@ -98,6 +103,12 @@ if (verb === "implement") {
     process.exit(2);
   }
 }
+
+// Which runs account for finalize in the end-of-run summary: `implement`, whose mode the
+// developer chose, and every PR verb, whose finalize lands on the pull request the
+// developer is watching. `explore` alone omits the line — its comment always posts, so
+// there is nothing to report (issue #141).
+const reportsFinalize = verb === "implement" || shape.subject === "pull-request";
 
 // Run a command, streaming its output to the terminal. Returns the raw spawn
 // result so the caller can read both the exit status and the terminating signal
@@ -116,6 +127,18 @@ function capture(file: string, args: readonly string[]): string {
   return child.stdout.trim();
 }
 
+// The root of the checkout the developer launched from — what a PR run's tracker hooks
+// use as their tooling directory (issue #141). The toplevel rather than the raw cwd, so a
+// command run from a subdirectory still resolves the repo's `.sandcastle/` overrides and
+// its config file; the cwd is the honest fallback when git cannot answer.
+function invokingCheckout(): string {
+  try {
+    return capture("git", ["rev-parse", "--show-toplevel"]) || process.cwd();
+  } catch {
+    return process.cwd();
+  }
+}
+
 const config = resolveConfig();
 // The repository default branch, as the reusable workflow's DEFAULT_BRANCH input carries
 // it — a bare NAME. It fills the lowest-precedence slot of every base resolution
@@ -125,7 +148,9 @@ const config = resolveConfig();
 // nothing anywhere names a base: refuse now, by name, rather than letting `create-branch`
 // cut from `origin/` and die inside git without mentioning the cause.
 const defaultBranch = resolveDefaultBranch();
-if (!config.baseBranch && !defaultBranch) {
+// Only a run that BUILDS on the base needs one. A PR run checks out the pull request's own
+// head, so a checkout with no resolvable default branch is no obstacle to it (issue #141).
+if (shape.checkout === "base" && !config.baseBranch && !defaultBranch) {
   console.error(
     "attended: cannot tell which branch to build on — this checkout's `origin/HEAD` is unset or " +
       "dangling (a remote added by hand, or a default branch renamed since the clone) and `gh repo " +
@@ -148,19 +173,38 @@ const lock = lockPath(root, `${verb}-${issue}`);
 // Fetch the subject's title (the run's prompt needs it) and labels (the in-progress
 // mutex check) up front, in one call, using the developer's own authenticated `gh`
 // (no token is read from or written to disk here). Which subject — the issue or the pull
-// request — is the run shape's call, not this shell's.
-const issueInfo = JSON.parse(
-  capture("gh", [shape.ghSubcommand, "view", issue, "--json", "title,labels"]),
-) as { title: string; labels: Array<{ name: string }> };
-const issueTitle = issueInfo.title;
-const issueLabels = issueInfo.labels.map((l) => l.name);
+// request — is the run shape's call, not this shell's. `isCrossRepository` is a pull
+// request's field alone, so it is asked for only when the subject IS one; `gh issue view`
+// fails on a field it does not know rather than ignoring it.
+const subjectFields =
+  shape.subject === "pull-request" ? "title,labels,isCrossRepository" : "title,labels";
+const subjectInfo = JSON.parse(
+  capture("gh", [shape.ghSubcommand, "view", issue, "--json", subjectFields]),
+) as { title: string; labels: Array<{ name: string }>; isCrossRepository?: boolean };
+const subjectTitle = subjectInfo.title;
+const subjectLabels = subjectInfo.labels.map((l) => l.name);
 
-// Mutex 1 — `agent:in-progress` between entry points. If the issue already carries
-// it, the unattended workflow (or another attended run past its status step) is
-// mid-run; refuse rather than trample it. `--force` overrules this. The reason
-// prints to the terminal and nothing is posted to the tracker — a refusal on an
-// issue the developer is watching is noise.
-if (issueLabels.includes(IN_PROGRESS_LABEL) && !force) {
+// A cross-repository (fork) pull request is refused HERE — before the lock, the worktree,
+// and the bootstrap — with the reason named (issue #141). Its head lives on another
+// repository, so checking it out means a second remote, and finalizing against it means
+// push rights an attended run must not assume silently. Every pull request the fleet
+// itself opens is same-repo. Refusing late would leave a half-built tree and an
+// unexplained git error in place of this sentence.
+if (subjectInfo.isCrossRepository) {
+  console.error(
+    `attended: PR #${issue} comes from a fork (its head is on another repository), which an ` +
+      `attended run does not support — it would need a second remote to check the head out and ` +
+      `push rights on that fork to finalize. Nothing was created.`,
+  );
+  process.exit(1);
+}
+
+// Mutex 1 — `agent:in-progress` between entry points. If the run's subject (the issue,
+// or the pull request for a PR verb) already carries it, the unattended workflow (or
+// another attended run past its status step) is mid-run; refuse rather than trample it.
+// `--force` overrules this. The reason prints to the terminal and nothing is posted to
+// the tracker — a refusal on something the developer is watching is noise.
+if (subjectLabels.includes(IN_PROGRESS_LABEL) && !force) {
   console.error(
     `attended: #${issue} already carries \`${IN_PROGRESS_LABEL}\` — another run is in progress. ` +
       `Re-run with --force to start anyway.`,
@@ -168,11 +212,14 @@ if (issueLabels.includes(IN_PROGRESS_LABEL) && !force) {
   process.exit(1);
 }
 
-// The two scratch files the explore sequence's hooks exchange (fetch-spec writes
-// the spec, the run writes the comment finalize posts) — the local stand-in for the
-// paths the reusable workflow resolved under $RUNNER_TEMP.
+// The scratch files this run's hooks exchange — the local stand-in for the paths the
+// reusable workflow resolved under $RUNNER_TEMP, keyed to this process so two runs never
+// collide. An issue verb's hooks exchange the spec (fetch-spec writes it) and the comment
+// finalize posts; `review-pr`'s exchange the review payload the run writes and finalize
+// posts through the reviews API (issue #141).
 const specFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-spec.md`);
 const commentFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-comment.md`);
+const reviewFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-review.json`);
 // Where the first slice mirrors the branch/base it resolved, so an attended `ask`
 // finalize can thread them into its confirmed tail-only slice (issue #57).
 const stateFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-state`);
@@ -208,11 +255,33 @@ if (acquired.clearedStale) {
 
 // Create the worktree under the configured root — never the developer's checkout.
 // A pre-existing tree (a retried command after a retained failure) is reused as-is.
+// What it checks out is the run shape's call: an issue verb builds on the base, while a
+// PR verb reads (and, for a later verb, edits) the code actually under review, so its
+// tree is detached at the pull request's head. The head is fetched by its pull ref first
+// — an attended run is launched from a checkout that has never seen it (issue #141).
 if (existsSync(tree)) {
   console.log(`attended: reusing existing worktree at ${tree}`);
 } else {
-  console.log(`attended: creating worktree at ${tree} (detached at ${base})`);
-  const added = run("git", ["worktree", "add", "--detach", tree, base]);
+  let committish = base;
+  let described = base;
+  if (shape.checkout === "pr-head") {
+    console.log(`attended: fetching the head of PR #${issue}`);
+    const fetched = run("git", ["fetch", "--no-tags", "origin", `pull/${issue}/head`]);
+    if (fetched.status !== 0) {
+      console.error(
+        `attended: could not fetch the head of PR #${issue} (git exited ${fetched.status}).`,
+      );
+      releaseLock(lock);
+      process.exit(1);
+    }
+    // FETCH_HEAD rather than the head SHA `gh` reported: it is exactly what the fetch just
+    // brought in, so a head force-pushed between the two calls cannot leave the worktree
+    // pointing at a commit this checkout does not have.
+    committish = "FETCH_HEAD";
+    described = `the head of PR #${issue}`;
+  }
+  console.log(`attended: creating worktree at ${tree} (detached at ${described})`);
+  const added = run("git", ["worktree", "add", "--detach", tree, committish]);
   if (added.status !== 0) {
     console.error(`attended: could not create the worktree (git exited ${added.status}).`);
     releaseLock(lock);
@@ -258,7 +327,7 @@ function finish(outcome: LocalOutcome, finalized: boolean, code: number): never 
       outcome,
       retained,
       tree,
-      finalize: verb === "implement" ? finalizeMode : undefined,
+      finalize: reportsFinalize ? finalizeMode : undefined,
       finalized,
     }),
   );
@@ -327,11 +396,25 @@ if (config.bootstrap) {
 // exactly as it does for a headless run.
 const runEnv: Record<string, string> = {
   [shape.numberEnv]: issue,
-  ISSUE_TITLE: issueTitle,
-  SPEC_FILE: specFile,
-  COMMENT_FILE: commentFile,
+  [shape.titleEnv]: subjectTitle,
   ANNOUNCE_REFUSALS: "false",
 };
+if (shape.subject === "issue") {
+  runEnv.SPEC_FILE = specFile;
+  runEnv.COMMENT_FILE = commentFile;
+} else {
+  // The tooling directory a PR verb's tracker hooks (guards, status, finalize) run in —
+  // the slot the reusable workflow fills with a detached default-branch worktree, because
+  // a pull request's branch may predate the tooling. An attended run deliberately does the
+  // opposite (issue #141) and points it at the checkout the developer launched from: the
+  // tooling in front of them, so changing a PR verb's logic and running it needs no push
+  // in between. The worktree stays the cwd of the agent run, which reads the code under
+  // review.
+  runEnv.TOOLING_DIR = invokingCheckout();
+}
+// `review-pr`'s run writes the reviews-API payload here and its finalize posts it; in CI
+// the workflow resolves the same file under $RUNNER_TEMP (issue #141).
+if (verb === "review-pr") runEnv.REVIEW_FILE = reviewFile;
 // The hooks require GH_REPO; in CI the workflow supplies `github.repository`, and an
 // attended run has no workflow — so it is derived from the checkout's own origin
 // remote. Without it the FIRST hook refuses with a missing-variable message, which
@@ -352,7 +435,21 @@ if (verb === "implement" && finalizeMode !== "auto") runEnv.FINALIZE_MODE = fina
 // worktree policy already handles, was unreachable. The `ask` path reads the
 // branch/base from the same file (issue #57).
 runEnv.SEQUENCE_STATE_FILE = stateFile;
-const child = spawnSync("yarn", [`sandcastle:${verb}-sequence`], {
+// How the sequence is launched — the one place the two run shapes reach the sequencer
+// differently. An issue run hands it to the worktree's own `sandcastle:<verb>-sequence`
+// script, whose tooling is the base branch's and so is the tooling the run builds on. A PR
+// run instead launches THIS checkout's dispatcher against the worktree — the local answer
+// to CI's `"$AGENT_WORKFLOWS_BIN" <verb>` from the tooling worktree: same split (tooling
+// from one checkout, code under review as the cwd), but the tooling is the developer's own
+// (issue #141), so a PR verb's logic can be changed and run without a push in between.
+const launch =
+  shape.subject === "pull-request"
+    ? {
+        file: process.execPath,
+        args: [fileURLToPath(new URL("../../bin/agent-workflows.mjs", import.meta.url)), verb],
+      }
+    : { file: "yarn", args: [`sandcastle:${verb}-sequence`] };
+const child = spawnSync(launch.file, launch.args, {
   stdio: "inherit",
   cwd: tree,
   env: { ...process.env, ...runEnv },
@@ -378,9 +475,12 @@ const outcome: LocalOutcome =
 let finalized = false;
 let code = outcome === "aborted" ? 130 : outcome === "failed" ? child.status || 1 : 0;
 
-if (verb === "implement" && outcome === "succeeded") {
+if (outcome === "succeeded") {
   if (finalizeMode === "auto") {
-    finalized = true;
+    // Full parity: the single sequence already did the whole tail — `implement` pushed and
+    // opened the PR, `review-pr` posted the review. Only the runs that REPORT a finalize
+    // record it; `explore`'s read-only comment always posts and needs no accounting.
+    finalized = reportsFinalize;
   } else if (finalizeMode === "ask") {
     if (!reported.branch) {
       console.error("attended: could not read the agent branch — skipping finalize.");
@@ -398,7 +498,7 @@ if (verb === "implement" && outcome === "succeeded") {
           env: {
             ...process.env,
             [shape.numberEnv]: issue,
-            ISSUE_TITLE: issueTitle,
+            [shape.titleEnv]: subjectTitle,
             SPEC_FILE: specFile,
             COMMENT_FILE: commentFile,
             FINALIZE_TAIL_ONLY: "true",

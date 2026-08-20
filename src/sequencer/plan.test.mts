@@ -313,6 +313,16 @@ test("retainWorktree keeps a successful implement tree but not a successful expl
   assert.equal(retainWorktree("aborted", "implement"), true);
 });
 
+// An attended `review-pr` run is read-only (issue #141), so a clean success leaves
+// nothing to open and its tree is REMOVED, exactly as `explore`'s is. A failure or a
+// Ctrl-C abort still retains the tree the developer reproduces the run in.
+test("retainWorktree removes a successful review-pr tree but keeps a failed one", () => {
+  assert.equal(retainWorktree("succeeded", "review-pr"), false);
+  assert.equal(retainWorktree("refused", "review-pr"), false);
+  assert.equal(retainWorktree("failed", "review-pr"), true);
+  assert.equal(retainWorktree("aborted", "review-pr"), true);
+});
+
 // The `--finalize=<mode>` flag (issue #57) parses to a mode, defaults to `auto`
 // when absent, and throws on a typo rather than silently defaulting to the pushing
 // path — the surprise the flag exists to prevent.
@@ -339,51 +349,59 @@ test("interactiveEligible admits implement and implement-pr, refuses the rest", 
   assert.equal(interactiveEligible("implement-spec"), false);
 });
 
-// Attendability (issue #140): which verbs may be run as an attended run is a decision
-// of the plan module, not a constant inside the attended entry point — so extending it
-// to the PR verbs is a one-line change with a test. Today it admits exactly the two
-// issue-numbered verbs the local sequencer delivers.
-test("attendable admits explore and implement, refuses the rest", () => {
+// Attendability (issues #140, #141): which verbs may be run as an attended run is a
+// decision of the plan module, not a constant inside the attended entry point — so
+// extending it to a PR verb is a one-line change with a test. It admits the two
+// issue-numbered verbs and, since #141, the first PR-numbered one.
+test("attendable admits explore, implement and review-pr, refuses the rest", () => {
   assert.equal(attendable("explore"), true);
   assert.equal(attendable("implement"), true);
-  assert.equal(attendable("review-pr"), false);
+  assert.equal(attendable("review-pr"), true);
   assert.equal(attendable("implement-pr"), false);
   assert.equal(attendable("update-branch"), false);
   assert.equal(attendable("implement-spec"), false);
 });
 
 test("attendedVerbs names exactly the verbs the predicate admits", () => {
-  assert.deepEqual([...attendedVerbs], ["explore", "implement"]);
+  assert.deepEqual([...attendedVerbs], ["explore", "implement", "review-pr"]);
   for (const verb of attendedVerbs) assert.equal(attendable(verb), true);
 });
 
 // The attended run shape (issue #140): the difference between an issue-numbered verb and
 // a PR-numbered one, derived from the verb alone and returned as DATA the entry point
-// applies — which environment variable carries the number, which `gh` subcommand reads
-// the subject's title and labels (and so which object carries the `agent:in-progress`
-// mutex), and what the worktree checks out. Total over the attendable verbs.
-test("attendedRunShape derives the issue-numbered shape for every attendable verb", () => {
-  for (const verb of attendedVerbs) {
+// applies — which environment variables carry the number and the title, which `gh`
+// subcommand reads the subject's title and labels (and so which object carries the
+// `agent:in-progress` mutex), and what the worktree checks out.
+test("attendedRunShape derives the issue-numbered shape for the issue verbs", () => {
+  for (const verb of ["explore", "implement"]) {
     assert.deepEqual(attendedRunShape(verb), {
       subject: "issue",
       numberEnv: "ISSUE_NUMBER",
+      titleEnv: "ISSUE_TITLE",
       ghSubcommand: "issue",
       checkout: "base",
     });
   }
 });
 
-// The PR verbs are not attendable yet, but the shape they WOULD run under is the fact
-// every later slice branches on, so it is pinned here now.
+// The shape every PR-numbered verb runs under — the one `review-pr` is attended through
+// (issue #141), and the fact the remaining two branch on when they follow.
 test("attendedRunShape derives the pull-request-numbered shape for the PR verbs", () => {
   for (const verb of ["review-pr", "implement-pr", "update-branch"]) {
     assert.deepEqual(attendedRunShape(verb), {
       subject: "pull-request",
       numberEnv: "PR_NUMBER",
+      titleEnv: "PR_TITLE",
       ghSubcommand: "pr",
       checkout: "pr-head",
     });
   }
+});
+
+// Total over the attendable verbs: the entry point reads a shape for every verb the
+// predicate admits, so an addition to one list without the other cannot ship.
+test("attendedRunShape is total over the attendable verbs", () => {
+  for (const verb of attendedVerbs) assert.doesNotThrow(() => attendedRunShape(verb));
 });
 
 // `implement-spec` is an orchestrator, not a verb an attended run numbers a subject for
@@ -442,4 +460,33 @@ test("formatRunSummary renders outcome, worktree fate, and finalize disposition"
   });
   assert.match(explore, /worktree: removed at/);
   assert.doesNotMatch(explore, /finalize:/);
+});
+
+// An attended `review-pr` run finalizes with full parity (issue #141), so its summary
+// reports what finalize DID — posted the review — rather than the push and pull request
+// an `implement` run reports.
+test("formatRunSummary reports a review-pr run's posted review", () => {
+  const posted = formatRunSummary({
+    verb: "review-pr",
+    issue: "138",
+    outcome: "succeeded",
+    retained: false,
+    tree: "/tmp/wt/review-pr-138",
+    finalize: "auto",
+    finalized: true,
+  });
+  assert.match(posted, /review-pr #138: succeeded/);
+  assert.match(posted, /worktree: removed at \/tmp\/wt\/review-pr-138/);
+  assert.match(posted, /finalize: auto — posted the review to the pull request/);
+
+  const failed = formatRunSummary({
+    verb: "review-pr",
+    issue: "138",
+    outcome: "failed",
+    retained: true,
+    tree: "/tmp/wt/review-pr-138",
+    finalize: "auto",
+    finalized: false,
+  });
+  assert.match(failed, /finalize: auto — not finalized \(the run did not succeed\)/);
 });
