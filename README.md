@@ -194,11 +194,13 @@ trigger label and comments why, and never sets `agent:blocked`.
 
 | Label | Applied to | Meaning |
 |---|---|---|
-| `agent:local` | spec issue | an attended local run owns this spec's sequencing; CI **advance** stands down while it is present |
+| `agent:local` | spec issue | an attended local run owns this spec's sequencing; CI **advance** stands down while it is present — including after the run **halts**, until you remove the label |
 
 Nothing triggers on `agent:local` — it is read, never reacted to. The loop creates
 it on first use, claims it before its first merge, and releases it when the run
-ends (see the attended spec loop below).
+**completes**. A run that **halts** keeps it, because the spec is still yours to
+resume; removing the label lifts the stand-down, and restarting CI on that spec takes
+one more step (see the attended spec loop below).
 
 ## Installation
 
@@ -394,12 +396,21 @@ advance responds by labelling the next tracer-bullet `agent:implement`, which wo
 start CI building the very slice the loop is about to build itself. So an `--execute`
 run claims `agent:local` on the spec issue before its first merge, and the advance
 guard **refuses** (stands down; not a failure, nothing is dispatched) while that
-marker is present. The marker is released when the run ends — on completion, on any
-halt, on a graceful stop, and on Ctrl-C. If a run dies hard and leaves the marker
-behind, the next local run **reclaims** it rather than refusing to start (holding the
-local lock proves no live local run owns it); to hand the spec straight back to CI
-instead, remove the label by hand. A **dry run** never merges, so it never fires
-advance and never takes the marker.
+marker is present. The marker is released when the run **completes** — after the final
+PR is open. Every **halt** keeps it: a failed slice, a slice refusal, an unconfirmed
+merge, a declined checkpoint, a graceful stop, a reached ceiling, a Ctrl-C. That is
+deliberate — a halt means the run is waiting for you, and the merge that would make CI
+build the slice you just stopped may still be in flight (ADR-0009). The loop says so on
+its way out, and names what it takes to hand the spec back to CI: **remove
+`agent:local` from the spec issue**, and then **re-run the advance workflow run that
+stood down** (or label the next tracer-bullet `agent:implement` by hand). Both steps
+are needed — advance is fired by a *merge*, and the run that the last merge fired has
+already read the marker, stood down and exited, so taking the label off lifts the
+stand-down for the next merge but dispatches nothing by itself. Resuming locally needs
+neither step — just re-run the loop; it **reclaims** the marker, exactly as it does
+when a run dies hard and leaves one behind (holding the local lock proves no live local
+run owns it). A **dry run** never merges, so it never fires advance and never takes the
+marker.
 
 **Checkpoints, stopping, and resume (a long run made controllable).** The loop
 **pauses at a checkpoint between slices by default** — the moment to inspect the
@@ -792,7 +803,8 @@ Pass with `secrets: inherit`.
   **`docs/adr/`** — architecture decisions (0001 thin reusable workflows; 0002
   toolchain generalization + feedback-loop boundary; 0003 spec strictly
   sequential; 0004 no per-slice review; 0005 one sequencer, two entry points;
-  0006 attended spec runs; 0007 the status view; 0008 `init` and `sync`).
+  0006 attended spec runs; 0007 the status view; 0008 `init` and `sync`; 0009 the
+  local-run marker outlives a halt).
 
 ## Local checks
 
