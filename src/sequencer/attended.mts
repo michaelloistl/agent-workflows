@@ -30,6 +30,9 @@ import {
   parseFinalizeMode,
   interactiveEligible,
   interactiveVerbs,
+  attendable,
+  attendedVerbs,
+  attendedRunShape,
   formatRunSummary,
   type FinalizeMode,
   type LocalOutcome,
@@ -38,12 +41,6 @@ import { acquireLock, lockPath, releaseLock } from "./lock.mts";
 import { resolveConfig } from "../shared/config.mts";
 import { IN_PROGRESS_LABEL, resolveDefaultBranch, resolveRepoSlug } from "../shared/github.mts";
 import { parseSequenceState, type SequenceState } from "./sequence-state.mts";
-
-// The verbs delivered for attended runs. `explore` (read-only) came first; issue
-// #57 adds `implement`, which builds an issue end to end on the developer's machine
-// — commits on an agent branch, then a finalize that (by default) pushes, opens the
-// draft PR, and updates the tracker exactly as the unattended path does.
-const ATTENDED_VERBS = new Set(["explore", "implement"]);
 
 const verb = process.argv[2];
 const issue = process.argv[3];
@@ -74,12 +71,19 @@ if (interactive && !interactiveEligible(verb)) {
   );
   process.exit(2);
 }
-if (!ATTENDED_VERBS.has(verb)) {
+if (!attendable(verb)) {
   console.error(
-    `attended: "${verb}" is not available for local runs yet — only ${[...ATTENDED_VERBS].join(", ")}.`,
+    `attended: "${verb}" is not available for local runs yet — only ${attendedVerbs.join(", ")}.`,
   );
   process.exit(2);
 }
+
+// The shape of this run (issue #140): which environment variable carries the number, which
+// `gh` subcommand reads the subject's title and labels — and so which object carries the
+// `agent:in-progress` mutex — and what the worktree checks out. A pure derivation from the
+// verb, read here rather than restated as branches; both attendable verbs are issue-numbered
+// today, so this run reads an issue.
+const shape = attendedRunShape(verb);
 
 // How this run finalizes (issue #57). Only `implement` finalizes to GitHub, so the
 // flag is read for it alone; `explore`'s read-only comment always posts. `auto`
@@ -141,11 +145,12 @@ const tree = worktreePath(root, verb, issue);
 // same root, keyed by the run identity so two different issues/specs never collide.
 const lock = lockPath(root, `${verb}-${issue}`);
 
-// Fetch the issue title (the run's prompt needs it) and labels (the in-progress
+// Fetch the subject's title (the run's prompt needs it) and labels (the in-progress
 // mutex check) up front, in one call, using the developer's own authenticated `gh`
-// (no token is read from or written to disk here).
+// (no token is read from or written to disk here). Which subject — the issue or the pull
+// request — is the run shape's call, not this shell's.
 const issueInfo = JSON.parse(
-  capture("gh", ["issue", "view", issue, "--json", "title,labels"]),
+  capture("gh", [shape.ghSubcommand, "view", issue, "--json", "title,labels"]),
 ) as { title: string; labels: Array<{ name: string }> };
 const issueTitle = issueInfo.title;
 const issueLabels = issueInfo.labels.map((l) => l.name);
@@ -321,7 +326,7 @@ if (config.bootstrap) {
 // the run step reads it — every later step (the boot check, push, and finalize) behaves
 // exactly as it does for a headless run.
 const runEnv: Record<string, string> = {
-  ISSUE_NUMBER: issue,
+  [shape.numberEnv]: issue,
   ISSUE_TITLE: issueTitle,
   SPEC_FILE: specFile,
   COMMENT_FILE: commentFile,
@@ -392,7 +397,7 @@ if (verb === "implement" && outcome === "succeeded") {
           cwd: tree,
           env: {
             ...process.env,
-            ISSUE_NUMBER: issue,
+            [shape.numberEnv]: issue,
             ISSUE_TITLE: issueTitle,
             SPEC_FILE: specFile,
             COMMENT_FILE: commentFile,

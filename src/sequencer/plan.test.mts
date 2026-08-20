@@ -7,6 +7,9 @@ import {
   retainWorktree,
   parseFinalizeMode,
   interactiveEligible,
+  attendable,
+  attendedVerbs,
+  attendedRunShape,
   formatRunSummary,
   type Step,
 } from "./plan.mts";
@@ -334,6 +337,60 @@ test("interactiveEligible admits implement and implement-pr, refuses the rest", 
   assert.equal(interactiveEligible("review-pr"), false);
   assert.equal(interactiveEligible("update-branch"), false);
   assert.equal(interactiveEligible("implement-spec"), false);
+});
+
+// Attendability (issue #140): which verbs may be run as an attended run is a decision
+// of the plan module, not a constant inside the attended entry point — so extending it
+// to the PR verbs is a one-line change with a test. Today it admits exactly the two
+// issue-numbered verbs the local sequencer delivers.
+test("attendable admits explore and implement, refuses the rest", () => {
+  assert.equal(attendable("explore"), true);
+  assert.equal(attendable("implement"), true);
+  assert.equal(attendable("review-pr"), false);
+  assert.equal(attendable("implement-pr"), false);
+  assert.equal(attendable("update-branch"), false);
+  assert.equal(attendable("implement-spec"), false);
+});
+
+test("attendedVerbs names exactly the verbs the predicate admits", () => {
+  assert.deepEqual([...attendedVerbs], ["explore", "implement"]);
+  for (const verb of attendedVerbs) assert.equal(attendable(verb), true);
+});
+
+// The attended run shape (issue #140): the difference between an issue-numbered verb and
+// a PR-numbered one, derived from the verb alone and returned as DATA the entry point
+// applies — which environment variable carries the number, which `gh` subcommand reads
+// the subject's title and labels (and so which object carries the `agent:in-progress`
+// mutex), and what the worktree checks out. Total over the attendable verbs.
+test("attendedRunShape derives the issue-numbered shape for every attendable verb", () => {
+  for (const verb of attendedVerbs) {
+    assert.deepEqual(attendedRunShape(verb), {
+      subject: "issue",
+      numberEnv: "ISSUE_NUMBER",
+      ghSubcommand: "issue",
+      checkout: "base",
+    });
+  }
+});
+
+// The PR verbs are not attendable yet, but the shape they WOULD run under is the fact
+// every later slice branches on, so it is pinned here now.
+test("attendedRunShape derives the pull-request-numbered shape for the PR verbs", () => {
+  for (const verb of ["review-pr", "implement-pr", "update-branch"]) {
+    assert.deepEqual(attendedRunShape(verb), {
+      subject: "pull-request",
+      numberEnv: "PR_NUMBER",
+      ghSubcommand: "pr",
+      checkout: "pr-head",
+    });
+  }
+});
+
+// `implement-spec` is an orchestrator, not a verb an attended run numbers a subject for
+// — it has no shape, and an unknown verb has none either.
+test("attendedRunShape throws for a verb with no attended shape", () => {
+  assert.throws(() => attendedRunShape("implement-spec"), /no attended run shape for verb "implement-spec"/);
+  assert.throws(() => attendedRunShape("nope"), /no attended run shape for verb "nope"/);
 });
 
 // The end-of-run summary (issue #57) states the outcome, the worktree's fate, and —

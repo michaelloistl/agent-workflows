@@ -369,6 +369,73 @@ export function interactiveEligible(verb: string): boolean {
 // so the two never drift (issue #58).
 export const interactiveVerbs: readonly string[] = INTERACTIVE_VERBS;
 
+// The verbs an attended run may drive (issue #140). An attended run happens on the
+// developer's own machine, in a worktree under the configured root, streamed to the
+// terminal — so far the two issue-numbered verbs the local sequencer delivers. Extending
+// it to the PR verbs is this list plus its test, not a change to the entry point.
+const ATTENDED_VERBS = ["explore", "implement"] as const;
+
+// Whether `verb` may be run as an attended run (issue #140). Pure — the single source of
+// truth the attended entry point consults, so the set of attendable verbs is a tested
+// decision here rather than a constant inside the shell. Mirrors `interactiveEligible`.
+export function attendable(verb: string): boolean {
+  return (ATTENDED_VERBS as readonly string[]).includes(verb);
+}
+
+// The attendable verbs, for a refusal message that lists them. Kept beside the predicate
+// so the two never drift (issue #140).
+export const attendedVerbs: readonly string[] = ATTENDED_VERBS;
+
+// Which kind of thing an attended run's number names (issue #140) — the ONE fact every
+// difference between an attended issue run and an attended pull-request run follows from.
+export type AttendedSubject = "issue" | "pull-request";
+
+// The shape of an attended run, derived from its verb (issue #140). Returned as DATA the
+// entry point applies rather than as the per-verb branches it would otherwise accumulate
+// once a PR-numbered verb becomes attendable. Both attendable verbs are issue-numbered
+// today, so nothing branches on it yet; it is the fact every later slice branches on.
+export interface AttendedRunShape {
+  // What the run's number names — and so which object carries the `agent:in-progress`
+  // mutex the entry point checks before it starts: the issue for an issue-numbered verb,
+  // the pull request for a PR-numbered one.
+  readonly subject: AttendedSubject;
+  // The environment variable that carries the number to the verb's hooks.
+  readonly numberEnv: string;
+  // The `gh` subcommand that reads the subject's title and labels (`gh <sub> view <n>`).
+  readonly ghSubcommand: string;
+  // What the run's worktree checks out: the base branch (an issue-numbered verb builds on
+  // it) or the pull request's own head (a PR-numbered verb reads and edits the code under
+  // review).
+  readonly checkout: "base" | "pr-head";
+}
+
+const ISSUE_RUN_SHAPE: AttendedRunShape = {
+  subject: "issue",
+  numberEnv: "ISSUE_NUMBER",
+  ghSubcommand: "issue",
+  checkout: "base",
+};
+
+const PR_RUN_SHAPE: AttendedRunShape = {
+  subject: "pull-request",
+  numberEnv: "PR_NUMBER",
+  ghSubcommand: "pr",
+  checkout: "pr-head",
+};
+
+const ISSUE_NUMBERED_VERBS = ["explore", "implement"];
+const PR_NUMBERED_VERBS = ["review-pr", "implement-pr", "update-branch"];
+
+// The attended run shape for `verb` (issue #140). Pure — a derivation from the verb alone,
+// total over the attendable verbs. `implement-spec` is an orchestrator rather than a verb
+// numbered by a subject, so it has no shape; nor does an unknown verb, and both throw
+// rather than defaulting to the issue shape and reading the wrong object.
+export function attendedRunShape(verb: string): AttendedRunShape {
+  if (ISSUE_NUMBERED_VERBS.includes(verb)) return ISSUE_RUN_SHAPE;
+  if (PR_NUMBERED_VERBS.includes(verb)) return PR_RUN_SHAPE;
+  throw new Error(`sequencer: no attended run shape for verb "${verb}"`);
+}
+
 // The end-of-run summary an attended run prints on exit (issue #57), so the
 // developer sees what happened without scrolling back through streamed output.
 export interface RunSummary {
