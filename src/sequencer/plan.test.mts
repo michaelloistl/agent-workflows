@@ -323,6 +323,16 @@ test("retainWorktree removes a successful review-pr tree but keeps a failed one"
   assert.equal(retainWorktree("aborted", "review-pr"), true);
 });
 
+// An attended `implement-pr` run produces COMMITS, so a clean success retains its tree
+// (issue #142) for the same reason `implement`'s does: what provides inspection is the
+// surviving tree the developer can open and diff, not a withheld push.
+test("retainWorktree keeps a successful implement-pr tree", () => {
+  assert.equal(retainWorktree("succeeded", "implement-pr"), true);
+  assert.equal(retainWorktree("refused", "implement-pr"), false);
+  assert.equal(retainWorktree("failed", "implement-pr"), true);
+  assert.equal(retainWorktree("aborted", "implement-pr"), true);
+});
+
 // The `--finalize=<mode>` flag (issue #57) parses to a mode, defaults to `auto`
 // when absent, and throws on a typo rather than silently defaulting to the pushing
 // path — the surprise the flag exists to prevent.
@@ -349,22 +359,32 @@ test("interactiveEligible admits implement and implement-pr, refuses the rest", 
   assert.equal(interactiveEligible("implement-spec"), false);
 });
 
-// Attendability (issues #140, #141): which verbs may be run as an attended run is a
+// Attendability (issues #140, #141, #142): which verbs may be run as an attended run is a
 // decision of the plan module, not a constant inside the attended entry point — so
 // extending it to a PR verb is a one-line change with a test. It admits the two
-// issue-numbered verbs and, since #141, the first PR-numbered one.
-test("attendable admits explore, implement and review-pr, refuses the rest", () => {
+// issue-numbered verbs and both commit-producing/read-only PR verbs; `update-branch`, the
+// third PR verb, is deliberately still out.
+test("attendable admits explore, implement, review-pr and implement-pr, refuses the rest", () => {
   assert.equal(attendable("explore"), true);
   assert.equal(attendable("implement"), true);
   assert.equal(attendable("review-pr"), true);
-  assert.equal(attendable("implement-pr"), false);
+  assert.equal(attendable("implement-pr"), true);
   assert.equal(attendable("update-branch"), false);
   assert.equal(attendable("implement-spec"), false);
 });
 
 test("attendedVerbs names exactly the verbs the predicate admits", () => {
-  assert.deepEqual([...attendedVerbs], ["explore", "implement", "review-pr"]);
+  assert.deepEqual([...attendedVerbs], ["explore", "implement", "review-pr", "implement-pr"]);
   for (const verb of attendedVerbs) assert.equal(attendable(verb), true);
+});
+
+// Every verb an interactive run may drive must be attendable, since `--interactive` is a
+// flag of the attended entry point alone (issue #142): the predicate admitting a verb the
+// attended path refuses would offer a mode no command can reach.
+test("every interactive-eligible verb is attendable", () => {
+  for (const verb of ["implement", "implement-pr"]) {
+    assert.equal(interactiveEligible(verb) && attendable(verb), true);
+  }
 });
 
 // The attended run shape (issue #140): the difference between an issue-numbered verb and
@@ -485,6 +505,37 @@ test("formatRunSummary reports a review-pr run's posted review", () => {
     outcome: "failed",
     retained: true,
     tree: "/tmp/wt/review-pr-138",
+    finalize: "auto",
+    finalized: false,
+  });
+  assert.match(failed, /finalize: auto — not finalized \(the run did not succeed\)/);
+});
+
+// An attended `implement-pr` run finalizes with full parity too (issue #142), but what
+// its finalize DID is neither the review one verb posts nor the pull request the other
+// opens: it pushed the agent's commits to the pull request's head ref and posted the
+// replies. Reporting an opened pull request for a verb that only ever pushes onto an
+// existing one would be the summary's chance to mislead.
+test("formatRunSummary reports an implement-pr run's push and replies", () => {
+  const pushed = formatRunSummary({
+    verb: "implement-pr",
+    issue: "138",
+    outcome: "succeeded",
+    retained: true,
+    tree: "/tmp/wt/implement-pr-138",
+    finalize: "auto",
+    finalized: true,
+  });
+  assert.match(pushed, /implement-pr #138: succeeded/);
+  assert.match(pushed, /worktree: retained at \/tmp\/wt\/implement-pr-138/);
+  assert.match(pushed, /finalize: auto — pushed the commits to the pull request's head, posted the replies/);
+
+  const failed = formatRunSummary({
+    verb: "implement-pr",
+    issue: "138",
+    outcome: "failed",
+    retained: true,
+    tree: "/tmp/wt/implement-pr-138",
     finalize: "auto",
     finalized: false,
   });

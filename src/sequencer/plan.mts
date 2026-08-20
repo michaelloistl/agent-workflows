@@ -319,16 +319,23 @@ export function worktreePath(root: string, verb: string, issue: string | number)
   return join(root, `${verb}-${issue}`);
 }
 
-// The worktree cleanup policy (issues #55, #57). A failure or a Ctrl-C abort always
+// The verbs whose clean success still leaves something to open: the two that produce
+// COMMITS (issues #57, #142). Everything else the run did reached the tracker, so the
+// tree holds nothing the pull request or the issue does not.
+const COMMIT_PRODUCING_VERBS = ["implement", "implement-pr"];
+
+// The worktree cleanup policy (issues #55, #57, #142). A failure or a Ctrl-C abort always
 // RETAINS the tree — that half-finished tree is exactly what the developer wants to
-// open. An attended `implement` run also retains on SUCCESS: what provides
-// inspection is the surviving worktree the developer can open, diff, and re-run
-// against — not a withheld push (issue #57). Every other verb (the read-only
-// `explore`) REMOVES a clean success, and a guard refusal (which produced no work
-// and posted its own explanation) removes for all verbs.
+// open. An attended `implement` or `implement-pr` run also retains on SUCCESS: what
+// provides inspection is the surviving worktree the developer can open, diff, and re-run
+// against — not a withheld push. The read-only verbs (`explore`, `review-pr`) REMOVE a
+// clean success, and a guard refusal (which produced no work and posted its own
+// explanation) removes for all verbs.
 export function retainWorktree(outcome: LocalOutcome, verb?: string): boolean {
   if (outcome === "failed" || outcome === "aborted") return true;
-  if (verb === "implement" && outcome === "succeeded") return true;
+  if (outcome === "succeeded" && verb !== undefined) {
+    return COMMIT_PRODUCING_VERBS.includes(verb);
+  }
   return false;
 }
 
@@ -369,12 +376,12 @@ export function interactiveEligible(verb: string): boolean {
 // so the two never drift (issue #58).
 export const interactiveVerbs: readonly string[] = INTERACTIVE_VERBS;
 
-// The verbs an attended run may drive (issues #140, #141). An attended run happens on the
-// developer's own machine, in a worktree under the configured root, streamed to the
-// terminal — the two issue-numbered verbs the local sequencer began with, plus the first
-// PR-numbered one. Extending it to the remaining PR verbs is this list plus its test, not
-// a change to the entry point.
-const ATTENDED_VERBS = ["explore", "implement", "review-pr"] as const;
+// The verbs an attended run may drive (issues #140, #141, #142). An attended run happens on
+// the developer's own machine, in a worktree under the configured root, streamed to the
+// terminal — the two issue-numbered verbs the local sequencer began with, plus the two
+// PR-numbered ones that read and address a pull request. Extending it to `update-branch`,
+// the remaining PR verb, is this list plus its test, not a change to the entry point.
+const ATTENDED_VERBS = ["explore", "implement", "review-pr", "implement-pr"] as const;
 
 // Whether `verb` may be run as an attended run (issue #140). Pure — the single source of
 // truth the attended entry point consults, so the set of attendable verbs is a tested
@@ -472,13 +479,20 @@ export function formatRunSummary(s: RunSummary): string {
 }
 
 // What a finalize that RAN did, in the verb's own terms: an issue verb's finalize pushes
-// the agent branch and opens the pull request, while the read-only `review-pr`'s posts
-// the review it composed. Reporting the push for a verb that never pushes would be the
-// summary's one chance to mislead (issue #141).
+// the agent branch and opens the pull request, the read-only `review-pr`'s posts the
+// review it composed, and `implement-pr`'s pushes onto a pull request that already exists
+// and replies to its comments. Reporting a push for a verb that never pushes — or an
+// opened pull request for one that only ever pushes onto an existing one — would be the
+// summary's one chance to mislead (issues #141, #142).
 function finalizedWork(verb: string): string {
-  return verb === "review-pr"
-    ? "posted the review to the pull request"
-    : "pushed the branch, opened the PR, updated the tracker";
+  switch (verb) {
+    case "review-pr":
+      return "posted the review to the pull request";
+    case "implement-pr":
+      return "pushed the commits to the pull request's head, posted the replies";
+    default:
+      return "pushed the branch, opened the PR, updated the tracker";
+  }
 }
 
 function finalizeSummaryLine(verb: string, mode: FinalizeMode, finalized: boolean): string {
