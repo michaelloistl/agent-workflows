@@ -305,6 +305,35 @@ test("classifyInvocation routes init and sync to the installer", () => {
   });
 });
 
+// `--version` is a top-level flag, not a verb: without this it fell through to the verb
+// path and spawned the sequencer for a verb named `--version` (issue #130). Recognised in
+// the FIRST argv position only — anywhere else it belongs to the verb it follows.
+test("classifyInvocation routes a leading --version to the version report", () => {
+  assert.deepEqual(classifyInvocation(["--version"]), { kind: "version" });
+  assert.deepEqual(classifyInvocation(["-v"]), { kind: "version" });
+});
+
+test("classifyInvocation leaves a post-verb --version to the verb", () => {
+  assert.deepEqual(classifyInvocation(["implement", "--version"]), {
+    kind: "hook",
+    verb: "implement",
+    hook: "--version",
+    rest: [],
+  });
+  assert.deepEqual(classifyInvocation(["status", "--version"]), {
+    kind: "status",
+    args: ["--version"],
+  });
+  assert.deepEqual(classifyInvocation(["implement", "42", "-v"]), {
+    kind: "attended",
+    verb: "implement",
+    issue: "42",
+    force: false,
+    finalize: undefined,
+    interactive: false,
+  });
+});
+
 test("classifyInvocation reports usage when no verb is given", () => {
   assert.deepEqual(classifyInvocation([]), { kind: "usage" });
 });

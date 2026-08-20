@@ -22,7 +22,7 @@
 // (it is the thing that bootstraps tsx), so it cannot itself be TypeScript.
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
@@ -74,10 +74,17 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
 //                                           repos' `sandcastle:<verb>-<hook>`
 //                                           scripts call).
 //
+// `--version` / `-v` is classified before any of them, but only in the FIRST argv
+// position (issue #130): a `--version` after a verb is that verb's own argument and
+// keeps flowing through untouched.
+//
 // Exported so the top-level dispatch is testable without spawning a child.
 export function classifyInvocation(args) {
   const [verb, second, ...rest] = args;
   if (!verb) return { kind: "usage" };
+  // Leading `--version` is not a verb: left to fall through, it spawned the sequencer for
+  // a verb by that name. Classified first so no later rule can claim it.
+  if (verb === "--version" || verb === "-v") return { kind: "version" };
   // `status` is not a verb (issue #95): it runs no agent and follows no hook contract,
   // so it never reaches the (verb, hook) table. Classified before everything else
   // because its own flags would otherwise be read as hook names.
@@ -238,6 +245,40 @@ function runStatusView(args) {
   child.on("exit", (code, signal) => process.exit(code ?? (signal ? 0 : 1)));
 }
 
+// The RUNNING PACKAGE VERSION: the version declared by the manifest of the exact package
+// copy executing this bin, resolved relative to THIS file — never the consuming repo's
+// manifest in the cwd, and never a git ref. The same notion `src/status/version.mts`
+// established for the status footer, read again here rather than imported because that
+// module is TypeScript and this file runs under bare `node`, before tsx is in play.
+//
+// Every failure is unknown rather than fatal — missing file, unreadable bytes, unparseable
+// JSON, no usable version in it — matching the footer's treatment of a damaged manifest as
+// a reporting failure. The caller decides what to do with the null.
+function runningVersion() {
+  try {
+    const path = fileURLToPath(new URL("../package.json", import.meta.url));
+    const { version } = JSON.parse(readFileSync(path, "utf8"));
+    if (typeof version !== "string") return null;
+    const trimmed = version.trim();
+    return trimmed === "" ? null : trimmed;
+  } catch {
+    return null;
+  }
+}
+
+// Print the bare version to stdout, so `$(agent-workflows --version)` is the number itself.
+// An unknown version goes to stderr with a non-zero exit instead: nothing is printed that a
+// caller could mistake for a version.
+function printVersion() {
+  const version = runningVersion();
+  if (version === null) {
+    console.error("agent-workflows: version unknown");
+    process.exit(1);
+  }
+  console.log(version);
+  process.exit(0);
+}
+
 // Set a repo up to run the fleet (`init`), or bring an installed one up to this
 // package's version (`sync`). Spawned under tsx like every other entry point.
 //
@@ -271,6 +312,10 @@ function main() {
         "       agent-workflows init|sync [--enable=…] [--ref=…] [--dry-run] [--yes] (--help for the rest)",
     );
     process.exit(2);
+  }
+  if (invocation.kind === "version") {
+    printVersion();
+    return;
   }
   if (invocation.kind === "status") {
     runStatusView(invocation.args);
