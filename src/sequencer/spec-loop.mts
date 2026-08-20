@@ -14,6 +14,7 @@
 // DRY-RUN reporting of every action a real run would take irreversibly.
 
 import { topologicalOrder, type TracerBullet } from "../shared/spec-graph.mts";
+import { LOCAL_RUN_LABEL } from "../shared/spec-marker.mts";
 import type { RunCeiling } from "../shared/config.mts";
 
 // The resolved, immutable shape of a spec run the loop is about to drive. Computed
@@ -435,6 +436,10 @@ export interface SpecRunSummary {
   readonly halted: { slice: number; reason: string } | null;
   // Whether the final spec→base PR was opened (only a completed real run does this).
   readonly finalPrOpened: boolean;
+  // Whether this run left the local-run marker on the spec issue (ADR-0009: a halt
+  // keeps it, a completion releases it). Absent/false → the summary says nothing
+  // about the marker, which is every exit that holds none.
+  readonly markerKept?: boolean;
   // What the run consumed against its ceiling (issue #61), or null/absent when no
   // ceiling was configured — then the summary omits the line, preserving today's
   // output exactly.
@@ -455,6 +460,14 @@ export function formatSpecSummary(s: SpecRunSummary): string {
     `slices ${s.dryRun ? "previewed" : "merged"} : ${slices}`,
   ];
   if (s.halted) lines.push(`halted at #${s.halted.slice}: ${s.halted.reason}`);
+  // A halted run keeps `agent:local`, so the block that says the run stopped also
+  // says the spec is still marked and what clears it — the developer reading the
+  // summary should not have to find the line the loop printed above it.
+  if (s.markerKept) {
+    lines.push(
+      `marker : \`${LOCAL_RUN_LABEL}\` kept on #${s.spec} — CI advance stands down until you remove it`,
+    );
+  }
   if (s.ceiling) lines.push(formatCeilingConsumption(s.ceiling));
   if (s.finalPrOpened) lines.push(`final PR : opened for ${s.specBranch}`);
   else if (!s.dryRun && !s.halted) lines.push("final PR : (none opened)");
