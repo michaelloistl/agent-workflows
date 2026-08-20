@@ -8,6 +8,34 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Thread the repository **default branch** into both attended entry points, in the same
+  `DEFAULT_BRANCH` slot the reusable workflow fills. Every verb's base resolves
+  `BASE_BRANCH` → the config file → the repository default, and CI is where those last
+  values came from — an attended run has no workflow, so on a repo with no
+  `.sandcastle/agent-workflows/config.json` the base resolved EMPTY and `create-branch`
+  ran `git fetch origin ""`, failing inside git without naming the cause. It reached
+  attended `implement` on any standalone issue and `implement-spec --dry-run` on the
+  first slice of a spec (a real run cuts and pushes the spec branch first, so each
+  slice's fetch-spec resolves that instead and the hole stayed hidden). It is injected
+  as `DEFAULT_BRANCH`, the LOWEST-precedence slot, so a `baseBranch` in the consuming
+  repo's config still wins and a tracer-bullet's live spec branch still overrides it.
+  Resolution is shared by both entry points (`resolveDefaultBranch`): git's `origin/HEAD`
+  first — instant and offline — then `gh repo view` for the checkout whose `origin/HEAD`
+  is unset or dangling (a remote added by hand rather than cloned, or a default branch
+  renamed since). When neither answers and nothing is configured, an attended run now
+  refuses up front and names `git remote set-head origin -a` and the config file, rather
+  than starting a worktree and dying in git several steps later.
+- Correct the documented sub-issue rule for tracer-bullets in `README.md`, `CONTEXT.md`
+  and the two code comments that restated it. The `implement` shape guard has never
+  refused a native GitHub sub-issue outright: it refuses an epic (an issue with
+  sub-issues of its own) and a sub-issue whose native parent DISAGREES with its
+  `## Parent`, while one that agrees is a tracer-bullet and is built — which is how a
+  tracker sync mirroring the parent/child edge looks. The docs said the fleet never
+  writes a sub-issue at all, which read as if a native parent were always an accident.
+  The textual `## Parent` is still required: the orchestrator resolves a spec's
+  membership through it alone, so a slice linked only by the hierarchy is invisible to a
+  spec run.
+
 ## v1.7.0 — 2026-08-15
 
 - Added `-h` and `--help` option reference to `agent-workflows status`

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { announceRefusals, repoFromRemoteUrl } from "./github.mts";
+import { announceRefusals, defaultBranchFromRef, repoFromRemoteUrl } from "./github.mts";
 
 // By default a guard refusal is announced on the tracker (retire the trigger
 // label + comment why) — the unattended workflow's behaviour, unchanged.
@@ -51,4 +51,42 @@ test("repoFromRemoteUrl trims surrounding whitespace from command output", () =>
 test("repoFromRemoteUrl returns null for a shape it does not understand", () => {
   assert.equal(repoFromRemoteUrl(""), null);
   assert.equal(repoFromRemoteUrl("/local/path/to/repo"), null);
+});
+
+// — defaultBranchFromRef —
+//
+// The normalising half of DEFAULT_BRANCH resolution for attended runs. In CI the
+// reusable workflow passes the repository default; locally it is read off git or
+// `gh`, which answer in the two shapes this collapses — a remote-tracking ref and a
+// bare name — and can also answer with a sentinel that names no branch at all.
+// Empty is the "nothing resolved" signal `resolveBaseBranch` already understands.
+
+test("defaultBranchFromRef strips the remote prefix a remote-tracking ref carries", () => {
+  assert.equal(defaultBranchFromRef("origin/main"), "main");
+  assert.equal(defaultBranchFromRef("origin/develop"), "develop");
+});
+
+test("defaultBranchFromRef passes a bare branch name through", () => {
+  assert.equal(defaultBranchFromRef("main"), "main");
+});
+
+test("defaultBranchFromRef keeps a slash inside the branch name itself", () => {
+  assert.equal(defaultBranchFromRef("origin/release/2026"), "release/2026");
+});
+
+test("defaultBranchFromRef trims surrounding whitespace from command output", () => {
+  assert.equal(defaultBranchFromRef("  origin/main\n"), "main");
+});
+
+// `HEAD` names no branch: it is what a detached or unset symref abbreviates to, and
+// passing it on as the base would make `create-branch` cut from `origin/HEAD`.
+test("defaultBranchFromRef refuses the HEAD sentinel in either shape", () => {
+  assert.equal(defaultBranchFromRef("HEAD"), "");
+  assert.equal(defaultBranchFromRef("origin/HEAD"), "");
+});
+
+test("defaultBranchFromRef returns empty for nothing at all", () => {
+  assert.equal(defaultBranchFromRef(""), "");
+  assert.equal(defaultBranchFromRef("   \n"), "");
+  assert.equal(defaultBranchFromRef("origin/"), "");
 });

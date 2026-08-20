@@ -132,8 +132,14 @@ Users need to export any report as CSV. Today there's no way to get the data out
   from either source, so a slice started by hand stops at the same point the
   orchestrator would have.
 - Headings at **`##`** level.
-- A plain issue — **not** a native GitHub sub-issue or epic (the `implement`
-  shape guard refuses those; the spec↔tracer-bullet link is textual).
+- **Not an epic**: an issue with sub-issues of its own is refused by the
+  `implement` shape guard, which builds standalone issues and tracer-bullets only.
+- A native GitHub **sub-issue of its spec** is allowed, but never *instead* of
+  `## Parent`. Discovery is textual — the orchestrator resolves membership through
+  `## Parent` alone — so a slice linked only by the hierarchy is invisible to a spec
+  run. Declare both and the guard accepts it (it refuses a native parent that
+  *disagrees* with `## Parent`), which is how a tracker sync mirroring the
+  parent/child edge is meant to look.
 
 ```markdown
 # Add a CSV serializer for report rows

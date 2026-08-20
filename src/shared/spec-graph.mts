@@ -4,8 +4,10 @@
 // call in here, and act on the result.
 //
 // A tracer-bullet links to its spec via a textual `## Parent` reference and to its
-// blockers via `## Blocked by`; nothing the fleet writes is a native sub-issue, because
-// the `implement` issue-shape guard refuses those. The body is this module's DEFAULT for
+// blockers via `## Blocked by`. A native GH sub-issue link may mirror that parent — the
+// `implement` shape guard allows one that AGREES with `## Parent` and refuses one that
+// does not — but it never replaces it: this module reads bodies, so a slice linked only
+// by the hierarchy is invisible here. The body is this module's DEFAULT for
 // both edges, not its only rule: `tracerBullets` takes a resolver for each, so a caller
 // reading the tracker's own relationships supplies them (`spec-tree.resolveParent`,
 // `spec-tree.unionBlockers`) and the two edges are wired the same way rather than one

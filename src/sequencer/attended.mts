@@ -36,7 +36,7 @@ import {
 } from "./plan.mts";
 import { acquireLock, lockPath, releaseLock } from "./lock.mts";
 import { resolveConfig } from "../shared/config.mts";
-import { IN_PROGRESS_LABEL, resolveRepoSlug } from "../shared/github.mts";
+import { IN_PROGRESS_LABEL, resolveDefaultBranch, resolveRepoSlug } from "../shared/github.mts";
 import { parseSequenceState, type SequenceState } from "./sequence-state.mts";
 
 // The verbs delivered for attended runs. `explore` (read-only) came first; issue
@@ -112,21 +112,29 @@ function capture(file: string, args: readonly string[]): string {
   return child.stdout.trim();
 }
 
-// The committish the worktree checks out. A configured base wins; otherwise the
-// repository's default branch as `origin/HEAD` points at it (the latest fetched
-// tip). The worktree is created DETACHED at this commit, so basing on a branch the
-// developer already has checked out never trips git's "already checked out" guard.
-function resolveBase(configured: string): string {
-  if (configured) return configured;
-  try {
-    return capture("git", ["rev-parse", "--abbrev-ref", "origin/HEAD"]);
-  } catch {
-    return "HEAD";
-  }
-}
-
 const config = resolveConfig();
-const base = resolveBase(config.baseBranch);
+// The repository default branch, as the reusable workflow's DEFAULT_BRANCH input carries
+// it — a bare NAME. It fills the lowest-precedence slot of every base resolution
+// (`resolveBaseBranch`: BASE_BRANCH → the config file → this), and an attended run has no
+// workflow to fill it, so it is derived here (`resolveDefaultBranch`, shared with the spec
+// loop). `config.baseBranch` already covers the two higher slots, so both being empty means
+// nothing anywhere names a base: refuse now, by name, rather than letting `create-branch`
+// cut from `origin/` and die inside git without mentioning the cause.
+const defaultBranch = resolveDefaultBranch();
+if (!config.baseBranch && !defaultBranch) {
+  console.error(
+    "attended: cannot tell which branch to build on — this checkout's `origin/HEAD` is unset or " +
+      "dangling (a remote added by hand, or a default branch renamed since the clone) and `gh repo " +
+      "view` could not answer either. Point it at the default with `git remote set-head origin -a`, " +
+      "or set `baseBranch` in .sandcastle/agent-workflows/config.json.",
+  );
+  process.exit(2);
+}
+// The committish the worktree checks out. A configured base wins; otherwise the repository
+// default as its remote-tracking ref (the latest fetched tip). The worktree is created
+// DETACHED at this commit, so basing on a branch the developer already has checked out never
+// trips git's "already checked out" guard.
+const base = config.baseBranch || `origin/${defaultBranch}`;
 const root = config.worktreeRoot;
 const tree = worktreePath(root, verb, issue);
 // The local lock (mutex between two terminals) lives beside the worktree under the
@@ -325,6 +333,11 @@ const runEnv: Record<string, string> = {
 // reads as an unexplained guard refusal.
 const repoSlug = resolveRepoSlug();
 if (repoSlug) runEnv.GH_REPO = repoSlug;
+// The repository default branch resolved above, in the same slot the reusable workflow fills.
+// Absent it a standalone issue's base resolves EMPTY and `create-branch` cuts from `origin/`
+// — fatal. Passed as the bare NAME the hooks expect (the git steps prefix `origin/`
+// themselves), not the committish `base` carries for `git worktree add`.
+if (defaultBranch) runEnv.DEFAULT_BRANCH = defaultBranch;
 if (force) runEnv.FORCE = "true";
 if (interactive) runEnv.INTERACTIVE = "true";
 if (verb === "implement" && finalizeMode !== "auto") runEnv.FINALIZE_MODE = finalizeMode;
