@@ -8,6 +8,18 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- **Keep the local-run marker when an attended spec run halts.** `agent:local` on the
+  spec issue used to share the local lock's lifecycle: every exit released it, halts
+  included. A halt seconds after a merge released it before that merge's `advance` run
+  had read the spec issue, so CI found no marker and built the next tracer-bullet — the
+  exact slice the developer had just stopped by declining a checkpoint, hitting a run
+  ceiling, asking for a graceful stop, aborting, or watching a slice fail. A halted run
+  now KEEPS the marker and prints what is still true on its way out: the label is still
+  on the spec, CI advance stands down until it goes, removing it hands the spec back to
+  CI, and the next attended run reclaims it on resume. A completed run releases it
+  exactly as before, after the final PR is open. A dry run still claims nothing. The
+  decision (`markerReleasedOnExit`) is pure and lives beside the rest of the marker
+  vocabulary in `shared/spec-marker.mts`; the retention is recorded in the run log.
 - Thread the repository **default branch** into both attended entry points, in the same
   `DEFAULT_BRANCH` slot the reusable workflow fills. Every verb's base resolves
   `BASE_BRANCH` → the config file → the repository default, and CI is where those last
