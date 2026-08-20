@@ -325,6 +325,13 @@ const runEnv: Record<string, string> = {
 // reads as an unexplained guard refusal.
 const repoSlug = resolveRepoSlug();
 if (repoSlug) runEnv.GH_REPO = repoSlug;
+// The repository default, in the same slot the reusable workflow fills (`resolveBaseBranch`:
+// BASE_BRANCH → the config file → DEFAULT_BRANCH). An attended run has no workflow, so absent
+// this a standalone issue's base resolves EMPTY and `create-branch` cuts from `origin/` — fatal.
+// Stripped of the remote prefix `base` carries as a committish for `git worktree add`: the
+// resolvers below want a BRANCH NAME, which the git steps prefix themselves.
+const defaultBranch = base.replace(/^origin\//, "");
+if (defaultBranch && defaultBranch !== "HEAD") runEnv.DEFAULT_BRANCH = defaultBranch;
 if (force) runEnv.FORCE = "true";
 if (interactive) runEnv.INTERACTIVE = "true";
 if (verb === "implement" && finalizeMode !== "auto") runEnv.FINALIZE_MODE = finalizeMode;

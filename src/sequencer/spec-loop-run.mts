@@ -788,6 +788,13 @@ async function drive(): Promise<never> {
     // own origin remote. Without it the slice's FIRST hook refuses, which surfaces
     // here as an unconfirmed merge rather than as the missing variable it is.
     if (repoSlug) buildEnv.GH_REPO = repoSlug;
+    // The repository default, in the same slot the reusable workflow fills (`resolveBaseBranch`:
+    // BASE_BRANCH → the config file → DEFAULT_BRANCH). An attended run has no workflow, so absent
+    // this the slice's base resolves EMPTY and `create-branch` cuts from `origin/` — fatal. It is
+    // normally masked: a real run cuts and pushes the spec branch first, so each slice's fetch-spec
+    // resolves that as its base. A DRY RUN never cuts it, which is exactly when the fallback has to
+    // work — the first slice builds on the base, identical to a freshly-cut, empty spec branch.
+    if (base) buildEnv.DEFAULT_BRANCH = base;
     if (force) buildEnv.FORCE = "true";
     if (dryRun) buildEnv.FINALIZE_MODE = "never";
     // `--interactive` (issue #60): each slice's implement run hands over a live agent
