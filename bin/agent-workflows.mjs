@@ -22,7 +22,7 @@
 // (it is the thing that bootstraps tsx), so it cannot itself be TypeScript.
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
@@ -74,10 +74,21 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
 //                                           repos' `sandcastle:<verb>-<hook>`
 //                                           scripts call).
 //
+// `--version` / `-v` and `--help` / `-h` are classified before any of them, but only in
+// the FIRST argv position (issues #130 and #131): after a verb they are that verb's own
+// argument and keep flowing through untouched — `agent-workflows implement-spec 48 --help`
+// asks the spec loop for its help, not the bin.
+//
 // Exported so the top-level dispatch is testable without spawning a child.
 export function classifyInvocation(args) {
   const [verb, second, ...rest] = args;
   if (!verb) return { kind: "usage" };
+  // Leading `--version` is not a verb: left to fall through, it spawned the sequencer for
+  // a verb by that name. Classified first so no later rule can claim it.
+  if (verb === "--version" || verb === "-v") return { kind: "version" };
+  // Leading `--help` shares that slot, and for the same reason: unclassified it spawned
+  // the sequencer for a verb named `--help`.
+  if (verb === "--help" || verb === "-h") return { kind: "help" };
   // `status` is not a verb (issue #95): it runs no agent and follows no hook contract,
   // so it never reaches the (verb, hook) table. Classified before everything else
   // because its own flags would otherwise be read as hook names.
@@ -129,6 +140,66 @@ export function classifyInvocation(args) {
     };
   }
   return { kind: "hook", verb, hook: second, rest };
+}
+
+// What `--help` prints: every form this bin answers to, grouped so a reader can find
+// their case rather than read the lot. Lives here beside `classifyInvocation` for the
+// reason `STATUS_USAGE` and `INSTALL_USAGE` live beside their parsers — the list and the
+// classification going out of step is the whole hazard.
+//
+// Wrapped inside 80 columns, and it POINTS AT `status --help` and `init --help` instead
+// of restating their option lists: those two own their own flags, and a copy here would
+// be the copy that goes stale.
+export const BIN_USAGE = [
+  "usage: agent-workflows <command> [args...]",
+  "",
+  "Runs the coding-agent fleet: the five verbs — explore, implement, implement-pr,",
+  "review-pr, update-branch — plus the implement-spec orchestrator.",
+  "",
+  "Verb sequences",
+  "  <verb>                     run the verb's whole sequence in this checkout",
+  "  <verb> --guards-only       run just the guard step (the cheap preflight)",
+  "",
+  "One hook",
+  "  <verb> <hook>              run a single hook: guards, fetch-spec, run, status",
+  "                             or finalize — what a consuming repo's",
+  "                             sandcastle:<verb>-<hook> scripts call",
+  "",
+  "Attended local runs",
+  "  <verb> <issue> [flags]     run the verb here against that issue, in its own",
+  "                             git worktree, streamed to this terminal",
+  "    --force                  overrule a refusal and both concurrency mutexes",
+  "    --finalize=auto|ask|never  an implement run's finalize policy",
+  "    --interactive            hand the composed prompt to a live agent session",
+  "",
+  "Attended spec loop",
+  "  implement-spec <spec> [flags]  build a spec's tracer-bullets one at a time",
+  "    --execute                do it for real (a dry run is the default)",
+  "    --dry-run                the default: plan the slices and merge nothing",
+  "    --force                  overrule the local lock and each slice's guards",
+  "    --no-pause               run straight through, without the checkpoint",
+  "    --interactive            steer each slice in a live agent session",
+  "    --yes                    pre-accept the preview prompt",
+  "    --stop                   ask a running loop to stop after this slice",
+  "",
+  "Everything else",
+  "  status [options]           print what is building in this repo, read-only",
+  "                             (status --help for the option list)",
+  "  init | sync [flags]        set a repo up to run the fleet, or move an",
+  "                             installed one to this package's version",
+  "                             (init --help for the flags)",
+  "  --version, -v              print the running package version",
+  "  --help, -h                 print this",
+  "",
+  "Both top-level flags are read in the first position only: after a verb they are",
+  "that verb's own argument.",
+].join("\n");
+
+// Asking for help is not a misuse, so it goes to stdout and exits 0 — unlike the bare
+// invocation, which is one and keeps its stderr and its exit 2.
+function printUsage() {
+  console.log(BIN_USAGE);
+  process.exit(0);
 }
 
 // Run a whole verb through the sequencer: spawn its bridge entrypoint under tsx.
@@ -238,6 +309,40 @@ function runStatusView(args) {
   child.on("exit", (code, signal) => process.exit(code ?? (signal ? 0 : 1)));
 }
 
+// The RUNNING PACKAGE VERSION: the version declared by the manifest of the exact package
+// copy executing this bin, resolved relative to THIS file — never the consuming repo's
+// manifest in the cwd, and never a git ref. The same notion `src/status/version.mts`
+// established for the status footer, read again here rather than imported because that
+// module is TypeScript and this file runs under bare `node`, before tsx is in play.
+//
+// Every failure is unknown rather than fatal — missing file, unreadable bytes, unparseable
+// JSON, no usable version in it — matching the footer's treatment of a damaged manifest as
+// a reporting failure. The caller decides what to do with the null.
+function runningVersion() {
+  try {
+    const path = fileURLToPath(new URL("../package.json", import.meta.url));
+    const { version } = JSON.parse(readFileSync(path, "utf8"));
+    if (typeof version !== "string") return null;
+    const trimmed = version.trim();
+    return trimmed === "" ? null : trimmed;
+  } catch {
+    return null;
+  }
+}
+
+// Print the bare version to stdout, so `$(agent-workflows --version)` is the number itself.
+// An unknown version goes to stderr with a non-zero exit instead: nothing is printed that a
+// caller could mistake for a version.
+function printVersion() {
+  const version = runningVersion();
+  if (version === null) {
+    console.error("agent-workflows: version unknown");
+    process.exit(1);
+  }
+  console.log(version);
+  process.exit(0);
+}
+
 // Set a repo up to run the fleet (`init`), or bring an installed one up to this
 // package's version (`sync`). Spawned under tsx like every other entry point.
 //
@@ -268,9 +373,18 @@ function main() {
     console.error(
       "usage: agent-workflows <verb> [hook | issue-number] [args...]\n" +
         "       agent-workflows status [options] (--help for the option list)\n" +
-        "       agent-workflows init|sync [--enable=…] [--ref=…] [--dry-run] [--yes] (--help for the rest)",
+        "       agent-workflows init|sync [--enable=…] [--ref=…] [--dry-run] [--yes] (--help for the rest)\n" +
+        "       agent-workflows --help for the full command list",
     );
     process.exit(2);
+  }
+  if (invocation.kind === "version") {
+    printVersion();
+    return;
+  }
+  if (invocation.kind === "help") {
+    printUsage();
+    return;
   }
   if (invocation.kind === "status") {
     runStatusView(invocation.args);
