@@ -8,6 +8,25 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Run **`review-pr` as an attended run**: `agent-workflows review-pr <pr>` reviews a pull
+  request on your own machine, end to end. The run creates a worktree under the configured
+  root — never your checkout — detached at the pull request's head, bootstraps it with the
+  repo's own command, and hands the whole verb sequence to the sequencer, so the attended
+  and unattended paths still cannot drift; the review posts through the same reviews API.
+  Two things differ from CI deliberately. A cross-repository (fork) pull request is refused
+  before any worktree exists, naming the reason — its head lives on another repository, so
+  checking it out means a second remote and finalizing means push rights an attended run
+  must not assume. And the tooling directory points at the checkout you launched from
+  rather than a detached default-branch worktree: CI isolates the tooling because a pull
+  request's branch may predate it, while locally you want the tooling in front of you, so
+  changing a PR verb's logic and running it needs no push in between. The rest is the
+  behaviour the issue verbs already have: `agent:in-progress` on the pull request refuses
+  the run and `--force` overrules it, the local lock keeps two terminals off the same verb
+  and pull request, a guard refusal prints to the terminal and posts nothing, a failure or
+  a Ctrl-C abort retains the worktree while a clean success removes it (it is read-only),
+  `--interactive` is still refused by naming interactivity, and the run closes with a
+  summary of the outcome, the worktree's fate, and what finalize did. The unattended
+  `review-pr` path is untouched, its plan pin unaltered.
 - Thread the repository **default branch** into both attended entry points, in the same
   `DEFAULT_BRANCH` slot the reusable workflow fills. Every verb's base resolves
   `BASE_BRANCH` → the config file → the repository default, and CI is where those last

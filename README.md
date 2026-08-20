@@ -343,18 +343,30 @@ fleet (the *unattended* path), you can run a verb on your own machine:
 agent-workflows explore 55            # run `explore` locally against issue #55
 agent-workflows implement 57          # build issue #57 end to end (--finalize=ask|never)
 agent-workflows implement 57 --interactive   # steer a live agent session
+agent-workflows review-pr 138         # review PR #138 and post the review
 ```
 
 Each run gets its own git **worktree** under `worktreeRoot` — never the checkout
-you are sitting in — created detached at the configured base branch. The
-`bootstrap` command runs on that fresh tree (a non-zero exit fails the run before
-the agent starts), the agent's output streams to your terminal, and Ctrl-C aborts.
-Credentials come from your already-authenticated `gh` and existing agent
-credentials — the sequencer reads and writes no secret material. A `read-only`
+you are sitting in — created detached at the configured base branch, or at the
+**pull request's head** for a PR verb, so the agent reads the code actually under
+review. The `bootstrap` command runs on that fresh tree (a non-zero exit fails the
+run before the agent starts), the agent's output streams to your terminal, and
+Ctrl-C aborts. Credentials come from your already-authenticated `gh` and existing
+agent credentials — the sequencer reads and writes no secret material. A read-only
 run's clean worktree is removed on success; an `implement` worktree is **retained**
 (it is what you inspect), and every run retains its tree on failure or abort. Each
 verb runs the SAME sequence the unattended path hands the sequencer, so the two
 paths cannot drift.
+
+`review-pr` finalizes with full parity: the review posts to the pull request
+through the reviews API, exactly as the unattended run's does. Two things differ
+from CI on purpose. A **cross-repository (fork)** pull request is refused before
+any worktree is created — its head lives on another repository, which an attended
+run would need a second remote and push rights for. And the run's tracker hooks
+load from **the checkout you launched from** rather than from a detached
+default-branch worktree: CI isolates the tooling because a pull request's branch
+may predate it, while locally you want the opposite — the tooling in front of you,
+so changing a PR verb's logic and running it needs no push in between.
 
 **Attended spec loop — build a whole spec from your terminal.** `implement-spec`
 with a spec issue number drives the entire spec as a **slice loop**: it builds the

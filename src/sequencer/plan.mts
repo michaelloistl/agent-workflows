@@ -369,11 +369,12 @@ export function interactiveEligible(verb: string): boolean {
 // so the two never drift (issue #58).
 export const interactiveVerbs: readonly string[] = INTERACTIVE_VERBS;
 
-// The verbs an attended run may drive (issue #140). An attended run happens on the
+// The verbs an attended run may drive (issues #140, #141). An attended run happens on the
 // developer's own machine, in a worktree under the configured root, streamed to the
-// terminal — so far the two issue-numbered verbs the local sequencer delivers. Extending
-// it to the PR verbs is this list plus its test, not a change to the entry point.
-const ATTENDED_VERBS = ["explore", "implement"] as const;
+// terminal — the two issue-numbered verbs the local sequencer began with, plus the first
+// PR-numbered one. Extending it to the remaining PR verbs is this list plus its test, not
+// a change to the entry point.
+const ATTENDED_VERBS = ["explore", "implement", "review-pr"] as const;
 
 // Whether `verb` may be run as an attended run (issue #140). Pure — the single source of
 // truth the attended entry point consults, so the set of attendable verbs is a tested
@@ -401,6 +402,10 @@ export interface AttendedRunShape {
   readonly subject: AttendedSubject;
   // The environment variable that carries the number to the verb's hooks.
   readonly numberEnv: string;
+  // The environment variable that carries the subject's title to the verb's hooks. The
+  // run hook `required()`s it by name, so the wrong one is a run that dies at its agent
+  // step rather than a title that reads oddly.
+  readonly titleEnv: string;
   // The `gh` subcommand that reads the subject's title and labels (`gh <sub> view <n>`).
   readonly ghSubcommand: string;
   // What the run's worktree checks out: the base branch (an issue-numbered verb builds on
@@ -412,6 +417,7 @@ export interface AttendedRunShape {
 const ISSUE_RUN_SHAPE: AttendedRunShape = {
   subject: "issue",
   numberEnv: "ISSUE_NUMBER",
+  titleEnv: "ISSUE_TITLE",
   ghSubcommand: "issue",
   checkout: "base",
 };
@@ -419,6 +425,7 @@ const ISSUE_RUN_SHAPE: AttendedRunShape = {
 const PR_RUN_SHAPE: AttendedRunShape = {
   subject: "pull-request",
   numberEnv: "PR_NUMBER",
+  titleEnv: "PR_TITLE",
   ghSubcommand: "pr",
   checkout: "pr-head",
 };
@@ -458,12 +465,24 @@ export function formatRunSummary(s: RunSummary): string {
     `── ${s.verb} #${s.issue}: ${s.outcome} ──`,
     `worktree: ${s.retained ? "retained" : "removed"} at ${s.tree}`,
   ];
-  if (s.finalize) lines.push(`finalize: ${finalizeSummaryLine(s.finalize, s.finalized ?? false)}`);
+  if (s.finalize) {
+    lines.push(`finalize: ${finalizeSummaryLine(s.verb, s.finalize, s.finalized ?? false)}`);
+  }
   return lines.join("\n");
 }
 
-function finalizeSummaryLine(mode: FinalizeMode, finalized: boolean): string {
-  if (finalized) return `${mode} — pushed the branch, opened the PR, updated the tracker`;
+// What a finalize that RAN did, in the verb's own terms: an issue verb's finalize pushes
+// the agent branch and opens the pull request, while the read-only `review-pr`'s posts
+// the review it composed. Reporting the push for a verb that never pushes would be the
+// summary's one chance to mislead (issue #141).
+function finalizedWork(verb: string): string {
+  return verb === "review-pr"
+    ? "posted the review to the pull request"
+    : "pushed the branch, opened the PR, updated the tracker";
+}
+
+function finalizeSummaryLine(verb: string, mode: FinalizeMode, finalized: boolean): string {
+  if (finalized) return `${mode} — ${finalizedWork(verb)}`;
   switch (mode) {
     case "never":
       return "never — nothing pushed; the commits are on the agent branch in the worktree";
