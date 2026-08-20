@@ -74,9 +74,10 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
 //                                           repos' `sandcastle:<verb>-<hook>`
 //                                           scripts call).
 //
-// `--version` / `-v` is classified before any of them, but only in the FIRST argv
-// position (issue #130): a `--version` after a verb is that verb's own argument and
-// keeps flowing through untouched.
+// `--version` / `-v` and `--help` / `-h` are classified before any of them, but only in
+// the FIRST argv position (issues #130 and #131): after a verb they are that verb's own
+// argument and keep flowing through untouched — `agent-workflows implement-spec 48 --help`
+// asks the spec loop for its help, not the bin.
 //
 // Exported so the top-level dispatch is testable without spawning a child.
 export function classifyInvocation(args) {
@@ -85,6 +86,9 @@ export function classifyInvocation(args) {
   // Leading `--version` is not a verb: left to fall through, it spawned the sequencer for
   // a verb by that name. Classified first so no later rule can claim it.
   if (verb === "--version" || verb === "-v") return { kind: "version" };
+  // Leading `--help` shares that slot, and for the same reason: unclassified it spawned
+  // the sequencer for a verb named `--help`.
+  if (verb === "--help" || verb === "-h") return { kind: "help" };
   // `status` is not a verb (issue #95): it runs no agent and follows no hook contract,
   // so it never reaches the (verb, hook) table. Classified before everything else
   // because its own flags would otherwise be read as hook names.
@@ -136,6 +140,66 @@ export function classifyInvocation(args) {
     };
   }
   return { kind: "hook", verb, hook: second, rest };
+}
+
+// What `--help` prints: every form this bin answers to, grouped so a reader can find
+// their case rather than read the lot. Lives here beside `classifyInvocation` for the
+// reason `STATUS_USAGE` and `INSTALL_USAGE` live beside their parsers — the list and the
+// classification going out of step is the whole hazard.
+//
+// Wrapped inside 80 columns, and it POINTS AT `status --help` and `init --help` instead
+// of restating their option lists: those two own their own flags, and a copy here would
+// be the copy that goes stale.
+export const BIN_USAGE = [
+  "usage: agent-workflows <command> [args...]",
+  "",
+  "Runs the coding-agent fleet: the five verbs — explore, implement, implement-pr,",
+  "review-pr, update-branch — plus the implement-spec orchestrator.",
+  "",
+  "Verb sequences",
+  "  <verb>                     run the verb's whole sequence in this checkout",
+  "  <verb> --guards-only       run just the guard step (the cheap preflight)",
+  "",
+  "One hook",
+  "  <verb> <hook>              run a single hook: guards, fetch-spec, run, status",
+  "                             or finalize — what a consuming repo's",
+  "                             sandcastle:<verb>-<hook> scripts call",
+  "",
+  "Attended local runs",
+  "  <verb> <issue> [flags]     run the verb here against that issue, in its own",
+  "                             git worktree, streamed to this terminal",
+  "    --force                  overrule a refusal and both concurrency mutexes",
+  "    --finalize=auto|ask|never  an implement run's finalize policy",
+  "    --interactive            hand the composed prompt to a live agent session",
+  "",
+  "Attended spec loop",
+  "  implement-spec <spec> [flags]  build a spec's tracer-bullets one at a time",
+  "    --execute                do it for real (a dry run is the default)",
+  "    --dry-run                the default: plan the slices and merge nothing",
+  "    --force                  overrule the local lock and each slice's guards",
+  "    --no-pause               run straight through, without the checkpoint",
+  "    --interactive            steer each slice in a live agent session",
+  "    --yes                    pre-accept the preview prompt",
+  "    --stop                   ask a running loop to stop after this slice",
+  "",
+  "Everything else",
+  "  status [options]           print what is building in this repo, read-only",
+  "                             (status --help for the option list)",
+  "  init | sync [flags]        set a repo up to run the fleet, or move an",
+  "                             installed one to this package's version",
+  "                             (init --help for the flags)",
+  "  --version, -v              print the running package version",
+  "  --help, -h                 print this",
+  "",
+  "Both top-level flags are read in the first position only: after a verb they are",
+  "that verb's own argument.",
+].join("\n");
+
+// Asking for help is not a misuse, so it goes to stdout and exits 0 — unlike the bare
+// invocation, which is one and keeps its stderr and its exit 2.
+function printUsage() {
+  console.log(BIN_USAGE);
+  process.exit(0);
 }
 
 // Run a whole verb through the sequencer: spawn its bridge entrypoint under tsx.
@@ -309,12 +373,17 @@ function main() {
     console.error(
       "usage: agent-workflows <verb> [hook | issue-number] [args...]\n" +
         "       agent-workflows status [options] (--help for the option list)\n" +
-        "       agent-workflows init|sync [--enable=…] [--ref=…] [--dry-run] [--yes] (--help for the rest)",
+        "       agent-workflows init|sync [--enable=…] [--ref=…] [--dry-run] [--yes] (--help for the rest)\n" +
+        "       agent-workflows --help for the full command list",
     );
     process.exit(2);
   }
   if (invocation.kind === "version") {
     printVersion();
+    return;
+  }
+  if (invocation.kind === "help") {
+    printUsage();
     return;
   }
   if (invocation.kind === "status") {

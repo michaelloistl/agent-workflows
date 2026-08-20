@@ -1,9 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
-import { statSync } from "node:fs";
+import { mkdtempSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { resolveEntryRelPath, resolveEntry, classifyInvocation } from "./agent-workflows.mjs";
+import {
+  resolveEntryRelPath,
+  resolveEntry,
+  classifyInvocation,
+  BIN_USAGE,
+} from "./agent-workflows.mjs";
 
 test("resolveEntryRelPath maps the run hook to the verb's own entry", () => {
   assert.equal(resolveEntryRelPath("implement", "run"), join("implement", "implement.mts"));
@@ -358,4 +365,102 @@ test("the dispatcher bin is executable, so the workflow fallback can exec it", (
   const bin = fileURLToPath(new URL("agent-workflows.mjs", import.meta.url));
   const mode = statSync(bin).mode;
   assert.ok(mode & 0o100, `expected owner-executable, got mode ${(mode & 0o777).toString(8)}`);
+});
+
+// `--help` shares the first-position slot `--version` takes (issue #131): left to fall
+// through it spawned the sequencer for a verb named `--help`. Same slot, same rule —
+// after a verb it is that verb's own argument.
+test("classifyInvocation routes a leading --help to the command list", () => {
+  assert.deepEqual(classifyInvocation(["--help"]), { kind: "help" });
+  assert.deepEqual(classifyInvocation(["-h"]), { kind: "help" });
+});
+
+test("classifyInvocation leaves a post-verb --help to the verb", () => {
+  assert.deepEqual(classifyInvocation(["implement", "--help"]), {
+    kind: "hook",
+    verb: "implement",
+    hook: "--help",
+    rest: [],
+  });
+  assert.deepEqual(classifyInvocation(["status", "--help"]), {
+    kind: "status",
+    args: ["--help"],
+  });
+  assert.deepEqual(classifyInvocation(["init", "-h"]), {
+    kind: "install",
+    mode: "init",
+    args: ["-h"],
+  });
+  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--help"]), {
+    kind: "spec-loop",
+    spec: "48",
+    execute: false,
+    dryRun: false,
+    force: false,
+    noPause: false,
+    interactive: false,
+    stop: false,
+    yes: false,
+  });
+});
+
+// The command list names every form the bin answers to, grouped so a reader can find
+// their case. Asserted here because a form added to `classifyInvocation` without a line
+// here is a form nobody can discover.
+test("the command list names every invocation form the bin answers to", () => {
+  for (const form of [
+    "<verb>",
+    "--guards-only",
+    "<verb> <hook>",
+    "<verb> <issue>",
+    "--finalize=",
+    "--interactive",
+    "implement-spec <spec>",
+    "--execute",
+    "status",
+    "init",
+    "sync",
+    "--version",
+  ]) {
+    assert.ok(BIN_USAGE.includes(form), `expected the command list to name ${form}`);
+  }
+  // The two option lists it points at rather than restating.
+  assert.match(BIN_USAGE, /status --help/);
+  assert.match(BIN_USAGE, /init --help/);
+});
+
+// Asking for help is not a misuse: it prints to stdout and exits 0. The bare invocation
+// IS one, so it keeps exiting 2 on stderr — and now says where the rest is. Spawned for
+// real because the stream and the exit status are the whole promise, and neither is
+// visible to a test of the classifier.
+function run(...args: string[]) {
+  const bin = fileURLToPath(new URL("agent-workflows.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [bin, ...args], {
+    cwd: mkdtempSync(`${tmpdir()}/agent-workflows-help-`),
+    env: { PATH: "" },
+    encoding: "utf8",
+  });
+  assert.equal(result.error, undefined);
+  return result;
+}
+
+test("--help prints the command list to stdout and exits 0", () => {
+  const result = run("--help");
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "");
+  assert.equal(result.stdout.trim(), BIN_USAGE);
+});
+
+test("-h is the same help, so the conventional shorthand needs no learning", () => {
+  const short = run("-h");
+  assert.equal(short.status, 0);
+  assert.equal(short.stdout, run("--help").stdout);
+});
+
+test("the bare invocation stays a misuse: usage on stderr, exit 2, pointing at --help", () => {
+  const result = run();
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /usage: agent-workflows/);
+  assert.match(result.stderr, /--help/);
 });
