@@ -85,6 +85,44 @@ export function resolveRepoSlug(env: NodeJS.ProcessEnv = process.env): string {
   }
 }
 
+// The repository default branch as a bare branch NAME, or empty when the ref names
+// no branch. Pure — the normalising half of `resolveDefaultBranch`. Both sources
+// answer in a shape the base consumers cannot take as-is: git abbreviates the symref
+// to a remote-tracking ref (`origin/main`), while `gh` answers with the bare name, and
+// either can degrade to `HEAD` (a detached or unset symref), which names no branch —
+// passed on it would make `create-branch` cut from `origin/HEAD`. Empty is the
+// "nothing resolved" signal `resolveBaseBranch` already understands.
+export function defaultBranchFromRef(ref: string): string {
+  const name = ref.trim().replace(/^origin\//, "");
+  return name === "HEAD" ? "" : name;
+}
+
+// The repository default branch the hooks read from `DEFAULT_BRANCH` — the lowest-
+// precedence slot of `resolveBaseBranch` (BASE_BRANCH → the config file → this). In CI
+// the reusable workflow supplies it (`github.event.repository.default_branch`); an
+// ATTENDED run has no workflow, so it is derived here — otherwise a run with no
+// configured base resolves BASE="" and `create-branch` cuts from `origin/`, which dies
+// in git rather than saying what is missing. Local git first (instant, offline), then
+// `gh` for the checkout whose `origin/HEAD` is unset or dangling — a remote added by
+// hand rather than cloned, or a default branch renamed since. Empty when nothing
+// resolves; the caller then leaves the variable unset rather than setting a blank one.
+export function resolveDefaultBranch(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.DEFAULT_BRANCH) return env.DEFAULT_BRANCH;
+  try {
+    const name = defaultBranchFromRef(capture("git", ["rev-parse", "--abbrev-ref", "origin/HEAD"]));
+    if (name) return name;
+  } catch {
+    /* no origin/HEAD (never cloned, or the symref was never set), or not a git checkout */
+  }
+  try {
+    return defaultBranchFromRef(
+      capture("gh", ["repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]),
+    );
+  } catch {
+    return "";
+  }
+}
+
 // Create a label in the repo if it is not there yet. `gh issue edit --add-label`
 // fails on a label the repo does not have, and label edits are best-effort (they
 // swallow that failure), so a label the fleet applies itself — rather than one a

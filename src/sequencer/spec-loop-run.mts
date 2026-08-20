@@ -73,7 +73,14 @@ import { DEPENDENCY_EDGES } from "../shared/spec-tree.mts";
 import { specStep, type SpecAction } from "../shared/spec-step.mts";
 import { renderProgress } from "../shared/spec-report.mts";
 import { awaitChecks } from "../shared/poll-checks.mts";
-import { addLabel, comment, ensureLabel, removeLabel, resolveRepoSlug } from "../shared/github.mts";
+import {
+  addLabel,
+  comment,
+  ensureLabel,
+  removeLabel,
+  resolveDefaultBranch,
+  resolveRepoSlug,
+} from "../shared/github.mts";
 import {
   LOCAL_RUN_LABEL,
   LOCAL_RUN_LABEL_DESCRIPTION,
@@ -207,17 +214,6 @@ function closedSet(issues: RawIssue[]): Set<number> {
   return new Set(issues.filter((i) => i.state === "CLOSED").map((i) => i.number));
 }
 
-// The base the spec branch is cut from: a configured base wins; otherwise the
-// repository default (`origin/HEAD`). Mirrors the attended entry point's resolver.
-function resolveBase(configured: string): string {
-  if (configured) return configured;
-  try {
-    return capture("git", ["rev-parse", "--abbrev-ref", "origin/HEAD"]).replace(/^origin\//, "");
-  } catch {
-    return "";
-  }
-}
-
 const config = resolveConfig();
 // `owner/name` for the hooks each slice runs (GH_REPO). Resolved once, from the env
 // or the checkout's origin remote.
@@ -228,7 +224,11 @@ const repoSlug = resolveRepoSlug();
 // unbounded exactly as before. Evaluated at each checkpoint, so a reached ceiling
 // halts cleanly between slices, never mid-slice.
 const ceiling = config.runCeiling;
-const base = resolveBase(config.baseBranch);
+// The base the spec branch is cut from, as a bare branch NAME: a configured base wins;
+// otherwise the repository default, resolved by the helper the attended entry point uses
+// (`resolveDefaultBranch` — git's `origin/HEAD`, then `gh`). The git steps below prefix
+// `origin/` themselves.
+const base = config.baseBranch || resolveDefaultBranch();
 const root = config.worktreeRoot;
 const tree = join(root, `spec-${specNum}`);
 const lock = lockPath(root, `implement-spec-${specNum}`);
@@ -794,6 +794,13 @@ async function drive(): Promise<never> {
     // normally masked: a real run cuts and pushes the spec branch first, so each slice's fetch-spec
     // resolves that as its base. A DRY RUN never cuts it, which is exactly when the fallback has to
     // work — the first slice builds on the base, identical to a freshly-cut, empty spec branch.
+    //
+    // It is not inert in a real run either, and there it is a floor rather than a fix: if a slice's
+    // fetch-spec cannot see the spec branch (`remoteBranches` is a live `ls-remote`), the slice now
+    // cuts from the repository default and opens a DRAFT PR against it instead of dying at
+    // `create-branch`. Nothing lands — finalize opens a draft against a non-spec base and
+    // `mergeConfirmed` halts the loop on the mismatched `baseRefName` — so the protection moves from
+    // create-branch to the merge confirmation, and the halt names the merge, not the wrong base.
     if (base) buildEnv.DEFAULT_BRANCH = base;
     if (force) buildEnv.FORCE = "true";
     if (dryRun) buildEnv.FINALIZE_MODE = "never";
