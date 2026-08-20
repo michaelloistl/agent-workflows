@@ -6,6 +6,8 @@ import {
   advanceStandDown,
   markerAcquired,
   markerReleased,
+  markerRetained,
+  markerReleasedOnExit,
   markerUnverified,
 } from "./spec-marker.mts";
 
@@ -78,6 +80,35 @@ test("reclaiming a stale marker is reported as a reclaim, not a fresh claim", ()
 test("releasing the marker says the spec is CI's again", () => {
   assert.match(markerReleased(48), /#48/);
   assert.match(markerReleased(48), /released/);
+});
+
+// — The release decision: does a finished run hand the marker back? —
+//
+// A pure function of the run's terminal state. Completion is the only ending that
+// releases: a halt means the run is waiting for the developer, so the spec's
+// sequencing is still owned and CI advance must keep standing down.
+
+test("a completed run releases the marker", () => {
+  assert.equal(markerReleasedOnExit("completed"), true);
+});
+
+test("a halted run retains the marker", () => {
+  assert.equal(markerReleasedOnExit("halted"), false);
+});
+
+// The sentence a halted run leaves behind has to answer, without a trip to the
+// source: what is still true, and the ONE action that changes it.
+test("retaining the marker says what is still true and how to hand the spec back", () => {
+  const line = markerRetained(48);
+  assert.match(line, /#48/);
+  assert.match(line, /agent:local/);
+  // Why it is still there — the run halted, so the spec is still the developer's.
+  assert.match(line, /halted/);
+  // What that suppresses, and the single action that undoes it.
+  assert.match(line, /stands down/);
+  assert.match(line, /[Rr]emove/);
+  // And that resuming locally is not blocked by it.
+  assert.match(line, /reclaim/);
 });
 
 // An unclaimed marker is not survivable: every merge this run makes would start CI

@@ -1,9 +1,16 @@
-// The local-run marker: the label an attended slice loop holds on a spec issue for
-// the length of its run, and the decision it drives — whether the unattended
-// `advance` should STAND DOWN. PURE: the label string, the reading of it, the
-// decision, and the sentences that explain it. No `gh`, no git — the tracker I/O
-// lives in `spec-tracker.mts` (reading an issue's labels) and `github.mts`
-// (adding/removing them).
+// The local-run marker: the label an attended slice loop holds on a spec issue while
+// it owns that spec's sequencing, and the decisions it drives — whether the
+// unattended `advance` should STAND DOWN, and whether a finished run hands the marker
+// back. PURE: the label string, the reading of it, the decisions, and the sentences
+// that explain them. No `gh`, no git — the tracker I/O lives in `spec-tracker.mts`
+// (reading an issue's labels) and `github.mts` (adding/removing them).
+//
+// THE MARKER OUTLIVES A HALT. It is claimed before the first merge and released when
+// the run COMPLETES — not when the process exits. A run that halts is waiting for the
+// developer, so the spec is still owned and the marker stays; releasing it there would
+// hand a stopped spec straight back to CI, which would then build the very slice the
+// developer stopped. Nothing is stranded by that: the loop prints the one action that
+// clears it, and a marker found by a run that holds the local lock is reclaimed.
 //
 // WHY THE MARKER EXISTS. The attended spec loop merges each tracer-bullet PR into
 // the spec branch, exactly as CI does — that parity is the point (ADR-0006). But
@@ -75,10 +82,34 @@ export function markerAcquired(o: { spec: number; reclaimed: boolean }): string 
     : `spec-loop: claimed \`${LOCAL_RUN_LABEL}\` on #${o.spec} — CI advance stands down until this run releases it.`;
 }
 
-// The line the loop prints when it releases the marker — on completion, on every
-// halt, and on abort, tied to the same lifecycle as the local lock.
+// The run's terminal state, and the only thing the release decision depends on: a run
+// COMPLETED (its final PR is open) or it HALTED (a failure, a refusal, an unconfirmed
+// merge, a declined checkpoint, a graceful stop, a reached ceiling, a Ctrl-C).
+export type RunOutcome = "completed" | "halted";
+
+// Does a finished run hand the marker back? Only a completed run does. A halt keeps
+// it, so `advance` keeps standing down and CI cannot start the tracer-bullet the
+// developer just stopped — the merge that would trigger it may still be in flight.
+export function markerReleasedOnExit(outcome: RunOutcome): boolean {
+  return outcome === "completed";
+}
+
+// The line the loop prints when it releases the marker — on completion, once the
+// final PR is open.
 export function markerReleased(spec: number): string {
   return `spec-loop: released \`${LOCAL_RUN_LABEL}\` on #${spec} — CI advance owns this spec again.`;
+}
+
+// The line a halted run prints on its way out: the marker is still there, what that
+// suppresses, the single action that hands the spec back to CI, and the fact that
+// resuming locally is not blocked by it.
+export function markerRetained(spec: number): string {
+  return (
+    `spec-loop: kept \`${LOCAL_RUN_LABEL}\` on #${spec} — the run halted, so this spec's ` +
+    `sequencing is still yours and CI advance stands down until the marker goes. Remove ` +
+    `\`${LOCAL_RUN_LABEL}\` from #${spec} to hand the spec back to CI; the next attended run ` +
+    `reclaims it if you resume here instead.`
+  );
 }
 
 // The halt reason when the marker could not be verified on the spec issue after the
