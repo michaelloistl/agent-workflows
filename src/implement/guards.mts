@@ -48,8 +48,8 @@ if (markedSpec || childCount > 0) {
   );
 }
 
-// Issue-shape guard — the agent only builds standalone issues, never an epic or
-// a sub-issue.
+// Issue-shape guard — the agent only builds standalone issues and spec tracer-bullets,
+// never an epic, and never a sub-issue whose native parent contradicts its `## Parent`.
 const shape = JSON.parse(
   gh([
     "api",
