@@ -2,15 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
-import { mkdtempSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   resolveEntryRelPath,
   resolveEntry,
   classifyInvocation,
+  runningVersion,
   BIN_USAGE,
 } from "./agent-workflows.mjs";
+import { packageVersion } from "../src/status/frame.mts";
 
 test("resolveEntryRelPath maps the run hook to the verb's own entry", () => {
   assert.equal(resolveEntryRelPath("implement", "run"), join("implement", "implement.mts"));
@@ -314,13 +316,14 @@ test("classifyInvocation routes init and sync to the installer", () => {
 
 // `--version` is a top-level flag, not a verb: without this it fell through to the verb
 // path and spawned the sequencer for a verb named `--version` (issue #130). Recognised in
-// the FIRST argv position only — anywhere else it belongs to the verb it follows.
+// the FIRST argv position only — anywhere later it is left in the argv of the command it
+// follows, for that command to make of what it will.
 test("classifyInvocation routes a leading --version to the version report", () => {
   assert.deepEqual(classifyInvocation(["--version"]), { kind: "version" });
   assert.deepEqual(classifyInvocation(["-v"]), { kind: "version" });
 });
 
-test("classifyInvocation leaves a post-verb --version to the verb", () => {
+test("classifyInvocation leaves a post-verb --version in the command's own argv", () => {
   assert.deepEqual(classifyInvocation(["implement", "--version"]), {
     kind: "hook",
     verb: "implement",
@@ -368,14 +371,16 @@ test("the dispatcher bin is executable, so the workflow fallback can exec it", (
 });
 
 // `--help` shares the first-position slot `--version` takes (issue #131): left to fall
-// through it spawned the sequencer for a verb named `--help`. Same slot, same rule —
-// after a verb it is that verb's own argument.
+// through it spawned the sequencer for a verb named `--help`. Same slot, same rule — later
+// in the argv it belongs to the command it follows. What that command does with it varies:
+// `status` and `init`/`sync` each parse a help flag of their own, while no verb entry point
+// reads one yet, so after a verb it is carried along and ignored.
 test("classifyInvocation routes a leading --help to the command list", () => {
   assert.deepEqual(classifyInvocation(["--help"]), { kind: "help" });
   assert.deepEqual(classifyInvocation(["-h"]), { kind: "help" });
 });
 
-test("classifyInvocation leaves a post-verb --help to the verb", () => {
+test("classifyInvocation leaves a post-verb --help in the command's own argv", () => {
   assert.deepEqual(classifyInvocation(["implement", "--help"]), {
     kind: "hook",
     verb: "implement",
@@ -417,6 +422,9 @@ test("the command list names every invocation form the bin answers to", () => {
     "--interactive",
     "implement-spec <spec>",
     "--execute",
+    "implement-spec <hook>",
+    "kickoff",
+    "advance",
     "status",
     "init",
     "sync",
@@ -463,4 +471,54 @@ test("the bare invocation stays a misuse: usage on stderr, exit 2, pointing at -
   assert.equal(result.stdout, "");
   assert.match(result.stderr, /usage: agent-workflows/);
   assert.match(result.stderr, /--help/);
+});
+
+// `--version` is asserted at the same boundary as `--help`, and for the same reason: the
+// stream it writes to and the exit status ARE the promise, and a classifier test sees
+// neither. Asserted against the manifest rather than a hard-coded number, so a wrong
+// `../package.json` base or a `files` list that stops shipping the manifest fails here
+// instead of shipping a silent `version unknown`.
+const MANIFEST = fileURLToPath(new URL("../package.json", import.meta.url));
+
+test("--version prints the running package version to stdout and exits 0", () => {
+  const result = run("--version");
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "");
+  assert.equal(result.stdout.trim(), JSON.parse(readFileSync(MANIFEST, "utf8")).version);
+});
+
+test("-v is the same version, so the conventional shorthand needs no learning", () => {
+  const short = run("-v");
+  assert.equal(short.status, 0);
+  assert.equal(short.stdout, run("--version").stdout);
+});
+
+// The bin re-derives `packageVersion` by hand because it boots under bare `node`, before
+// tsx exists — so nothing but this pins the two to the same answer. Let `frame.mts` gain a
+// rule the bin does not (a stripped `v` prefix, say) and the status footer and `--version`
+// would report different versions of the same running copy; this is what notices.
+test("--version agrees with the status footer on the running package version", () => {
+  const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
+  assert.equal(run("--version").stdout.trim(), packageVersion(manifest));
+});
+
+// A damaged manifest costs the caller the number, never a stack trace: `printVersion`
+// turns the null into `version unknown` on stderr and a non-zero exit, and nothing that
+// could be mistaken for a version reaches stdout. Only the read is injected — which
+// manifest it reads is the bin's own business, and is what the boundary tests above pin.
+test("runningVersion normalises the manifest the way the status footer does", () => {
+  assert.equal(runningVersion(() => JSON.stringify({ version: " 1.2.3 " })), "1.2.3");
+  assert.equal(runningVersion(() => JSON.stringify({ version: "   " })), null);
+  assert.equal(runningVersion(() => JSON.stringify({ version: 7 })), null);
+  assert.equal(runningVersion(() => JSON.stringify({ name: "agent-workflows" })), null);
+});
+
+test("runningVersion reports unknown rather than throwing on an unreadable manifest", () => {
+  assert.equal(runningVersion(() => "{ not json"), null);
+  assert.equal(
+    runningVersion(() => {
+      throw new Error("ENOENT: no such file or directory");
+    }),
+    null,
+  );
 });

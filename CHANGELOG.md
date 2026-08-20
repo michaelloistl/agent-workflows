@@ -8,6 +8,24 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- The dispatcher answers `--version` / `-v` and `--help` / `-h` itself. Both used to fall
+  through the classifier to the verb path and spawn the sequencer for a verb by that name,
+  and the only help was the three-line usage string a bare invocation printed — which named
+  no verb and exited `2`. `--version` prints the **running package version**, read from the
+  manifest of the exact package copy executing the bin (never the consuming repo's manifest
+  in the cwd, and never a git ref) — the same notion the status footer established, printed
+  bare so `$(agent-workflows --version)` is the number itself; a manifest too damaged to
+  yield one says `version unknown` on stderr and exits non-zero rather than printing
+  something a caller could mistake for a version. `--help` prints the full command list —
+  the verb sequences, one hook, the orchestrator's own sequence and hooks, the attended
+  runs, the attended spec loop, `status`, `init` / `sync` — to stdout and exits `0`, because
+  asking what a command does is not a misuse of it. It points at `status --help` and `init
+  --help` rather than restating those two's option lists, which is the copy that would go
+  stale. Both flags are read in the FIRST argument position only: later in the line they
+  belong to the command they follow, so `agent-workflows status --help` still answers with
+  the status view's options. The bare invocation keeps its stderr and its exit `2` — that
+  one IS a misuse — and now points at `--help` for the rest.
+
 ## v1.7.0 — 2026-08-15
 
 - Added `-h` and `--help` option reference to `agent-workflows status`

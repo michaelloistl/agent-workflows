@@ -477,6 +477,17 @@ fire (label events run workflows from the default branch).
 
 ## Usage
 
+Everything runs through one command, and it answers the two conventional flags in
+the first argument position:
+
+```sh
+agent-workflows --help       # the full command list: every form it answers to (or -h)
+agent-workflows --version    # the version of the package copy that is running (or -v)
+```
+
+Later in the line the flags belong to the command they follow — `status --help`
+and `init --help` print those two's own option lists.
+
 Each verb is one thin caller. Pin `@v1` — the moving major tag, and what `init`
 writes — to track compatible releases, or pin an exact tag/SHA to freeze the
 version. `@main` tracks unreleased work and is for this repo's own dogfooding.

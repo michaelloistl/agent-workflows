@@ -75,9 +75,12 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
 //                                           scripts call).
 //
 // `--version` / `-v` and `--help` / `-h` are classified before any of them, but only in
-// the FIRST argv position (issues #130 and #131): after a verb they are that verb's own
-// argument and keep flowing through untouched — `agent-workflows implement-spec 48 --help`
-// asks the spec loop for its help, not the bin.
+// the FIRST argv position (issues #130 and #131): anywhere later they are left in the argv
+// of the command they follow, for that command to make of what it will. `status` and
+// `init`/`sync` each parse a help flag of their own, so `agent-workflows status --help`
+// answers with the status view's option list. No verb entry point reads one yet, so after a
+// verb the flag is carried along and ignored — `agent-workflows implement 42 --help` starts
+// the attended run rather than describing it.
 //
 // Exported so the top-level dispatch is testable without spawning a child.
 export function classifyInvocation(args) {
@@ -165,6 +168,12 @@ export const BIN_USAGE = [
   "                             or finalize — what a consuming repo's",
   "                             sandcastle:<verb>-<hook> scripts call",
   "",
+  "Spec orchestrator (not a verb: it runs no agent of its own)",
+  "  implement-spec             sequence its kickoff or advance entry point,",
+  "                             whichever SPEC_MODE names",
+  "  implement-spec <hook>      run one of its own hooks: guards, kickoff or",
+  "                             advance — the sandcastle:implement-spec-* form",
+  "",
   "Attended local runs",
   "  <verb> <issue> [flags]     run the verb here against that issue, in its own",
   "                             git worktree, streamed to this terminal",
@@ -191,8 +200,10 @@ export const BIN_USAGE = [
   "  --version, -v              print the running package version",
   "  --help, -h                 print this",
   "",
-  "Both top-level flags are read in the first position only: after a verb they are",
-  "that verb's own argument.",
+  "Both top-level flags are read in the first position only. Later in the line they",
+  "belong to the command they follow: status and init | sync answer their own",
+  "--help, while a verb does not read one yet — <verb> <issue> --help starts the",
+  "run.",
 ].join("\n");
 
 // Asking for help is not a misuse, so it goes to stdout and exits 0 — unlike the bare
@@ -309,19 +320,32 @@ function runStatusView(args) {
   child.on("exit", (code, signal) => process.exit(code ?? (signal ? 0 : 1)));
 }
 
+// Read the manifest of the package copy this file belongs to — resolved relative to THIS
+// file, so it follows the bin wherever it is installed and never picks up a cwd.
+function defaultReadManifest() {
+  return readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8");
+}
+
 // The RUNNING PACKAGE VERSION: the version declared by the manifest of the exact package
-// copy executing this bin, resolved relative to THIS file — never the consuming repo's
-// manifest in the cwd, and never a git ref. The same notion `src/status/version.mts`
-// established for the status footer, read again here rather than imported because that
-// module is TypeScript and this file runs under bare `node`, before tsx is in play.
+// copy executing this bin — never the consuming repo's manifest in the cwd, and never a git
+// ref. The same notion `src/status/version.mts` established for the status footer, read
+// again here rather than imported because that module is TypeScript and this file runs
+// under bare `node`, before tsx is in play. The normalisation is likewise a hand copy of
+// `packageVersion` in `src/status/frame.mts` (non-string → null, trim, empty → null); the
+// bin test imports that function and asserts the two agree on the real manifest, so the
+// copy cannot drift into reporting a different version than the footer does.
 //
 // Every failure is unknown rather than fatal — missing file, unreadable bytes, unparseable
 // JSON, no usable version in it — matching the footer's treatment of a damaged manifest as
 // a reporting failure. The caller decides what to do with the null.
-function runningVersion() {
+//
+// `readManifest` is injectable the way `resolveEntry` takes `exists`, but only the READ is:
+// WHICH manifest is read stays sealed in the default, because reading the running copy's
+// own is the whole claim and a test free to redirect it would assert nothing. That half is
+// covered at the executable boundary instead.
+export function runningVersion(readManifest = defaultReadManifest) {
   try {
-    const path = fileURLToPath(new URL("../package.json", import.meta.url));
-    const { version } = JSON.parse(readFileSync(path, "utf8"));
+    const { version } = JSON.parse(readManifest());
     if (typeof version !== "string") return null;
     const trimmed = version.trim();
     return trimmed === "" ? null : trimmed;
