@@ -1,5 +1,5 @@
 // Attended local sequencer (issue #55, extended for `implement` in #57 and for the
-// first PR verb in #141). The SECOND entry point: `agent-workflows <verb> <number>`
+// PR verbs in #141 and #142). The SECOND entry point: `agent-workflows <verb> <number>`
 // runs a verb on the developer's own machine, streaming to the terminal. It began
 // with the read-only `explore`; `implement` builds an issue end to end — commits on an
 // agent branch and, by default, a finalize with full parity to the unattended path
@@ -7,16 +7,19 @@
 // the surviving worktree, not a withheld push. A `--finalize=ask|never` flag holds
 // everything off GitHub for the runs where the developer wants to look first.
 // `review-pr` reviews a pull request the same way, finalizing with full parity too —
-// the review posts through the reviews API, exactly as the unattended run's does.
+// the review posts through the reviews API, exactly as the unattended run's does; and
+// `implement-pr` addresses that pull request's feedback, committing onto its checked-out
+// head and pushing those commits to the head ref by name (never force-pushing) before the
+// replies are posted.
 //
 // It creates a git worktree UNDER the configured root — never the checkout the
 // developer is sitting in — invokes the repo's own opaque bootstrap command to make
 // that tree runnable, then hands the SAME sequence the reusable workflow runs to the
 // sequencer inside the worktree, so the attended and unattended paths share one
-// implementation and cannot drift. An `implement` worktree survives a successful run
-// (it is what the developer inspects); every run retains its tree on failure or a
-// Ctrl-C abort, and the read-only verbs remove a clean one. The run closes with a
-// printed summary so the outcome is legible at a glance.
+// implementation and cannot drift. A commit-producing verb's worktree survives a
+// successful run (it is what the developer inspects); every run retains its tree on
+// failure or a Ctrl-C abort, and the read-only verbs remove a clean one. The run closes
+// with a printed summary so the outcome is legible at a glance.
 //
 // Credentials come from the developer's already-authenticated `gh` and existing
 // agent credentials, inherited through the ambient environment: this sequencer
@@ -55,6 +58,8 @@ const force = process.argv.includes("--force");
 // terminal so the developer steers the work directly, rather than only watching a
 // headless run. Accepted only for the commit-producing verbs (`implement`,
 // `implement-pr`); the sequencer refuses it for the read-only verbs and `update-branch`.
+// Every step after the agent run — the push, the replies, the tracker update — behaves
+// exactly as it does for a headless run (issue #142).
 const interactive = process.argv.includes("--interactive");
 if (!verb || !issue) {
   console.error(
@@ -90,8 +95,8 @@ if (!attendable(verb)) {
 const shape = attendedRunShape(verb);
 
 // How this run finalizes (issue #57). Only `implement` reads the flag — a PR verb's
-// finalize is full parity for now (issue #141: withholding it is a later slice), and
-// `explore`'s read-only comment always posts. `auto` (the default) is full parity with
+// finalize is full parity for now (issues #143/#144: withholding it is a later slice),
+// and `explore`'s read-only comment always posts. `auto` (the default) is full parity with
 // the unattended path; `never` stops with the commits on the agent branch; `ask`
 // finalizes only on confirmation.
 let finalizeMode: FinalizeMode = "auto";
@@ -177,10 +182,17 @@ const lock = lockPath(root, `${verb}-${issue}`);
 // request's field alone, so it is asked for only when the subject IS one; `gh issue view`
 // fails on a field it does not know rather than ignoring it.
 const subjectFields =
-  shape.subject === "pull-request" ? "title,labels,isCrossRepository" : "title,labels";
+  shape.subject === "pull-request"
+    ? "title,labels,isCrossRepository,headRefName"
+    : "title,labels";
 const subjectInfo = JSON.parse(
   capture("gh", [shape.ghSubcommand, "view", issue, "--json", subjectFields]),
-) as { title: string; labels: Array<{ name: string }>; isCrossRepository?: boolean };
+) as {
+  title: string;
+  labels: Array<{ name: string }>;
+  isCrossRepository?: boolean;
+  headRefName?: string;
+};
 const subjectTitle = subjectInfo.title;
 const subjectLabels = subjectInfo.labels.map((l) => l.name);
 
@@ -216,10 +228,12 @@ if (subjectLabels.includes(IN_PROGRESS_LABEL) && !force) {
 // reusable workflow resolved under $RUNNER_TEMP, keyed to this process so two runs never
 // collide. An issue verb's hooks exchange the spec (fetch-spec writes it) and the comment
 // finalize posts; `review-pr`'s exchange the review payload the run writes and finalize
-// posts through the reviews API (issue #141).
+// posts through the reviews API (issue #141), and `implement-pr`'s the per-comment replies
+// the run writes and finalize posts as threaded replies (issue #142).
 const specFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-spec.md`);
 const commentFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-comment.md`);
 const reviewFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-review.json`);
+const repliesFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-replies.json`);
 // Where the first slice mirrors the branch/base it resolved, so an attended `ask`
 // finalize can thread them into its confirmed tail-only slice (issue #57).
 const stateFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-state`);
@@ -411,10 +425,20 @@ if (shape.subject === "issue") {
   // in between. The worktree stays the cwd of the agent run, which reads the code under
   // review.
   runEnv.TOOLING_DIR = invokingCheckout();
+  // The branch the run's commits are pushed BACK to, in the slot the reusable workflow
+  // fills from the pull-request event (issue #142). A property of the subject rather than
+  // of the verb, so it rides along for every PR run; only a verb whose plan pushes reads
+  // it. Pushing to the head ref BY NAME is what lets the worktree stay detached at the
+  // fetched head — and the push is a plain one, so a head that advanced remotely during
+  // the run self-reports blocked instead of being overwritten.
+  if (subjectInfo.headRefName) runEnv.HEAD_REF = subjectInfo.headRefName;
 }
 // `review-pr`'s run writes the reviews-API payload here and its finalize posts it; in CI
-// the workflow resolves the same file under $RUNNER_TEMP (issue #141).
+// the workflow resolves the same file under $RUNNER_TEMP (issue #141). `implement-pr`'s
+// replies file is the same slot: the run writes the summary and the per-comment replies,
+// and the finalize the push-and-finalize step invokes posts them (issue #142).
 if (verb === "review-pr") runEnv.REVIEW_FILE = reviewFile;
+if (verb === "implement-pr") runEnv.REPLIES_FILE = repliesFile;
 // The hooks require GH_REPO; in CI the workflow supplies `github.repository`, and an
 // attended run has no workflow — so it is derived from the checkout's own origin
 // remote. Without it the FIRST hook refuses with a missing-variable message, which
@@ -478,7 +502,8 @@ let code = outcome === "aborted" ? 130 : outcome === "failed" ? child.status || 
 if (outcome === "succeeded") {
   if (finalizeMode === "auto") {
     // Full parity: the single sequence already did the whole tail — `implement` pushed and
-    // opened the PR, `review-pr` posted the review. Only the runs that REPORT a finalize
+    // opened the PR, `review-pr` posted the review, `implement-pr` pushed its commits to the
+    // pull request's head and posted the replies. Only the runs that REPORT a finalize
     // record it; `explore`'s read-only comment always posts and needs no accounting.
     finalized = reportsFinalize;
   } else if (finalizeMode === "ask") {

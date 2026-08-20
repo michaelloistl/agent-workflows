@@ -8,6 +8,26 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Run **`implement-pr` as an attended run**: `agent-workflows implement-pr <pr>` addresses a
+  pull request's review feedback on your own machine, end to end. It reuses everything the
+  attended `review-pr` run established — the worktree at the pull request's head, the
+  bootstrap, the fork refusal, the tooling directory at the invoking checkout, both mutexes,
+  `--force`, the streamed output, the summary — and adds the difference between a read-only
+  verb and one that produces commits. The agent commits onto the checked-out pull-request
+  head and the run pushes those commits to the head ref BY NAME, which is why the worktree
+  can stay detached at the fetched head. The push is a plain one: a branch that advanced
+  remotely during the run self-reports blocked rather than being overwritten. The
+  per-comment replies are then posted and the tracker updated exactly as the unattended path
+  does — the replies file being another slot the workflow fills under the runner's temp
+  directory in CI and the entry point fills locally. A clean success **retains** the
+  worktree, unlike the read-only verb's: what provides inspection is the surviving tree you
+  can open and diff, the same reasoning the issue `implement` verb already follows; a
+  failure or a Ctrl-C abort retains it too. `--interactive` becomes reachable for the first
+  time — the eligibility predicate already admitted this verb — so the fixes can be steered
+  in a live agent session rather than watched headless; the push and finalize that follow
+  are unchanged by it. Finalize is full parity with the unattended path; withholding it with
+  `--finalize=ask|never` is the next slice. The unattended `implement-pr` path is unchanged,
+  its plan pin unaltered.
 - Run **`review-pr` as an attended run**: `agent-workflows review-pr <pr>` reviews a pull
   request on your own machine, end to end. The run creates a worktree under the configured
   root — never your checkout — detached at the pull request's head, bootstraps it with the
