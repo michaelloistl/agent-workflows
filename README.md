@@ -344,7 +344,7 @@ agent-workflows explore 55            # run `explore` locally against issue #55
 agent-workflows implement 57          # build issue #57 end to end (--finalize=ask|never)
 agent-workflows implement 57 --interactive   # steer a live agent session
 agent-workflows review-pr 138         # review PR #138 (--finalize=ask|never to hold it back)
-agent-workflows implement-pr 138      # address PR #138's review feedback
+agent-workflows implement-pr 138      # address PR #138's feedback (--finalize=ask|never)
 agent-workflows implement-pr 138 --interactive   # steer the fixes live
 ```
 
@@ -362,7 +362,7 @@ you read what nothing published; and every run retains its tree on failure or ab
 Each verb runs the SAME sequence the unattended path hands the sequencer, so the two
 paths cannot drift.
 
-Both PR verbs finalize with full parity by default. `review-pr`'s review posts to
+Both PR verbs finalize with full parity by default, and both hold that finalize back on request. `review-pr`'s review posts to
 the pull request through the reviews API, exactly as the unattended run's does — and
 `--finalize=ask|never` holds it back, as it does for `implement`: `never` composes
 the review and posts nothing, while `ask` prints what it is about to post and posts
@@ -380,9 +380,16 @@ being overwritten — and then posts the threaded replies and updates the tracke
 run that produced no commits addressed nothing: the agent run is a failing step of
 the shared plan, so the sequence stops there — the same disposition that reports
 an unattended run blocked — rather than pushing an unchanged branch and claiming
-the feedback was addressed. `--interactive` is available for it, handing the
-composed prompt to a live agent session you steer; everything after the agent run
-— the push, the replies, the tracker update — is unchanged by it.
+the feedback was addressed. It reads `--finalize=ask|never` too, so you can read the
+commits before they are pushed: `never` leaves them on the retained worktree and
+pushes nothing, while `ask` prints how many commits it is about to push, to which
+head ref, and how many replies it will post, then does it only on an explicit `y`.
+A confirmed `ask` pushes and posts exactly what an `auto` run would have — the
+confirmation runs the same plan's tail on its own, non-fast-forward self-report
+included, that push and finalize being one bundled step. `--interactive` is available
+for it, handing the composed prompt to a live agent session you steer; everything
+after the agent run — the push, the replies, the tracker update — is unchanged by it,
+and it composes with every finalize mode.
 
 Two things differ from CI on purpose. A **cross-repository (fork)** pull request is
 refused before any worktree is created — its head lives on another repository, which an attended

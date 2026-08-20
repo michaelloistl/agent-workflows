@@ -67,9 +67,10 @@ export interface ShellStep extends StepBase {
 
 export type Step = HookStep | ShellStep;
 
-// How an attended run finalizes (issues #57, #143). `auto` is full parity with the
-// unattended path — the single sequence does the whole tail (`implement` pushes, opens
-// the PR, and updates the tracker; `review-pr` posts the review). `never` stops with
+// How an attended run finalizes (issues #57, #143, #144). `auto` is full parity with the
+// unattended path — the single sequence does the whole tail (`implement` pushes, opens the
+// PR, and updates the tracker; `review-pr` posts the review; `implement-pr` pushes its
+// commits to the pull request's head and posts the replies). `never` stops with
 // the work composed locally and nothing on GitHub. `ask` composes the same work, then
 // finalizes only on the developer's confirmation. Unattended runs never set this; they
 // always finalize (`auto`).
@@ -104,7 +105,8 @@ export interface RunContext {
   // unattended runs (which never set it).
   readonly finalize?: FinalizeMode;
   // Run ONLY the finalize tail — `implement` pushes the branch and opens the PR;
-  // `review-pr` posts the composed review and reports done (issues #57, #143). The
+  // `review-pr` posts the composed review and reports done; `implement-pr` pushes its
+  // commits to the pull request's head and posts the replies (issues #57, #143, #144). The
   // attended `ask` path runs this as a second, confirmed slice after its first slice
   // composed the work; `implement`'s `BRANCH`/`BASE` are threaded in by the caller since
   // there is no fetch-spec in this slice.
@@ -213,11 +215,11 @@ function implementPlan(context: RunContext): readonly Step[] {
 // (`"tooling"`); the agent run acts on the PR head (`"work"`). There is NO
 // fetch-spec — a PR verb gathers its own PR context inside the run. The agent run
 // is a `failure` step, so a no-op (nothing to commit) reports blocked.
-// `withholds` is a WITHHELD attended run (issue #143), which drops this prefix's status
-// write along with its tail — so a `never` run and a declined `ask` run leave no label on
-// the pull request either. Only the verbs that honour a finalize mode pass it; the rest
-// take the default and their plans are unaltered by a mode, because dropping the label
-// while their push-and-finalize step still ran would withhold nothing.
+// `withholds` is a WITHHELD attended run (issues #143, #144), which drops this prefix's
+// status write along with its tail — so a `never` run and a declined `ask` run leave no
+// label on the pull request either. Only the verbs that honour a finalize mode pass it;
+// `update-branch` takes the default and its plan is unaltered by a mode, because dropping
+// the label while its push-and-finalize step still ran would withhold nothing.
 function prPrefix(withholds = false): Step[] {
   const steps: Step[] = [hook("guards", "refusal", [], {}, "tooling")];
   if (!withholds) steps.push(hook("status", "failure", ["in-progress"], {}, "tooling"));
@@ -280,11 +282,23 @@ function reviewPrPlan(context: RunContext): readonly Step[] {
 }
 
 // `implement-pr`: the agent commits onto the PR head, then push-and-finalize.
-function implementPrPlan(): readonly Step[] {
-  return [
-    ...prPrefix(),
-    shell("push-and-finalize", IMPLEMENT_PR_PUSH_AND_FINALIZE, "failure", {}, "work"),
-  ];
+function implementPrPlan(context: RunContext): readonly Step[] {
+  // The tail in isolation — the SAME bundled work-tree step the full sequence ends with,
+  // push and finalize together because finalize only makes sense after a successful push.
+  // An attended `ask` run (issue #144) runs it as a second, confirmed slice after the first
+  // slice made the commits, so a confirmed local finalize pushes to the head ref, posts the
+  // replies, and self-reports a non-fast-forward exactly as CI's tail does.
+  if (context.finalizeTailOnly) {
+    return [shell("push-and-finalize", IMPLEMENT_PR_PUSH_AND_FINALIZE, "failure", {}, "work")];
+  }
+  const withholds = withholdsFinalize(context);
+  const steps = prPrefix(withholds);
+  // A withheld run stops with the commits in the worktree and nothing pushed; an `auto` run
+  // (and every unattended run) pushes and finalizes in this one sequence — full parity.
+  if (!withholds) {
+    steps.push(shell("push-and-finalize", IMPLEMENT_PR_PUSH_AND_FINALIZE, "failure", {}, "work"));
+  }
+  return steps;
 }
 
 // `update-branch`: the agent merges the base into the PR head, then push-and-finalize.
@@ -319,7 +333,7 @@ function fullPlan(verb: string, context: RunContext): readonly Step[] {
     case "review-pr":
       return reviewPrPlan(context);
     case "implement-pr":
-      return implementPrPlan();
+      return implementPrPlan(context);
     case "update-branch":
       return updateBranchPlan();
     case "implement-spec":
@@ -366,14 +380,15 @@ export function retainWorktree(outcome: LocalOutcome, verb?: string, withheld?: 
   return false;
 }
 
-// The verbs whose attended run honours `--finalize=ask|never` (issues #57, #143): the
-// issue verb that produces commits and the pull-request verb that composes a review the
-// developer may want to read before it is posted. `explore`'s read-only comment always
-// posts, and the remaining PR verbs finalize with full parity until their own slice
-// lands — extending the flag to one of them is this list plus its plan's withheld shape.
-const WITHHOLDABLE_VERBS = ["implement", "review-pr"] as const;
+// The verbs whose attended run honours `--finalize=ask|never` (issues #57, #143, #144): the
+// two that produce commits the developer may want to look at before they are pushed, and
+// the one that composes a review they may want to read before it is posted. `explore`'s
+// read-only comment always posts, and `update-branch` — whose whole point is the push —
+// finalizes with full parity until its own slice lands; extending the flag to it is this
+// list plus its plan's withheld shape.
+const WITHHOLDABLE_VERBS = ["implement", "review-pr", "implement-pr"] as const;
 
-// Whether `verb`'s attended run reads `--finalize=<mode>` (issue #143). Pure — the single
+// Whether `verb`'s attended run reads `--finalize=<mode>` (issues #143, #144). Pure — the single
 // source of truth the entry point consults, so which verbs can withhold a finalize is a
 // tested decision here rather than a condition inside the shell. A verb that does not
 // honour it always runs `auto`, and its plan is therefore unaltered.
@@ -538,14 +553,22 @@ function finalizedWork(verb: string): string {
   }
 }
 
-// What a WITHHELD run did not do, and where what it composed is instead (issue #143) —
-// again in the verb's own terms: a read-only review was never posted and is readable in
-// the retained worktree, while a commit-producing verb's work is the commits it left on
-// the branch there.
+// What a WITHHELD run did not do, and where what it composed is instead (issues #143,
+// #144) — again in the verb's own terms: a read-only review was never posted and is
+// readable in the retained worktree, while a commit-producing verb's work is the commits
+// it left there. Which ref those commits sit on differs: an issue verb cut an agent branch
+// for them, whereas `implement-pr` committed onto the pull request's own checked-out head
+// and never cuts a branch at all, so naming one would send the developer looking for a ref
+// that does not exist.
 function withheldWork(verb: string): string {
-  return verb === "review-pr"
-    ? "the composed review is in the retained worktree"
-    : "the commits are on the agent branch in the worktree";
+  switch (verb) {
+    case "review-pr":
+      return "the composed review is in the retained worktree";
+    case "implement-pr":
+      return "the commits are on the pull request's head in the retained worktree";
+    default:
+      return "the commits are on the agent branch in the worktree";
+  }
 }
 
 function withheldAction(verb: string): string {
