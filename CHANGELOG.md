@@ -8,6 +8,26 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- **Withhold an attended `implement-pr` finalize** with `--finalize=ask|never`, the flag
+  the issue `implement` verb and the read-only `review-pr` already had, now on the verb
+  that commits onto a pull request. `never` stops with the commits on the retained
+  worktree — nothing pushed, no replies posted, the tracker untouched; `ask` prints how
+  many commits it is about to push, to which head ref, and how many threaded replies it
+  will post, and pushes only on an explicit `y` (a bare Enter or a non-interactive stdin
+  declines — the safe default). `auto` remains the default and remains full parity with
+  the unattended path, its plan pin unaltered. A withheld run touches the pull request NOT
+  AT ALL: the plan drops the in-progress status write along with the tail, so a `never`
+  run and a declined `ask` run leave no label, no comment and no commit on the remote. A
+  confirmed `ask` lands exactly what an `auto` run would have, down to the
+  non-fast-forward self-report: this verb's push and finalize are one bundled step —
+  finalize only makes sense after a successful push — so the plan gained two shapes, the
+  run without that tail and the tail alone, each pinned by the plan module's tests, and
+  the confirmation runs the tail as a second slice. The worktree is retained either way,
+  as a commit-producing verb's clean success already was: the commits are what you
+  inspect. The run summary reports the mode, whether the run finalized, and where the tree
+  is, in this verb's own terms — commits on the pull request's head, never an agent branch
+  it does not cut. `--interactive` composes with every mode. `update-branch`, whose whole
+  point is the push, still does not read the flag and its plan is unaltered by a mode.
 - **Withhold an attended `review-pr` finalize** with `--finalize=ask|never`, the flag the
   issue `implement` verb already had, extended to a pull-request-numbered verb. `never`
   composes the review and posts nothing; `ask` prints what finalize is about to post — the

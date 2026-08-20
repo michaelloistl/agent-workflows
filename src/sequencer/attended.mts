@@ -11,7 +11,8 @@
 // `ask`/`never` compose the review and leave the pull request untouched (issue #143); and
 // `implement-pr` addresses that pull request's feedback, committing onto its checked-out
 // head and pushing those commits to the head ref by name (never force-pushing) before the
-// replies are posted.
+// replies are posted — reading the same flag too (issue #144), so the commits can be
+// looked at before anything is pushed.
 //
 // It creates a git worktree UNDER the configured root — never the checkout the
 // developer is sitting in — invokes the repo's own opaque bootstrap command to make
@@ -96,14 +97,14 @@ if (!attendable(verb)) {
 // difference between an attended issue run and an attended pull-request run follows from it.
 const shape = attendedRunShape(verb);
 
-// How this run finalizes (issues #57, #143). Which verbs read the flag is the plan
-// module's decision (`honoursFinalizeMode`), not a condition restated here: `implement`
-// and `review-pr` today — the verb that produces commits and the one that composes a
-// review the developer may want to read before it is posted. `explore`'s read-only
-// comment always posts and the remaining PR verbs finalize with full parity, so they run
-// `auto` whatever the argv says. `auto` (the default) is full parity with the unattended
-// path; `never` stops with the work composed locally; `ask` finalizes only on
-// confirmation.
+// How this run finalizes (issues #57, #143, #144). Which verbs read the flag is the plan
+// module's decision (`honoursFinalizeMode`), not a condition restated here: every attended
+// verb but `explore` today — the two that produce commits the developer may want to look
+// at before they are pushed, and the one that composes a review they may want to read
+// before it is posted. `explore`'s read-only comment always posts and `update-branch`
+// finalizes with full parity, so they run `auto` whatever the argv says. `auto` (the
+// default) is full parity with the unattended path; `never` stops with the work composed
+// locally; `ask` finalizes only on confirmation.
 let finalizeMode: FinalizeMode = "auto";
 if (honoursFinalizeMode(verb)) {
   try {
@@ -414,10 +415,10 @@ if (config.bootstrap) {
 // (state labels are still written normally); `FORCE` relaxes the guards step to
 // tolerated so a refusal is overruled rather than halting the run.
 //
-// For `implement` (issue #57) the finalize mode rides along too: a non-`auto` mode
-// drops the finalize tail (and the in-progress status write) so nothing reaches
-// GitHub until finalize, and `ask` additionally asks the sequence to mirror its
-// resolved branch/base to the state file for the confirmed finalize slice.
+// For the verbs that honour it (issues #57, #143, #144) the finalize mode rides along
+// too: a non-`auto` mode drops the finalize tail (and the in-progress status write) so
+// nothing reaches GitHub until finalize, and `ask` additionally asks the sequence to
+// mirror its resolved branch/base to the state file for the confirmed finalize slice.
 //
 // `--interactive` (issue #58) rides along as `INTERACTIVE`: the verb's run hook reads
 // it and hands the composed prompt to a live agent session instead of a headless run.
@@ -489,6 +490,19 @@ const launch =
         args: [fileURLToPath(new URL("../../bin/agent-workflows.mjs", import.meta.url)), verb],
       }
     : { file: "yarn", args: [`sandcastle:${verb}-sequence`] };
+// The worktree's head BEFORE the run, so an `ask` finalize can say how many commits it is
+// about to push (issue #144). Recorded only for the run that will be asked — a PR run
+// holding its push back — because it is the only one that reads it, and a detached tree
+// that cannot answer simply leaves the count out.
+let headBeforeRun = "";
+if (finalizeMode === "ask" && shape.checkout === "pr-head") {
+  try {
+    headBeforeRun = capture("git", ["-C", tree, "rev-parse", "HEAD"]);
+  } catch {
+    headBeforeRun = "";
+  }
+}
+
 const child = spawnSync(launch.file, launch.args, {
   stdio: "inherit",
   cwd: tree,
@@ -521,9 +535,39 @@ function composedReview(): string {
   }
 }
 
+// What the pending `implement-pr` finalize will post, read back from the payload its
+// finalize hook posts (`{ summary, replies[] }`), so `ask` shows what it is about to do
+// rather than asking blind (issue #144) — the same accounting `composedReview` does for the
+// read-only verb.
+function composedReplies(): string {
+  try {
+    const payload = JSON.parse(readFileSync(repliesFile, "utf8")) as { replies?: unknown[] };
+    const n = payload.replies?.length ?? 0;
+    return `${n} threaded repl${n === 1 ? "y" : "ies"} and a summary comment`;
+  } catch {
+    return "replies that could not be read back";
+  }
+}
+
+// How many commits the run added to the worktree's head, counted against the head as it
+// stood before the run (issue #144). What an `implement-pr` developer is confirming is a
+// PUSH, so the number of commits it will push is the fact worth showing. `undefined` when
+// it cannot be counted — a reused tree whose recorded head is missing, say — and the
+// announcement then says "commits" rather than inventing a count.
+function commitsSinceRunStart(): number | undefined {
+  if (!headBeforeRun) return undefined;
+  try {
+    const range = `${headBeforeRun}..HEAD`;
+    const count = Number(capture("git", ["-C", tree, "rev-list", "--count", range]));
+    return Number.isFinite(count) ? count : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Print what the pending finalize will do, in the verb's own terms, and report whether
-// there is one to run at all (issues #57, #143). A `false` return is NOT a decline: the
-// run left nothing to finalize with, so there is nothing to ask about.
+// there is one to run at all (issues #57, #143, #144). A `false` return is NOT a decline:
+// the run left nothing to finalize with, so there is nothing to ask about.
 function announceFinalize(): boolean {
   if (verb === "review-pr") {
     console.log(
@@ -532,6 +576,19 @@ function announceFinalize(): boolean {
     console.log(
       `attended: finalize will post that review to PR #${issue} through the reviews API and ` +
         `mark the run done — exactly the unattended path.`,
+    );
+    return true;
+  }
+  if (verb === "implement-pr") {
+    const made = commitsSinceRunStart();
+    const commits = made === undefined ? "commits" : `${made} commit${made === 1 ? "" : "s"}`;
+    console.log(
+      `attended: implement-pr #${issue} produced ${commits} on the pull request's head in ${tree}.`,
+    );
+    console.log(
+      `attended: finalize will push them to ${subjectInfo.headRefName ?? "the head ref"} — a plain ` +
+        `push, so a head that advanced remotely self-reports blocked rather than being overwritten ` +
+        `— then post ${composedReplies()} and mark the run done. Exactly the unattended path.`,
     );
     return true;
   }
@@ -549,8 +606,9 @@ function announceFinalize(): boolean {
 
 // Run the confirmed finalize: the SAME launcher against the SAME worktree, with
 // `FINALIZE_TAIL_ONLY` selecting the plan's tail alone — so a confirmed local finalize
-// does exactly what an `auto` run's single sequence did, and no more. The first slice's
-// whole environment rides along (the scratch files finalize reads back, the tooling
+// does exactly what an `auto` run's single sequence did, and no more — down to
+// `implement-pr`'s non-fast-forward self-report, which lives inside that bundled tail.
+// The first slice's whole environment rides along (the scratch files finalize reads back, the tooling
 // directory, the repo slug), plus the branch/base an `implement` tail needs and has no
 // fetch-spec of its own to resolve. Returns the tail's exit code.
 function runFinalizeTail(): number {
