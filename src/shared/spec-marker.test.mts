@@ -43,8 +43,11 @@ test("advance stands down while the spec carries the marker", () => {
   assert.match(reason, /agent:local/);
   // A refusal, not a failure — the distinction the message must carry.
   assert.match(reason, /not a failure/);
-  // And the way out of a marker nobody owns.
+  // And the way out of a marker nobody owns — which is two steps, because this run
+  // is the one the merge fired and it is exiting: taking the label off dispatches
+  // nothing on its own, so the message names the re-run as well.
   assert.match(reason, /remove/);
+  assert.match(reason, /re-run/);
 });
 
 test("advance proceeds when the spec does not carry the marker", () => {
@@ -68,13 +71,19 @@ test("claiming the marker names the spec and what it suppresses", () => {
   assert.doesNotMatch(line, /stale/);
 });
 
-// A crashed run leaves the marker behind, which would silently disable CI advance
-// for that spec forever. Holding the local lock proves no live local run owns it, so
-// the next run reclaims it rather than refusing to start.
-test("reclaiming a stale marker is reported as a reclaim, not a fresh claim", () => {
+// A marker found while this run holds the local lock was left by a run that is not
+// alive — a crash, or (since ADR-0009) an ordinary halt, which KEEPS the marker. So
+// the reclaim sentence must read as a normal resume, not as a report of damage: the
+// developer who just declined a checkpoint and re-ran is the common case.
+test("reclaiming a marker reads as a resume, not as a fault", () => {
   const line = markerAcquired({ spec: 48, reclaimed: true });
-  assert.match(line, /stale/);
   assert.match(line, /#48/);
+  assert.match(line, /agent:local/);
+  assert.match(line, /reclaim/i);
+  // It names who left it and what is true now, without calling it stale or broken.
+  assert.match(line, /previous run/);
+  assert.match(line, /owns/);
+  assert.doesNotMatch(line, /stale/);
 });
 
 test("releasing the marker says the spec is CI's again", () => {
@@ -104,9 +113,15 @@ test("retaining the marker says what is still true and how to hand the spec back
   assert.match(line, /agent:local/);
   // Why it is still there — the run halted, so the spec is still the developer's.
   assert.match(line, /halted/);
-  // What that suppresses, and the single action that undoes it.
+  // What that suppresses, and the action that lifts it.
   assert.match(line, /stands down/);
   assert.match(line, /[Rr]emove/);
+  // Removing the label lifts the stand-down but dispatches nothing: `advance` fires
+  // on a MERGE, and the run that stood down has already exited. The sentence must
+  // not promise CI carries on by itself.
+  assert.match(line, /dispatches nothing|starts nothing/);
+  assert.match(line, /re-run/);
+  assert.match(line, /advance/);
   // And that resuming locally is not blocked by it.
   assert.match(line, /reclaim/);
 });

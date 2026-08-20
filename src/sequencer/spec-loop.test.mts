@@ -209,6 +209,38 @@ test("formatSpecSummary reports where a run halted", () => {
   assert.match(out, /halted at #6: the spec branch CI did not pass/);
 });
 
+// A halted run KEEPS the marker (ADR-0009), and the summary is what the developer
+// reads at the end of a long run — so the block that says the run halted also says
+// the spec is still marked, and what clears it.
+test("formatSpecSummary says the marker was kept and how to clear it", () => {
+  const out = formatSpecSummary({
+    spec: 3,
+    specBranch: "agent/spec-3-x",
+    dryRun: false,
+    merged: [4],
+    halted: { slice: 6, reason: "paused at a checkpoint — re-run to resume" },
+    finalPrOpened: false,
+    markerKept: true,
+  });
+  assert.match(out, /marker : /);
+  assert.match(out, /agent:local/);
+  assert.match(out, /#3/);
+});
+
+// Every other exit — a completed run, a dry run, a halt that never claimed one —
+// says nothing about the marker, so today's output is unchanged where nothing is held.
+test("formatSpecSummary omits the marker line when no marker is held", () => {
+  const out = formatSpecSummary({
+    spec: 3,
+    specBranch: "agent/spec-3-x",
+    dryRun: false,
+    merged: [4, 6],
+    halted: null,
+    finalPrOpened: true,
+  });
+  assert.doesNotMatch(out, /marker : /);
+});
+
 test("formatSpecSummary reports a dry run as previewed", () => {
   const out = formatSpecSummary({
     spec: 3,

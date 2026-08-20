@@ -397,6 +397,10 @@ function elapsedSeconds(): number {
 // it. A DRY RUN never merges, so it never fires advance and never takes the marker.
 let markerHeld = false;
 
+// Whether the marker was left on the spec issue at exit, so the summary can say so
+// beside the halt it belongs to (the loop prints the fuller sentence just above it).
+let markerKept = false;
+
 // The spec's labels, or null when they cannot be read (a `gh` hiccup) — the caller
 // treats null as "unknown", never as "absent".
 function readSpecLabels(): string[] | null {
@@ -407,8 +411,9 @@ function readSpecLabels(): string[] | null {
   }
 }
 
-// Claim the marker before the first merge. A marker already there is stale by
-// construction (this run holds the lock), so it is reclaimed rather than refused.
+// Claim the marker before the first merge. A marker already there was left by a run
+// that is not alive — this run holds the lock — whether it halted (which keeps the
+// marker) or died, so it is reclaimed rather than refused.
 // The claim is VERIFIED, unlike every other label edit in the fleet: an unapplied
 // marker means CI races every merge this run makes, so it halts before the first one.
 function acquireMarker(): void {
@@ -429,7 +434,7 @@ function acquireMarker(): void {
   }
   markerHeld = true;
   console.log(markerAcquired({ spec: specNum, reclaimed }));
-  record(null, "marker", reclaimed ? "reclaimed a stale marker" : "claimed");
+  record(null, "marker", reclaimed ? "reclaimed the previous run's marker" : "claimed");
 }
 
 // Settle the marker at the single exit, on the terminal state the run reached: a
@@ -440,6 +445,7 @@ function settleMarker(outcome: RunOutcome): void {
   if (!markerHeld) return;
   markerHeld = false;
   if (!markerReleasedOnExit(outcome)) {
+    markerKept = true;
     console.log(markerRetained(specNum));
     record(null, "marker", "retained (the run halted)");
     return;
@@ -468,7 +474,8 @@ function finish(code: number, opts: { removeWorktree?: boolean } = {}): never {
   // Record the terminal transition (issue #62) and, best-effort, fire the Herdr
   // notification for it. This is the single exit, so every halt and every completion
   // is captured here once. A dry run's halt-before-merge and the deadlocked "done"
-  // exit are captured too; only a completion (final PR opened) notifies success.
+  // exit are halts too, and are captured as such; only a completion (final PR opened)
+  // notifies success.
   if (halted) {
     record(halted.slice, "halt", halted.reason);
     herdr.notifyHalt({ spec: specNum, reason: halted.reason });
@@ -485,6 +492,7 @@ function finish(code: number, opts: { removeWorktree?: boolean } = {}): never {
       merged: built,
       halted,
       finalPrOpened,
+      markerKept,
       // Report what was consumed against the ceiling on exit (issue #61) — only when
       // a ceiling was configured, so an unbounded run's summary is unchanged.
       ceiling: hasCeiling(ceiling)
@@ -677,8 +685,15 @@ async function drive(): Promise<never> {
     }
     if (action.type === "done") {
       // No ready slice and not complete — the remainder deadlocked on a cycle. Not a
-      // failure; the preview already surfaced the deadlocked slices.
+      // failure (the preview already surfaced the deadlocked slices), but it IS a
+      // halt: the spec is unfinished and waiting for a human to break the cycle. It
+      // is recorded as one so the summary, the run log, and the retained marker all
+      // say the same thing about a run that stopped short.
       console.log("spec-loop: no ready slice (the remainder is deadlocked on a dependency cycle).");
+      halted = {
+        slice: lastMerged ?? specNum,
+        reason: "no ready slice — the remainder is deadlocked on a dependency cycle",
+      };
       finish(0);
     }
 

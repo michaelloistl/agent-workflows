@@ -9,8 +9,9 @@
 // the run COMPLETES — not when the process exits. A run that halts is waiting for the
 // developer, so the spec is still owned and the marker stays; releasing it there would
 // hand a stopped spec straight back to CI, which would then build the very slice the
-// developer stopped. Nothing is stranded by that: the loop prints the one action that
-// clears it, and a marker found by a run that holds the local lock is reclaimed.
+// developer stopped. Nothing is stranded by that: the loop prints what it takes to
+// hand the spec back to CI, and a marker found by a run that holds the local lock is
+// reclaimed — which, now that a halt keeps it, is the ordinary resume.
 //
 // WHY THE MARKER EXISTS. The attended spec loop merges each tracer-bullet PR into
 // the spec branch, exactly as CI does — that parity is the point (ADR-0006). But
@@ -68,17 +69,20 @@ export function advanceStandDown(state: AdvanceOwnership): string | null {
     `Standing down: spec #${state.spec} carries \`${LOCAL_RUN_LABEL}\`, so an attended local ` +
     `run owns this spec's sequencing and will build the next tracer-bullet itself. CI advance ` +
     `dispatched nothing — this is a refusal, not a failure. If no local run is active, remove ` +
-    `\`${LOCAL_RUN_LABEL}\` from #${state.spec} to hand the spec back to CI.`
+    `\`${LOCAL_RUN_LABEL}\` from #${state.spec} and re-run this run to hand the spec back to CI ` +
+    `— the label alone lifts the stand-down, but nothing re-reads it until the next merge.`
   );
 }
 
 // The line the loop prints when it takes the marker. A marker already present when
-// the loop holds the local lock was left by a run that died (the lock proves no live
-// local run holds it), so it is RECLAIMED rather than refused — a crashed loop must
-// not disable CI advance for a spec forever.
+// the loop holds the local lock was left by a run that is not alive (the lock proves
+// no live local run holds it), so it is RECLAIMED rather than refused — no run, alive
+// or dead, may disable CI advance for a spec forever. Since a halt KEEPS the marker,
+// reclaiming is the ORDINARY resume path — the developer who declined a checkpoint
+// and re-ran — so the sentence reports a handover, not damage.
 export function markerAcquired(o: { spec: number; reclaimed: boolean }): string {
   return o.reclaimed
-    ? `spec-loop: reclaimed a stale \`${LOCAL_RUN_LABEL}\` marker on #${o.spec} (left by a run that did not release it) — this run now owns the spec's sequencing.`
+    ? `spec-loop: reclaimed the \`${LOCAL_RUN_LABEL}\` marker the previous run left on #${o.spec} (a halted run keeps it) — this run now owns the spec's sequencing.`
     : `spec-loop: claimed \`${LOCAL_RUN_LABEL}\` on #${o.spec} — CI advance stands down until this run releases it.`;
 }
 
@@ -101,14 +105,23 @@ export function markerReleased(spec: number): string {
 }
 
 // The line a halted run prints on its way out: the marker is still there, what that
-// suppresses, the single action that hands the spec back to CI, and the fact that
-// resuming locally is not blocked by it.
+// suppresses, what it takes to hand the spec back to CI, and the fact that resuming
+// locally is not blocked by it.
+//
+// The hand-back is TWO steps, and the sentence says so rather than implying one.
+// Removing the label lifts the stand-down, but it dispatches nothing: `advance` is
+// fired by a MERGE, and the run fired by this spec's last merge has already read the
+// marker, stood down and exited. Something has to start CI again — re-running that
+// stood-down run is the cheapest way, labelling the next tracer-bullet `agent:implement`
+// the manual one.
 export function markerRetained(spec: number): string {
   return (
     `spec-loop: kept \`${LOCAL_RUN_LABEL}\` on #${spec} — the run halted, so this spec's ` +
-    `sequencing is still yours and CI advance stands down until the marker goes. Remove ` +
-    `\`${LOCAL_RUN_LABEL}\` from #${spec} to hand the spec back to CI; the next attended run ` +
-    `reclaims it if you resume here instead.`
+    `sequencing is still yours and CI advance stands down until the marker goes. To hand the ` +
+    `spec back to CI, remove \`${LOCAL_RUN_LABEL}\` from #${spec} and re-run the advance run ` +
+    `that stood down (or label the next tracer-bullet \`agent:implement\`) — removing the label ` +
+    `lifts the stand-down but dispatches nothing by itself. To resume here instead, just re-run ` +
+    `the loop: it reclaims the marker.`
   );
 }
 
