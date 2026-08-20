@@ -380,6 +380,24 @@ export function retainWorktree(outcome: LocalOutcome, verb?: string, withheld?: 
   return false;
 }
 
+// Whether a finished attended run must report `blocked` on its subject (issue #139's
+// review). Every unattended workflow retires its own `agent:in-progress` write with an
+// `if: failure()` (and `if: cancelled()`) → `status blocked` step; an attended run has no
+// workflow around it, so without this the label the run wrote survives the run and the
+// next one — attended or unattended — is refused until someone clears it by hand. The
+// commonest attended `implement-pr` failure, the run hook's deliberate non-zero exit when
+// the agent produced no commits, walks straight into that.
+//
+// A run that SUCCEEDED already reported done in its tail, and a REFUSED one stopped at
+// guards, before the status write, having posted its own explanation. A WITHHELD run
+// (`ask`/`never`) never wrote the label at all — its plan drops the in-progress step along
+// with the tail — so reporting blocked would be the one trace on the pull request that
+// withholding promises not to leave. An absent mode is an unattended-shaped `auto` run.
+export function reportsBlocked(outcome: LocalOutcome, finalize?: FinalizeMode): boolean {
+  if (finalize === "ask" || finalize === "never") return false;
+  return outcome === "failed" || outcome === "aborted";
+}
+
 // The verbs whose attended run honours `--finalize=ask|never` (issues #57, #143, #144): the
 // two that produce commits the developer may want to look at before they are pushed, and
 // the one that composes a review they may want to read before it is posted. `explore`'s
@@ -457,8 +475,9 @@ export type AttendedSubject = "issue" | "pull-request";
 
 // The shape of an attended run, derived from its verb (issue #140). Returned as DATA the
 // entry point applies rather than as the per-verb branches it would otherwise accumulate
-// once a PR-numbered verb becomes attendable. Both attendable verbs are issue-numbered
-// today, so nothing branches on it yet; it is the fact every later slice branches on.
+// now that PR-numbered verbs are attendable: which object the `agent:in-progress` check
+// reads, what the worktree checks out, and which environment variables the hooks are
+// given all follow from this one fact.
 export interface AttendedRunShape {
   // What the run's number names — and so which object carries the `agent:in-progress`
   // mutex the entry point checks before it starts: the issue for an issue-numbered verb,
@@ -521,6 +540,13 @@ export interface RunSummary {
   // Whether the finalize tail actually ran and succeeded (pushed + opened the PR, or
   // posted the review).
   readonly finalized?: boolean;
+  // Whether a CONFIRMED finalize ran and exited non-zero. Distinct from both of the
+  // above: such a run neither finalized nor withheld anything, and `implement-pr`
+  // bundles its push and its finalize into one step, so part of the tail may have
+  // landed before it failed. Without this the run falls into the withheld bucket and
+  // the summary claims nothing left the machine — the one disposition it must not get
+  // wrong.
+  readonly finalizeFailed?: boolean;
 }
 
 // Render the summary as a compact block. Pure — a string derivation the entry point
@@ -531,7 +557,9 @@ export function formatRunSummary(s: RunSummary): string {
     `worktree: ${s.retained ? "retained" : "removed"} at ${s.tree}`,
   ];
   if (s.finalize) {
-    lines.push(`finalize: ${finalizeSummaryLine(s.verb, s.finalize, s.finalized ?? false)}`);
+    lines.push(
+      `finalize: ${finalizeSummaryLine(s.verb, s.finalize, s.finalized ?? false, s.finalizeFailed ?? false)}`,
+    );
   }
   return lines.join("\n");
 }
@@ -575,8 +603,20 @@ function withheldAction(verb: string): string {
   return verb === "review-pr" ? "nothing posted" : "nothing pushed";
 }
 
-function finalizeSummaryLine(verb: string, mode: FinalizeMode, finalized: boolean): string {
+function finalizeSummaryLine(
+  verb: string,
+  mode: FinalizeMode,
+  finalized: boolean,
+  finalizeFailed: boolean,
+): string {
   if (finalized) return `${mode} — ${finalizedWork(verb)}`;
+  // A confirmed finalize that FAILED is not a withheld one: it ran, and for
+  // `implement-pr` — whose push and finalize are one bundled step — the push may have
+  // landed before the rest did not. Say so and send the developer to look, rather than
+  // reporting the withheld phrasing's "nothing pushed".
+  if (finalizeFailed) {
+    return `${mode} — finalize ran and did not succeed; part of it may have landed, so check before re-running`;
+  }
   switch (mode) {
     case "never":
       return `never — ${withheldAction(verb)}; ${withheldWork(verb)}`;

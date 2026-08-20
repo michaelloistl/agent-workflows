@@ -12,6 +12,7 @@ import {
   attendedRunShape,
   formatRunSummary,
   honoursFinalizeMode,
+  reportsBlocked,
   type Step,
 } from "./plan.mts";
 
@@ -722,4 +723,66 @@ test("formatRunSummary reports an implement-pr run's push and replies", () => {
     finalized: false,
   });
   assert.match(failed, /finalize: auto — not finalized \(the run did not succeed\)/);
+});
+
+// A confirmed `ask` whose finalize tail FAILED is neither finalized nor withheld — the
+// one disposition the summary must not get wrong. `implement-pr` bundles the push and
+// the finalize into a single step, so a tail that exits non-zero may have pushed the
+// commits already; reporting "not finalized; the commits are on the pull request's head
+// in the retained worktree" would tell the developer nothing left the machine. The line
+// says the finalize RAN and did not succeed, and points at checking what landed.
+test("formatRunSummary reports a confirmed finalize that failed as neither posted nor withheld", () => {
+  const failedTail = formatRunSummary({
+    verb: "implement-pr",
+    issue: "138",
+    outcome: "failed",
+    retained: true,
+    tree: "/tmp/wt/implement-pr-138",
+    finalize: "ask",
+    finalized: false,
+    finalizeFailed: true,
+  });
+  assert.match(failedTail, /finalize: ask — finalize ran and did not succeed/);
+  assert.doesNotMatch(failedTail, /the commits are on the pull request's head/);
+  assert.doesNotMatch(failedTail, /nothing pushed/);
+
+  // The same for the read-only verb: a review whose posting failed is not a review the
+  // developer withheld.
+  const failedReview = formatRunSummary({
+    verb: "review-pr",
+    issue: "138",
+    outcome: "failed",
+    retained: true,
+    tree: "/tmp/wt/review-pr-138",
+    finalize: "ask",
+    finalized: false,
+    finalizeFailed: true,
+  });
+  assert.match(failedReview, /finalize: ask — finalize ran and did not succeed/);
+  assert.doesNotMatch(failedReview, /nothing posted/);
+});
+
+// Whether a finished attended run reports `blocked` on its subject. The unattended path
+// clears its own `agent:in-progress` write with an `if: failure()` → `status blocked`
+// step in every verb's workflow; an attended run has no workflow, so the same decision
+// lives here. A failed or aborted run that WROTE the label reports blocked, so the next
+// run is not refused by a label the crashed one left behind; a run that succeeded (its
+// tail already reported done) does not, nor does a REFUSED one, whose guard stopped the
+// sequence before the status write and posted its own explanation.
+test("reportsBlocked names the runs that must retire their in-progress write", () => {
+  assert.equal(reportsBlocked("failed", "auto"), true);
+  assert.equal(reportsBlocked("aborted", "auto"), true);
+  assert.equal(reportsBlocked("succeeded", "auto"), false);
+  assert.equal(reportsBlocked("refused", "auto"), false);
+});
+
+// A WITHHELD run never wrote the label — its plan drops the in-progress status step
+// along with the finalize tail — so there is nothing to retire, and reporting blocked
+// would be the one trace on the pull request that `--finalize=never` promises not to
+// leave. An absent mode is an unattended-shaped `auto` run and reports.
+test("reportsBlocked leaves a withheld run's subject untouched", () => {
+  assert.equal(reportsBlocked("failed", "never"), false);
+  assert.equal(reportsBlocked("failed", "ask"), false);
+  assert.equal(reportsBlocked("aborted", "never"), false);
+  assert.equal(reportsBlocked("failed", undefined), true);
 });

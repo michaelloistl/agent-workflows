@@ -8,6 +8,37 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- **An attended run that fails or is aborted reports its subject `blocked`.** Every
+  unattended workflow retires its own `agent:in-progress` write with an `if: failure()`
+  (and `if: cancelled()`) → `status blocked` step outside the plan; an attended run had no
+  counterpart, so the label it wrote outlived the run and the next one — attended or
+  unattended — was refused until someone cleared it by hand. `implement-pr`'s commonest
+  failure, the run hook's deliberate non-zero exit when the agent produced no commits,
+  walked straight into it. Which runs report is a tested predicate in the plan module
+  beside the retention policy rather than a condition in the entry point: a failed or
+  aborted run reports, a succeeded one already reported done in its tail, and a refused
+  one stopped at guards before the status write and posted its own explanation. A
+  WITHHELD run is left alone — its plan never wrote the label — so `--finalize=never`
+  still touches the pull request not at all. The report is invoked exactly as CI invokes
+  it, through the verb's own `sandcastle:<verb>-status` script from the tooling checkout,
+  and a report that itself fails says so and changes nothing else.
+- **Three corrections to the attended PR verbs, and the trail behind them.** An `ask` on
+  `implement-pr` counts the commits it is about to push against the pull request's head
+  **as the remote has it** (re-fetched at the moment you are asked) rather than against
+  the worktree's head before the run: the push lands everything the remote head does not
+  have, so a retry on a tree retained from an earlier withheld run used to understate it.
+  A **confirmed** finalize that then fails is now reported as one that ran and did not
+  succeed — the run is a failure and its tree is retained — instead of falling into the
+  withheld bucket and claiming nothing left the machine, which for this verb's bundled
+  push-and-finalize could be false. And the composed replies live in the run's worktree
+  beside the review payload, so a withheld run's file is where the summary says its work
+  is; a stale one is removed before the run rather than read back as if this run had
+  written it. `gh` is pinned to the same repository slug the worktree is fetched from and
+  the hooks are given, so the run cannot read one pull request and check out another's
+  head. The tooling-directory inversion the PR verbs' attended path makes — hooks loaded
+  from the invoking checkout, not a detached default-branch worktree — is now recorded in
+  **ADR-0010** and in the hook contract, which described only CI's filling of the slot.
+
 - **Withhold an attended `implement-pr` finalize** with `--finalize=ask|never`, the flag
   the issue `implement` verb and the read-only `review-pr` already had, now on the verb
   that commits onto a pull request. `never` stops with the commits on the retained
