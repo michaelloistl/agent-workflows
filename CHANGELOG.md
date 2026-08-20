@@ -8,6 +8,25 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- **Withhold an attended `review-pr` finalize** with `--finalize=ask|never`, the flag the
+  issue `implement` verb already had, extended to a pull-request-numbered verb. `never`
+  composes the review and posts nothing; `ask` prints what finalize is about to post — the
+  summary, the inline-comment count, and the file holding it — and runs the finalize only
+  on an explicit `y`, a bare Enter or a non-interactive stdin declining, which is the safe
+  default. `auto` remains the default and remains full parity with the unattended path, its
+  plan pin unaltered. A withheld run touches the pull request NOT AT ALL: the plan drops
+  the in-progress status write along with the finalize tail, so a `never` run and a
+  declined `ask` run leave no label, no comment and no review — the same trace, which is
+  none. What the run composed is still written, now to a file inside the run's worktree,
+  and a withheld run RETAINS that worktree whatever the verb (a read-only verb's clean
+  success otherwise removes it), so you can read exactly what would have been posted. A
+  confirmed `ask` posts precisely what an `auto` run would have: the confirmation runs the
+  same plan's tail on its own — the review posted, then the run reported done. An
+  unrecognised mode is still refused by name rather than defaulting to the posting path,
+  and the run summary reports the mode and whether the run finalized, in the verb's own
+  terms. Which verbs read the flag is now a tested predicate in the plan module rather than
+  a condition in the entry point; `implement-pr` and `update-branch` do not read it yet and
+  their plans are unaltered by a mode.
 - Run **`implement-pr` as an attended run**: `agent-workflows implement-pr <pr>` addresses a
   pull request's review feedback on your own machine, end to end. It reuses everything the
   attended `review-pr` run established — the worktree at the pull request's head, the

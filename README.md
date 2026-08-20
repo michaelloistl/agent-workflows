@@ -343,7 +343,7 @@ fleet (the *unattended* path), you can run a verb on your own machine:
 agent-workflows explore 55            # run `explore` locally against issue #55
 agent-workflows implement 57          # build issue #57 end to end (--finalize=ask|never)
 agent-workflows implement 57 --interactive   # steer a live agent session
-agent-workflows review-pr 138         # review PR #138 and post the review
+agent-workflows review-pr 138         # review PR #138 (--finalize=ask|never to hold it back)
 agent-workflows implement-pr 138      # address PR #138's review feedback
 agent-workflows implement-pr 138 --interactive   # steer the fixes live
 ```
@@ -356,14 +356,25 @@ run before the agent starts), the agent's output streams to your terminal, and
 Ctrl-C aborts. Credentials come from your already-authenticated `gh` and existing
 agent credentials — the sequencer reads and writes no secret material. A read-only
 run's clean worktree is removed on success; a commit-producing verb's worktree
-(`implement`, `implement-pr`) is **retained** — it is what you inspect and diff —
-and every run retains its tree on failure or abort. Each verb runs the SAME
-sequence the unattended path hands the sequencer, so the two paths cannot drift.
+(`implement`, `implement-pr`) is **retained** — it is what you inspect and diff — as
+is any run that **withheld** its finalize, whatever the verb, that tree being where
+you read what nothing published; and every run retains its tree on failure or abort.
+Each verb runs the SAME sequence the unattended path hands the sequencer, so the two
+paths cannot drift.
 
-Both PR verbs finalize with full parity. `review-pr`'s review posts to the pull
-request through the reviews API, exactly as the unattended run's does.
-`implement-pr` commits onto the checked-out pull-request head, pushes those
-commits to the head ref **by name** — a plain push, never `--force`, so a branch
+Both PR verbs finalize with full parity by default. `review-pr`'s review posts to
+the pull request through the reviews API, exactly as the unattended run's does — and
+`--finalize=ask|never` holds it back, as it does for `implement`: `never` composes
+the review and posts nothing, while `ask` prints what it is about to post and posts
+only on an explicit `y` (a bare Enter, or a non-interactive stdin, declines — the
+safe default). A withheld review run touches the pull request **not at all**: no
+label, no comment, no review, the in-progress status write dropping along with the
+finalize tail, so a `never` run and a declined `ask` run leave the same trace, which
+is none. The composed review is left in the retained worktree as
+`agent-workflows-review.json`, so you can read exactly what would have been posted;
+confirming an `ask` posts precisely what an `auto` run would have, the confirmed
+finalize being the same plan's tail run on its own. `implement-pr` commits onto the
+checked-out pull-request head, pushes those commits to the head ref **by name** — a plain push, never `--force`, so a branch
 that advanced remotely during the run self-reports `agent:blocked` rather than
 being overwritten — and then posts the threaded replies and updates the tracker. A
 run that produced no commits addressed nothing: the agent run is a failing step of

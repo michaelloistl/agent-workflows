@@ -6,8 +6,9 @@
 // (push, open the draft PR, update the tracker), because what provides inspection is
 // the surviving worktree, not a withheld push. A `--finalize=ask|never` flag holds
 // everything off GitHub for the runs where the developer wants to look first.
-// `review-pr` reviews a pull request the same way, finalizing with full parity too —
-// the review posts through the reviews API, exactly as the unattended run's does; and
+// `review-pr` reviews a pull request the same way, and reads the same flag: `auto` posts
+// the review through the reviews API exactly as the unattended run's does, while
+// `ask`/`never` compose the review and leave the pull request untouched (issue #143); and
 // `implement-pr` addresses that pull request's feedback, committing onto its checked-out
 // head and pushing those commits to the head ref by name (never force-pushing) before the
 // replies are posted.
@@ -34,6 +35,7 @@ import {
   worktreePath,
   retainWorktree,
   parseFinalizeMode,
+  honoursFinalizeMode,
   interactiveEligible,
   interactiveVerbs,
   attendable,
@@ -94,13 +96,16 @@ if (!attendable(verb)) {
 // difference between an attended issue run and an attended pull-request run follows from it.
 const shape = attendedRunShape(verb);
 
-// How this run finalizes (issue #57). Only `implement` reads the flag — a PR verb's
-// finalize is full parity for now (issues #143/#144: withholding it is a later slice),
-// and `explore`'s read-only comment always posts. `auto` (the default) is full parity with
-// the unattended path; `never` stops with the commits on the agent branch; `ask`
-// finalizes only on confirmation.
+// How this run finalizes (issues #57, #143). Which verbs read the flag is the plan
+// module's decision (`honoursFinalizeMode`), not a condition restated here: `implement`
+// and `review-pr` today — the verb that produces commits and the one that composes a
+// review the developer may want to read before it is posted. `explore`'s read-only
+// comment always posts and the remaining PR verbs finalize with full parity, so they run
+// `auto` whatever the argv says. `auto` (the default) is full parity with the unattended
+// path; `never` stops with the work composed locally; `ask` finalizes only on
+// confirmation.
 let finalizeMode: FinalizeMode = "auto";
-if (verb === "implement") {
+if (honoursFinalizeMode(verb)) {
   try {
     finalizeMode = parseFinalizeMode(process.argv);
   } catch (err) {
@@ -232,7 +237,12 @@ if (subjectLabels.includes(IN_PROGRESS_LABEL) && !force) {
 // the run writes and finalize posts as threaded replies (issue #142).
 const specFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-spec.md`);
 const commentFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-comment.md`);
-const reviewFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-review.json`);
+// `review-pr`'s payload is the one scratch file that lives INSIDE the run's worktree
+// rather than under the OS temp dir (issue #143): it is what a WITHHELD review run
+// produces, and the retained worktree is where the developer reads what was not posted —
+// the same place a withheld `implement` run's commits are. An `auto` run's tree is removed
+// with the file in it, the review having reached the pull request.
+const reviewFile = join(tree, "agent-workflows-review.json");
 const repliesFile = join(tmpdir(), `agent-workflows-attended-${process.pid}-replies.json`);
 // Where the first slice mirrors the branch/base it resolved, so an attended `ask`
 // finalize can thread them into its confirmed tail-only slice (issue #57).
@@ -315,12 +325,13 @@ function outcomeOf(status: number | null, signal: NodeJS.Signals | null): LocalO
 // Settle the worktree and release the lock, returning whether the tree was kept so
 // the run summary can report its fate. The policy (plan.mts) retains on failure or
 // abort — and, for `implement`, on success too — so the developer can open exactly
-// what the run produced; it removes only a clean end with nothing to inspect. The
-// lock is ALWAYS released — on success, failure, and abort alike — so a retained
-// tree never wedges the key for the next run.
-function cleanup(outcome: LocalOutcome): boolean {
+// what the run produced; it retains a WITHHELD run's tree whatever the verb, that tree
+// being where the developer reads what nothing published (issue #143); and it removes
+// only a clean end with nothing to inspect. The lock is ALWAYS released — on success,
+// failure, and abort alike — so a retained tree never wedges the key for the next run.
+function cleanup(outcome: LocalOutcome, withheld: boolean): boolean {
   releaseLock(lock);
-  if (retainWorktree(outcome, verb)) return true;
+  if (retainWorktree(outcome, verb, withheld)) return true;
   const removed = run("git", ["worktree", "remove", "--force", tree]);
   if (removed.status !== 0) {
     console.error(`attended: worktree left at ${tree} (git worktree remove exited ${removed.status}).`);
@@ -331,8 +342,13 @@ function cleanup(outcome: LocalOutcome): boolean {
 
 // Settle the worktree, print the end-of-run summary (issue #57) so the developer
 // sees what happened without scrolling back through streamed output, and exit.
-function finish(outcome: LocalOutcome, finalized: boolean, code: number): never {
-  const retained = cleanup(outcome);
+function finish(
+  outcome: LocalOutcome,
+  finalized: boolean,
+  code: number,
+  withheld = false,
+): never {
+  const retained = cleanup(outcome, withheld);
   console.log("");
   console.log(
     formatRunSummary({
@@ -452,7 +468,7 @@ if (repoSlug) runEnv.GH_REPO = repoSlug;
 if (defaultBranch) runEnv.DEFAULT_BRANCH = defaultBranch;
 if (force) runEnv.FORCE = "true";
 if (interactive) runEnv.INTERACTIVE = "true";
-if (verb === "implement" && finalizeMode !== "auto") runEnv.FINALIZE_MODE = finalizeMode;
+if (finalizeMode !== "auto") runEnv.FINALIZE_MODE = finalizeMode;
 // Always ask the sequence to report its outcome back. A guard refusal exits 0 (a
 // refusal must leave CI green), so without this an attended run cannot tell a
 // refusal from a clean success — and `LocalOutcome`'s `refused` case, which the
@@ -491,11 +507,75 @@ const exitOutcome = outcomeOf(child.status, child.signal);
 const outcome: LocalOutcome =
   exitOutcome === "succeeded" && reported.outcome === "refused" ? "refused" : exitOutcome;
 
-// The finalize accounting. An `auto` run's single sequence already pushed and
-// opened the PR (full parity), so a clean success IS finalized. A `never` run never
-// finalizes. An `ask` run shows what finalize will do and runs it only on the
-// developer's confirmation — the tail-only slice, threaded the branch/base the first
-// slice resolved, so a confirmed local finalize lands on GitHub exactly as CI's does.
+// What the pending finalize would post, read back from the payload the `review-pr`
+// finalize hook posts (`{ body, event, comments[] }`), so `ask` shows what it is about to
+// do rather than asking blind (issue #143). An unreadable payload is described as such —
+// the developer is deciding on it, and a guess would be worse than the truth.
+function composedReview(): string {
+  try {
+    const payload = JSON.parse(readFileSync(reviewFile, "utf8")) as { comments?: unknown[] };
+    const inline = payload.comments?.length ?? 0;
+    return `a summary and ${inline} inline comment${inline === 1 ? "" : "s"}`;
+  } catch {
+    return "a review that could not be read back";
+  }
+}
+
+// Print what the pending finalize will do, in the verb's own terms, and report whether
+// there is one to run at all (issues #57, #143). A `false` return is NOT a decline: the
+// run left nothing to finalize with, so there is nothing to ask about.
+function announceFinalize(): boolean {
+  if (verb === "review-pr") {
+    console.log(
+      `attended: review-pr #${issue} composed ${composedReview()}, unposted, at ${reviewFile}.`,
+    );
+    console.log(
+      `attended: finalize will post that review to PR #${issue} through the reviews API and ` +
+        `mark the run done — exactly the unattended path.`,
+    );
+    return true;
+  }
+  if (!reported.branch) {
+    console.error("attended: could not read the agent branch — skipping finalize.");
+    return false;
+  }
+  console.log(`attended: implement #${issue} produced commits on ${reported.branch}.`);
+  console.log(
+    `attended: finalize will push ${reported.branch}, open the pull request, and update the ` +
+      `tracker on ${reported.base || "the default branch"} — exactly the unattended path.`,
+  );
+  return true;
+}
+
+// Run the confirmed finalize: the SAME launcher against the SAME worktree, with
+// `FINALIZE_TAIL_ONLY` selecting the plan's tail alone — so a confirmed local finalize
+// does exactly what an `auto` run's single sequence did, and no more. The first slice's
+// whole environment rides along (the scratch files finalize reads back, the tooling
+// directory, the repo slug), plus the branch/base an `implement` tail needs and has no
+// fetch-spec of its own to resolve. Returns the tail's exit code.
+function runFinalizeTail(): number {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...runEnv,
+    // The confirmed slice IS the finalize: the mode that withheld the tail must not
+    // withhold it a second time.
+    FINALIZE_MODE: "auto",
+    FINALIZE_TAIL_ONLY: "true",
+  };
+  if (reported.branch) {
+    env.BRANCH = reported.branch;
+    env.BASE = reported.base;
+  }
+  const tail = spawnSync(launch.file, launch.args, { stdio: "inherit", cwd: tree, env });
+  return tail.error ? 1 : tail.status ?? 1;
+}
+
+// The finalize accounting. An `auto` run's single sequence already did the whole tail
+// (full parity), so a clean success IS finalized. A `never` run never finalizes — its
+// plan dropped the tail and the in-progress status write with it, so there is nothing to
+// run here and nothing on GitHub to undo. An `ask` run shows what finalize will do and
+// runs it only on the developer's confirmation — the tail-only slice, so a confirmed
+// local finalize lands exactly as CI's does.
 let finalized = false;
 let code = outcome === "aborted" ? 130 : outcome === "failed" ? child.status || 1 : 0;
 
@@ -507,31 +587,10 @@ if (outcome === "succeeded") {
     // record it; `explore`'s read-only comment always posts and needs no accounting.
     finalized = reportsFinalize;
   } else if (finalizeMode === "ask") {
-    if (!reported.branch) {
-      console.error("attended: could not read the agent branch — skipping finalize.");
-    } else {
-      console.log("");
-      console.log(`attended: implement #${issue} produced commits on ${reported.branch}.`);
-      console.log(
-        `attended: finalize will push ${reported.branch}, open the pull request, and update the ` +
-          `tracker on ${reported.base || "the default branch"} — exactly the unattended path.`,
-      );
+    console.log("");
+    if (announceFinalize()) {
       if (confirm("attended: finalize now? [y/N] ")) {
-        const tail = spawnSync("yarn", ["sandcastle:implement-sequence"], {
-          stdio: "inherit",
-          cwd: tree,
-          env: {
-            ...process.env,
-            [shape.numberEnv]: issue,
-            [shape.titleEnv]: subjectTitle,
-            SPEC_FILE: specFile,
-            COMMENT_FILE: commentFile,
-            FINALIZE_TAIL_ONLY: "true",
-            BRANCH: reported.branch,
-            BASE: reported.base,
-          },
-        });
-        const tailCode = tail.error ? 1 : tail.status ?? 1;
+        const tailCode = runFinalizeTail();
         if (tailCode === 0) {
           finalized = true;
         } else {
@@ -539,10 +598,23 @@ if (outcome === "succeeded") {
           code = tailCode;
         }
       } else {
-        console.log("attended: finalize declined — nothing pushed.");
+        console.log(
+          `attended: finalize declined — ${verb === "review-pr" ? "nothing posted" : "nothing pushed"}.`,
+        );
       }
     }
+  } else if (verb === "review-pr") {
+    // `never` has nothing to run — only somewhere to point at, this verb's withheld work
+    // being a file rather than commits on a branch the summary can name (issue #143).
+    console.log("");
+    console.log(`attended: finalize withheld — the composed review is unposted at ${reviewFile}.`);
   }
 }
 
-finish(outcome, finalized, code);
+// Whether this run WITHHELD its finalize (issue #143): it succeeded and composed its work,
+// and nothing reached GitHub — a `never` run, or an `ask` run the developer declined. The
+// worktree policy retains such a tree whatever the verb, because the tree is where the
+// developer reads what nothing published.
+const withheld = outcome === "succeeded" && finalizeMode !== "auto" && !finalized;
+
+finish(outcome, finalized, code, withheld);
