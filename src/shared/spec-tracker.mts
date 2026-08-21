@@ -4,7 +4,13 @@
 // Linear repo swaps this module for its own behind the same hook names.
 
 import { capture } from "./process.mts";
-import type { BlockedBySources, BlockerRef, IssueRecord, IssueState } from "./spec-tree.mts";
+import type {
+  BlockedBySources,
+  BlockerRef,
+  IssueRecord,
+  IssueState,
+  PullRequestRecord,
+} from "./spec-tree.mts";
 
 export interface RawIssue {
   number: number;
@@ -218,6 +224,31 @@ export function blockedBySources(issue: number | string): BlockedBySources {
     capture("gh", ["issue", "view", String(issue), "--json", "body,url,blockedBy"]),
   ) as { body: string; url: string } & RawBlockedBy;
   return { body: raw.body, url: raw.url, blockedBy: toBlockers(raw) };
+}
+
+// The repo's OPEN pull requests, with what the status view needs to state each one: its
+// head and base branches (which is how a final PR is identified — see `attachFinalPr`),
+// whether it is still a draft, and the review decision. One list read for the whole repo
+// rather than one `gh pr list --head` per spec, and the caller only makes it when some
+// spec has finished its slices (`needsFinalPrRead`).
+//
+// `--limit 500` matches the issue reads above rather than trimming the page, because the
+// PR this is looking for is the one most likely to be trimmed: `gh` lists newest first,
+// so a smaller page drops the OLDEST open PRs — and a final PR left open for weeks is
+// exactly the case this read exists to surface. Beyond 500 open PRs the row degrades to
+// `awaiting final PR`, which is the pre-existing behaviour rather than a wrong one.
+export function openPullRequests(): PullRequestRecord[] {
+  const json = capture("gh", [
+    "pr",
+    "list",
+    "--state",
+    "open",
+    "--limit",
+    "500",
+    "--json",
+    "number,title,url,headRefName,baseRefName,isDraft,reviewDecision",
+  ]);
+  return JSON.parse(json) as PullRequestRecord[];
 }
 
 // The label names on one issue. The read behind the local-run marker

@@ -178,10 +178,27 @@ export interface SliceNode {
   readonly foreignBlockers: readonly string[];
 }
 
-// `awaiting-final-pr`: every slice closed while the spec issue is still open — the
-// spec branch holds the whole feature and the one human gate is the final
-// spec→default PR.
-export type SpecState = "building" | "awaiting-final-pr";
+// `awaiting-final-pr`: every slice closed while the spec issue is still open and NO final
+// PR is open yet — the spec branch holds the whole feature and advance has not opened the
+// one human gate, which is occasionally because it failed to. `final-pr-open`: it did, and
+// the PR is now what the spec is waiting on (see `attachFinalPr`).
+export type SpecState = "building" | "awaiting-final-pr" | "final-pr-open";
+
+// What a final PR is waiting on, in the same shape a slice's state is: `draft` (advance
+// opened it and nobody has marked it ready), `ready` (waiting on a reviewer), `approved`,
+// `changes-requested`. Draft OUTRANKS the review decision — a draft is not asking anybody
+// for anything yet, so an approval left on one must not read as "ready to merge".
+export type FinalPrState = "draft" | "ready" | "approved" | "changes-requested";
+
+export interface FinalPrNode {
+  readonly number: number;
+  // The PR's OWN title. `openFinalPr` copies the spec's into it, so the two usually read
+  // alike — and the one case they diverge, someone retitled the PR, is exactly the case
+  // reusing the spec title would hide.
+  readonly title: string;
+  readonly url: string;
+  readonly state: FinalPrState;
+}
 
 export interface SpecNode {
   readonly number: number;
@@ -192,6 +209,23 @@ export interface SpecNode {
   readonly closed: number;
   readonly total: number;
   readonly slices: readonly SliceNode[];
+  // The final PR, once one is open and `attachFinalPr` has folded it in. Absent on a spec
+  // that is still building, and on a complete one whose PR has not been opened —
+  // `buildSpecTree` reads issues alone and never sets it.
+  readonly finalPr?: FinalPrNode;
+}
+
+// One open PR as the tracker hands it over, in `gh pr list --json` spelling so the read
+// stays a projection rather than a translation. `reviewDecision` is absent, null or empty
+// where GitHub has no decision to report.
+export interface PullRequestRecord {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly headRefName: string;
+  readonly baseRefName: string;
+  readonly isDraft: boolean;
+  readonly reviewDecision?: string | null;
 }
 
 // Loudest first: a slice that is both closed and still carrying a stale state label is
@@ -243,6 +277,9 @@ export function buildSpecTree(
       });
 
       const closed = slices.filter((s) => s.state === "done").length;
+      // The final PR is NOT read here: `buildSpecTree` takes issues and branches, and
+      // widening it to take pull requests as well would make every caller fetch them —
+      // including the passes where a PR cannot exist. `attachFinalPr` folds them in after.
       return {
         number: issue.number,
         title: issue.title,
@@ -256,4 +293,76 @@ export function buildSpecTree(
         slices,
       } satisfies SpecNode;
     });
+}
+
+// A spec that has finished every slice and has no final PR folded in yet — the one state
+// in which a final PR can exist and is not already known. Both the read gate and the fold
+// ask this, so they cannot drift into disagreeing about which specs the PRs are for.
+function awaitsFinalPr(spec: SpecNode): boolean {
+  return spec.state === "awaiting-final-pr";
+}
+
+// Whether the caller has to read the repo's open PRs at all. A final PR cannot exist
+// before the last slice closes, so a tree with nothing complete is one where the read
+// would answer a question nobody asked — which is every tick of a `--watch` on a spec
+// that is still building. The gate is what keeps the PR read off the common path.
+export function needsFinalPrRead(specs: readonly SpecNode[]): boolean {
+  return specs.some(awaitsFinalPr);
+}
+
+// Folds the open PRs into the tree: a complete spec whose branch has one becomes
+// `final-pr-open` and carries it, everything else is returned untouched.
+//
+// A PR is a spec's final PR by its HEAD and BASE branches — the same predicate
+// `openFinalPr` uses for its own idempotency check (`--head <spec branch> --base <base>
+// --state open`) — and never by the `agent:review-pr` label, which is a TRIGGER label the
+// review run retires as it starts and `finalPrReview: false` suppresses outright.
+//
+// `base` is the base the orchestrator opens the final PR against, resolved by the caller
+// exactly as `openFinalPr` resolves it (the configured base branch, else the repository
+// default). Empty means the caller could not resolve one; the head branch alone then
+// decides, which is the same answer in every repo where nobody has opened a second PR off
+// a spec branch — a degraded match beats a spec that silently reads as `awaiting final PR`
+// forever because the base could not be named.
+//
+// Only a spec that is `awaiting-final-pr` is matched, so a PR a human opens off a spec
+// branch early stays invisible rather than blinking into the view on whichever passes
+// another spec happened to pay for the read (ADR-0007).
+export function attachFinalPr(
+  specs: readonly SpecNode[],
+  prs: readonly PullRequestRecord[],
+  base: string,
+): SpecNode[] {
+  return specs.map((spec) => {
+    if (!awaitsFinalPr(spec)) return spec;
+    // GitHub allows only ONE open PR per head/base pair, so with a base to match on there
+    // is at most one candidate. The lowest number is the tie-break for the degraded match
+    // above, where a human's PR off the spec branch to some other base can be a candidate
+    // too — and where it was opened FIRST, it wins and is shown; naming the wrong PR is
+    // the accepted cost of not being able to name the base at all.
+    const pr = prs
+      .filter((candidate) => candidate.headRefName === spec.branch)
+      .filter((candidate) => base === "" || candidate.baseRefName === base)
+      .sort((a, b) => a.number - b.number)[0];
+    if (pr === undefined) return spec;
+    return {
+      ...spec,
+      state: "final-pr-open",
+      finalPr: {
+        number: pr.number,
+        title: pr.title,
+        url: pr.url,
+        state: finalPrState(pr),
+      },
+    };
+  });
+}
+
+function finalPrState(pr: PullRequestRecord): FinalPrState {
+  if (pr.isDraft) return "draft";
+  if (pr.reviewDecision === "APPROVED") return "approved";
+  if (pr.reviewDecision === "CHANGES_REQUESTED") return "changes-requested";
+  // `REVIEW_REQUIRED`, null, and the empty string `gh` serves for a repo that requires no
+  // review all say the same thing: it is open and nobody has ruled on it.
+  return "ready";
 }

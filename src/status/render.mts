@@ -6,7 +6,13 @@
 // One function serving both a GitHub comment body and an aligned terminal table makes
 // both worse; the DATA is shared (`spec-tree.mts`), the rendering is not (ADR-0007).
 
-import type { SpecNode, SliceNode, SliceState } from "../shared/spec-tree.mts";
+import type {
+  FinalPrNode,
+  FinalPrState,
+  SpecNode,
+  SliceNode,
+  SliceState,
+} from "../shared/spec-tree.mts";
 
 export interface StatusView {
   readonly repo: string;
@@ -89,9 +95,36 @@ function truncate(title: string): string {
   return title.length <= TITLE_WIDTH ? title : `${title.slice(0, TITLE_WIDTH - 1)}…`;
 }
 
+const SPEC_STATE_TEXT: Record<SpecNode["state"], string> = {
+  building: "building",
+  // Not "waiting for review": the PR does not exist yet, and the party that has not acted
+  // is the orchestrator (or a failed advance), never the reader.
+  "awaiting-final-pr": "awaiting final PR",
+  "final-pr-open": "final PR open",
+};
+
+// A final PR reuses the slice glyphs and tones rather than earning its own: the row is a
+// third KIND of row, not a third vocabulary, and a reader who has learnt ✓/⚠/● once should
+// not have to learn them again three rows down. `approved` is done-shaped, `changes-requested`
+// is the same loud ⚠ that means stop and look, and both waiting states take the ● the review
+// rows already use — the TEXT is what says which of the two it is.
+const FINAL_PR_TONE: Record<FinalPrState, SliceState> = {
+  draft: "review",
+  ready: "review",
+  approved: "done",
+  "changes-requested": "blocked",
+};
+
+const FINAL_PR_TEXT: Record<FinalPrState, string> = {
+  draft: "draft",
+  ready: "ready for review",
+  approved: "approved",
+  "changes-requested": "changes requested",
+};
+
 function specRow(spec: SpecNode): Row {
   const progress = `${spec.closed}/${spec.total}`;
-  const state = spec.state === "awaiting-final-pr" ? "awaiting final PR" : "building";
+  const state = SPEC_STATE_TEXT[spec.state];
   return {
     lead: "",
     ref: `#${spec.number}`,
@@ -128,6 +161,21 @@ function sliceRow(slice: SliceNode): Row {
   };
 }
 
+// The final PR's row, last under the slices it collects. `PR` leads the reference the way
+// a marker does — outside it, so the click target stays exactly the number — because a
+// bare `#134` among issue references would read as issue 134.
+function finalPrRow(pr: FinalPrNode): Row {
+  const tone = FINAL_PR_TONE[pr.state];
+  return {
+    lead: `  ${MARKER[tone]} PR `,
+    ref: `#${pr.number}`,
+    title: truncate(pr.title),
+    state: FINAL_PR_TEXT[pr.state],
+    url: pr.url,
+    tone,
+  };
+}
+
 function pad(text: string, width: number): string {
   return text + " ".repeat(Math.max(0, width - text.length));
 }
@@ -144,7 +192,11 @@ export function renderStatus(
     ].join("\n");
   }
 
-  const blocks = specs.map((spec) => [specRow(spec), ...spec.slices.map(sliceRow)]);
+  const blocks = specs.map((spec) => [
+    specRow(spec),
+    ...spec.slices.map(sliceRow),
+    ...(spec.finalPr ? [finalPrRow(spec.finalPr)] : []),
+  ]);
   const rows = blocks.flat();
   const prefixWidth = Math.max(...rows.map((r) => r.lead.length + r.ref.length));
   const titleWidth = Math.max(...rows.map((r) => r.title.length));

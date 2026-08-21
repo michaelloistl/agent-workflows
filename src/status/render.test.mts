@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderStatus } from "./render.mts";
-import type { SliceNode, SpecNode } from "../shared/spec-tree.mts";
+import type { FinalPrNode, SliceNode, SpecNode } from "../shared/spec-tree.mts";
 
 function slice(over: Partial<SliceNode> & { number: number }): SliceNode {
   return {
@@ -351,4 +351,90 @@ test("a row is painted and linked at once", () => {
   const out = renderStatus(VIEW, { colour: true, hyperlinks: true });
   assert.equal(linkedText(out, "https://github.com/o/r/issues/96"), "#96", "still linked");
   assert.ok(escapesOn(linkedRowFor(out, 96)).length > 0, "still painted");
+});
+
+// The FINAL PR row (ADR-0007, amended). Without it, `awaiting final PR` blamed the
+// orchestrator for a PR that had been sitting open waiting for a human for days.
+
+function withFinalPr(finalPr: Partial<FinalPrNode> = {}) {
+  return {
+    repo: "o/r",
+    specs: [
+      spec({
+        number: 94,
+        title: "Status view",
+        state: "final-pr-open" as const,
+        slices: [slice({ number: 95, state: "done" })],
+        finalPr: {
+          number: 134,
+          title: "Show the final PR",
+          url: "https://github.com/o/r/pull/134",
+          state: "draft" as const,
+          ...finalPr,
+        },
+      }),
+    ],
+  };
+}
+
+test("the final PR is a row of its own, last, beneath the slices", () => {
+  const rows = renderStatus(withFinalPr())
+    .split("\n")
+    .filter((l) => /#\d+/.test(l));
+  assert.match(rows[0], /^#94\b/);
+  assert.match(rows[1], /^ +✓ #95\b/);
+  assert.match(rows[2], /^ +● PR #134 +Show the final PR/);
+});
+
+// Its OWN title, not the spec's. `openFinalPr` copies the spec title into the PR, so the
+// two usually read alike — and the one case they diverge, someone retitled the PR, is
+// exactly the case a copy of the spec title would hide.
+test("the PR row carries the PR's own title", () => {
+  const out = renderStatus(withFinalPr({ title: "Retitled by a human" }));
+  assert.match(rowFor(out, 134), /Retitled by a human/);
+});
+
+test("the spec row says its final PR is open rather than awaited", () => {
+  const out = renderStatus(withFinalPr());
+  assert.match(out, /^#94 .*1\/1 · final PR open/m);
+  assert.doesNotMatch(out, /awaiting final PR/);
+});
+
+// The question the row exists to answer is "is a human the gate, or am I".
+test("each PR state names who is holding it up", () => {
+  const stateOf = (state: FinalPrNode["state"]) => rowFor(renderStatus(withFinalPr({ state })), 134);
+  assert.match(stateOf("draft"), /\bdraft\b/);
+  assert.match(stateOf("ready"), /ready for review/);
+  assert.match(stateOf("approved"), /\bapproved\b/);
+  assert.match(stateOf("changes-requested"), /changes requested/);
+});
+
+// The markers are the slice ones reused: an approved PR is done-shaped, one with changes
+// requested is the same ⚠ that means stop and look, and the two waiting states are the ●
+// the review rows already use.
+test("the PR row is marked with the same glyphs the slices use", () => {
+  const marked = (state: FinalPrNode["state"], marker: string) =>
+    assert.match(rowFor(renderStatus(withFinalPr({ state })), 134), new RegExp(`^ +${marker} PR`));
+  marked("approved", "✓");
+  marked("changes-requested", "⚠");
+  marked("draft", "●");
+  marked("ready", "●");
+});
+
+test("the PR row carries its URL, and links the reference when asked", () => {
+  assert.match(renderStatus(withFinalPr()), /https:\/\/github\.com\/o\/r\/pull\/134\b/);
+  const linked = renderStatus(withFinalPr(), { hyperlinks: true });
+  assert.equal(linkedText(linked, "https://github.com/o/r/pull/134"), "#134");
+  // `PR` leads the reference the way a marker does, outside the link.
+  assert.match(linked, /PR \x1b\]8;;[^\x1b]*\x1b\\#134\x1b\]8;;\x1b\\/);
+});
+
+// Same rule as every other row: the escapes are zero-width on screen, so a `PR #134`
+// prefix must be padded before it is painted or linked, never after.
+test("the PR row leaves the columns aligned", () => {
+  const out = renderStatus(withFinalPr(), { hyperlinks: true });
+  const titleOffset = (issue: number, title: string) =>
+    unlink(linkedRowFor(out, issue)).indexOf(title);
+  assert.equal(titleOffset(94, "Status view"), titleOffset(134, "Show the final PR"));
+  assert.equal(strip(renderStatus(withFinalPr(), { colour: true })), renderStatus(withFinalPr()));
 });

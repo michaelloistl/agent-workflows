@@ -11,7 +11,8 @@
 // This file is the DISPATCH half throughout: it owns `process.argv`, `process.stdout`
 // and the `gh` calls, and every decision it makes lives in a tested module next door.
 
-import { repoFromRemoteUrl, resolveRepoSlug } from "../shared/github.mts";
+import { resolveConfig } from "../shared/config.mts";
+import { repoFromRemoteUrl, resolveDefaultBranch, resolveRepoSlug } from "../shared/github.mts";
 import { capture } from "../shared/process.mts";
 import {
   crossReferencedIssues,
@@ -19,9 +20,10 @@ import {
   issuesChanged,
   listIssueRecords,
   nativeSubIssues,
+  openPullRequests,
   remoteBranches,
 } from "../shared/spec-tracker.mts";
-import { buildSpecTree } from "../shared/spec-tree.mts";
+import { attachFinalPr, buildSpecTree, needsFinalPrRead } from "../shared/spec-tree.mts";
 import { statusFrame, type RunningVersion } from "./frame.mts";
 import { freshRender } from "./freshness.mts";
 import { gatherIssues } from "./gather.mts";
@@ -101,7 +103,30 @@ function pass(branches: readonly string[]): string {
     crossReferencedIssues: (spec) => crossReferencedIssues(repo, spec),
     allIssues: listIssueRecords,
   });
-  return renderStatus({ repo, specs: buildSpecTree(issues, branches) }, { colour, hyperlinks });
+  // Build from the issues, then ask whether a PR read is worth making at all, then fold
+  // the answer in. A final PR cannot exist before the last slice closes, so a pass with no
+  // complete spec makes no PR call — which is every tick of a watch on a spec that is still
+  // building. The gate is the tree's own question, so it stays in the decide half.
+  const specs = buildSpecTree(issues, branches);
+  const specsWithFinalPr = needsFinalPrRead(specs)
+    ? attachFinalPr(specs, openPullRequests(), finalPrBase())
+    : specs;
+  return renderStatus({ repo, specs: specsWithFinalPr }, { colour, hyperlinks });
+}
+
+// The base branch the orchestrator opens a final PR against, resolved the way `openFinalPr`
+// resolves it — the configured base branch, else the repository default — so the view
+// matches on the pair advance actually opened rather than on the head branch alone.
+//
+// Read at most ONCE per process and then held: a `--watch` left open must not re-resolve
+// it every tick (the git read is cheap, the `gh` fallback behind it is not), and a base
+// branch does not change under a running view. Resolved LAZILY, inside the gated path, so
+// a repo with nothing complete pays for neither this nor the PR read. Empty when nothing
+// resolves, which `attachFinalPr` degrades to a head-only match on.
+let base: string | null = null;
+function finalPrBase(): string {
+  base ??= resolveConfig().baseBranch || resolveDefaultBranch();
+  return base;
 }
 
 // How long the quota read gets before it is abandoned. Measured at ~1.4s of wall clock with

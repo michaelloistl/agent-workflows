@@ -8,6 +8,26 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Show the **final PR** in `agent-workflows status`, on a row of its own beneath the
+  slices. The spec row's `awaiting final PR` was computed from the slices alone — every
+  slice closed while the spec issue is open — which stays true forever after advance opens
+  the PR, so the view went on saying *awaiting* at a PR that had been waiting on a human
+  for days, naming the wrong party as the one holding things up. The row states whether
+  the PR is a `draft`, `ready for review`, `approved` or has `changes requested` (draft
+  outranks the review decision, since a draft is not asking anybody for anything yet), and
+  carries the PR's OWN title so a retitled PR shows as one. `awaiting final PR` now means
+  what it always claimed — all slices closed, no PR yet, which is occasionally a stuck
+  spec — and the new `final PR open` covers the rest. The PR is identified by its **head
+  and base branches**, the same predicate `openFinalPr` uses for its idempotency check
+  (the base resolved as it resolves it: the configured base branch, else the repository
+  default), and never by the `agent:review-pr` label, which the review run retires as it
+  starts and `finalPrReview: false` suppresses outright. The base is part of the predicate
+  because GitHub allows only one open PR per head/base pair: a second PR off a spec branch
+  is one somebody opened against something else, and being the older of the two it would
+  otherwise be shown in place of the real final PR. It costs one `gh pr list` per pass, **gated**
+  on some spec having finished its slices, so a watch on a spec that is still building
+  makes no PR call at all. No check-run join and no change to the `--watch` freshness
+  probe (ADR-0007, amended).
 - Thread the repository **default branch** into both attended entry points, in the same
   `DEFAULT_BRANCH` slot the reusable workflow fills. Every verb's base resolves
   `BASE_BRANCH` → the config file → the repository default, and CI is where those last
