@@ -11,9 +11,9 @@
 // This file is the DISPATCH half throughout: it owns `process.argv`, `process.stdout`
 // and the `gh` calls, and every decision it makes lives in a tested module next door.
 
-import { resolveConfig } from "../shared/config.mts";
-import { repoFromRemoteUrl, resolveDefaultBranch, resolveRepoSlug } from "../shared/github.mts";
+import { repoFromRemoteUrl, resolveRepoSlug } from "../shared/github.mts";
 import { capture } from "../shared/process.mts";
+import { finalPrBase } from "../shared/spec-advance.mts";
 import {
   crossReferencedIssues,
   issueRecord,
@@ -23,7 +23,12 @@ import {
   openPullRequests,
   remoteBranches,
 } from "../shared/spec-tracker.mts";
-import { attachFinalPr, buildSpecTree, needsFinalPrRead } from "../shared/spec-tree.mts";
+import {
+  attachFinalPr,
+  buildSpecTree,
+  needsFinalPrRead,
+  type PullRequestRecord,
+} from "../shared/spec-tree.mts";
 import { statusFrame, type RunningVersion } from "./frame.mts";
 import { freshRender } from "./freshness.mts";
 import { gatherIssues } from "./gather.mts";
@@ -109,23 +114,46 @@ function pass(branches: readonly string[]): string {
   // building. The gate is the tree's own question, so it stays in the decide half.
   const specs = buildSpecTree(issues, branches);
   const specsWithFinalPr = needsFinalPrRead(specs)
-    ? attachFinalPr(specs, openPullRequests(), finalPrBase())
+    ? attachFinalPr(specs, finalPrs(), heldFinalPrBase())
     : specs;
   return renderStatus({ repo, specs: specsWithFinalPr }, { colour, hyperlinks });
 }
 
-// The base branch the orchestrator opens a final PR against, resolved the way `openFinalPr`
-// resolves it — the configured base branch, else the repository default — so the view
-// matches on the pair advance actually opened rather than on the head branch alone.
+// The repo's open PRs, or none of them. TOLERANT, like the quota read and unlike every
+// other read in this pass: the final PR is one row of context under a tree assembled from
+// issues and branches, so a transient `gh pr list` failure — a secondary rate limit, a 502,
+// a dropped connection — must not turn a one-shot run into an error and a `--watch` tick
+// into `could not read the tracker`, blanking the whole view for a row. Empty degrades the
+// spec to `awaiting final PR`, which is what it said before this existed. Not silent for
+// all that: `gh` writes its own reason to stderr on the way past, so a reader whose row is
+// missing is not left guessing — this swallows the exit status, not the message.
+function finalPrs(): PullRequestRecord[] {
+  try {
+    return openPullRequests();
+  } catch {
+    return [];
+  }
+}
+
+// The base branch the orchestrator opens a final PR against — `finalPrBase`, the function
+// `openFinalPr` opens it with, so the view matches on the pair advance actually opened
+// rather than on a locally-guessed one (a stale `origin/HEAD` would name a base no final
+// PR was ever opened against, and the base filter would then hide every one of them).
 //
-// Read at most ONCE per process and then held: a `--watch` left open must not re-resolve
-// it every tick (the git read is cheap, the `gh` fallback behind it is not), and a base
-// branch does not change under a running view. Resolved LAZILY, inside the gated path, so
-// a repo with nothing complete pays for neither this nor the PR read. Empty when nothing
-// resolves, which `attachFinalPr` degrades to a head-only match on.
+// Read at most ONCE per process and then held: a `--watch` left open must not re-resolve it
+// every tick — it costs a `gh` call — and a base branch does not change under a running
+// view. Resolved LAZILY, inside the gated path, so a repo with nothing complete pays for
+// neither this nor the PR read. Empty when the read fails, which `attachFinalPr` degrades
+// to a head-only match on rather than leaving a spec awaiting a PR that is open.
 let base: string | null = null;
-function finalPrBase(): string {
-  base ??= resolveConfig().baseBranch || resolveDefaultBranch();
+function heldFinalPrBase(): string {
+  base ??= (() => {
+    try {
+      return finalPrBase();
+    } catch {
+      return "";
+    }
+  })();
   return base;
 }
 

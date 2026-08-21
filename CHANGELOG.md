@@ -18,15 +18,18 @@ version without editing their workflow on every release.
   carries the PR's OWN title so a retitled PR shows as one. `awaiting final PR` now means
   what it always claimed — all slices closed, no PR yet, which is occasionally a stuck
   spec — and the new `final PR open` covers the rest. The PR is identified by its **head
-  and base branches**, the same predicate `openFinalPr` uses for its idempotency check
-  (the base resolved as it resolves it: the configured base branch, else the repository
-  default), and never by the `agent:review-pr` label, which the review run retires as it
-  starts and `finalPrReview: false` suppresses outright. The base is part of the predicate
-  because GitHub allows only one open PR per head/base pair: a second PR off a spec branch
-  is one somebody opened against something else, and being the older of the two it would
-  otherwise be shown in place of the real final PR. It costs one `gh pr list` per pass, **gated**
-  on some spec having finished its slices, so a watch on a spec that is still building
-  makes no PR call at all. No check-run join and no change to the `--watch` freshness
+  and base branches**, the same predicate `openFinalPr` uses for its idempotency check and
+  through the same base resolution (`finalPrBase`, now shared, so the view can only match
+  on the pair advance actually opened), and never by the `agent:review-pr` label, which the
+  review run retires as it starts and `finalPrReview: false` suppresses outright. The base
+  is part of the predicate because GitHub allows only one open PR per head/base pair: a
+  second PR off a spec branch is one somebody opened against something else, and being the
+  older of the two it would otherwise be shown in place of the real final PR. That rule is
+  per head repository, so PRs from **forks** are excluded — a fork branch of the same name
+  is never the final PR. It costs one `gh pr list` per pass, **gated** on some spec having
+  finished its slices, so a watch on a spec that is still building makes no PR call at all,
+  and a failed PR read leaves the spec reading `awaiting final PR` rather than taking the
+  whole view down with it. No check-run join and no change to the `--watch` freshness
   probe (ADR-0007, amended).
 - **An attended run that fails or is aborted reports its subject `blocked`.** Every
   unattended workflow retires its own `agent:in-progress` write with an `if: failure()`

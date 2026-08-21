@@ -104,15 +104,22 @@ const SPEC_STATE_TEXT: Record<SpecNode["state"], string> = {
 };
 
 // A final PR reuses the slice glyphs and tones rather than earning its own: the row is a
-// third KIND of row, not a third vocabulary, and a reader who has learnt ✓/⚠/● once should
-// not have to learn them again three rows down. `approved` is done-shaped, `changes-requested`
-// is the same loud ⚠ that means stop and look, and both waiting states take the ● the review
-// rows already use — the TEXT is what says which of the two it is.
+// third KIND of row, not a third vocabulary, and a reader who has learnt ✓/●/⚠ once should
+// not have to learn them again three rows down. `approved` is done-shaped, and every state
+// still in the review loop takes the ● the review rows already use — the TEXT is what says
+// which of the three it is.
+//
+// `changes-requested` deliberately does NOT take the loud `blocked` tone, even though it is
+// the state that most looks like a problem. Bold red is spent on exactly one thing (see
+// `PAINT`): `agent:blocked`, where the fleet has stopped and a human must look. A PR with
+// changes requested is the opposite — the human has already looked and ruled, and the ball
+// is back with whoever addresses it. Painting it like a halted spec would cost the halted
+// spec the prominence the colour exists for.
 const FINAL_PR_TONE: Record<FinalPrState, SliceState> = {
   draft: "review",
   ready: "review",
   approved: "done",
-  "changes-requested": "blocked",
+  "changes-requested": "review",
 };
 
 const FINAL_PR_TEXT: Record<FinalPrState, string> = {

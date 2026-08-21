@@ -409,16 +409,26 @@ test("each PR state names who is holding it up", () => {
   assert.match(stateOf("changes-requested"), /changes requested/);
 });
 
-// The markers are the slice ones reused: an approved PR is done-shaped, one with changes
-// requested is the same ⚠ that means stop and look, and the two waiting states are the ●
-// the review rows already use.
+// The markers are the slice ones reused: an approved PR is done-shaped, and every state
+// still in the review loop — draft, ready, changes requested — takes the ● the review rows
+// already use, with the TEXT saying which of the three it is.
 test("the PR row is marked with the same glyphs the slices use", () => {
   const marked = (state: FinalPrNode["state"], marker: string) =>
     assert.match(rowFor(renderStatus(withFinalPr({ state })), 134), new RegExp(`^ +${marker} PR`));
   marked("approved", "✓");
-  marked("changes-requested", "⚠");
+  marked("changes-requested", "●");
   marked("draft", "●");
   marked("ready", "●");
+});
+
+// Bold red stays spent on exactly one thing, `agent:blocked` — the state that means the
+// fleet has stopped and a human must look. A PR with changes requested is the review loop
+// working: a human has ruled and the ball is back with the author, which is not an alarm.
+test("no final-PR state spends the bold red reserved for a blocked slice", () => {
+  for (const state of ["draft", "ready", "approved", "changes-requested"] as const) {
+    const row = rowFor(renderStatus(withFinalPr({ state }), { colour: true }), 134);
+    assert.ok(!sgrParams(row).includes(BOLD), `not bold: ${state}`);
+  }
 });
 
 test("the PR row carries its URL, and links the reference when asked", () => {

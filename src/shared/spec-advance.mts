@@ -29,11 +29,36 @@ export function closeTracerBullet(issue: number, base: string): void {
   }
 }
 
+// The base branch a final PR is opened against: the configured base branch (issue #53),
+// falling back to the repository default when no config file sets one. Exported because
+// the STATUS VIEW has to name the same base to recognise the PR advance opened (a final PR
+// is identified by its head AND base branches, ADR-0007) — sharing the function is what
+// keeps "the view matches on the pair advance opened" true rather than approximately true.
+//
+// The default comes from the SERVER, deliberately, and not from `resolveDefaultBranch`'s
+// local `origin/HEAD`: that symref is written at clone time and no `git fetch` refreshes
+// it, so a checkout that predates a default-branch rename answers `master` where the fleet
+// opens against `main`. Here that would open the PR against a branch nobody merges; in the
+// view it would eliminate the real final PR and leave the spec reading `awaiting final PR`
+// for the rest of its life — the exact blind spot the row exists to remove, and silent.
+export function finalPrBase(): string {
+  return (
+    resolveConfig().baseBranch ||
+    capture("gh", [
+      "repo",
+      "view",
+      "--json",
+      "defaultBranchRef",
+      "-q",
+      ".defaultBranchRef.name",
+    ]).trim()
+  );
+}
+
 // The single human-review gate: a draft PR from the spec branch to the configured
 // base branch with `Closes #<spec>` (base IS where the spec lands, so the merge
-// auto-closes the spec). The base is the configured base branch (issue #53),
-// falling back to the repository default when no config file sets one — matching
-// where kickoff cut the spec branch from. Idempotent — never opens a second final PR.
+// auto-closes the spec). The base is `finalPrBase` above — matching where kickoff cut
+// the spec branch from. Idempotent — never opens a second final PR.
 //
 // The review trigger label is applied as a DISTINCT write after the PR exists (issue
 // #114) — not as part of `pr create`, because the thin caller triggers on the label
@@ -46,16 +71,7 @@ export function closeTracerBullet(issue: number, base: string): void {
 // has never created it. A consuming repo turns the review off with `finalPrReview`.
 export function openFinalPr(specNumber: number, specBranch: string): void {
   const config = resolveConfig();
-  const base =
-    config.baseBranch ||
-    capture("gh", [
-      "repo",
-      "view",
-      "--json",
-      "defaultBranchRef",
-      "-q",
-      ".defaultBranchRef.name",
-    ]).trim();
+  const base = finalPrBase();
   const existing = capture("gh", [
     "pr",
     "list",

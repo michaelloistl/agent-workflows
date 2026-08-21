@@ -227,10 +227,11 @@ export function blockedBySources(issue: number | string): BlockedBySources {
 }
 
 // The repo's OPEN pull requests, with what the status view needs to state each one: its
-// head and base branches (which is how a final PR is identified — see `attachFinalPr`),
-// whether it is still a draft, and the review decision. One list read for the whole repo
-// rather than one `gh pr list --head` per spec, and the caller only makes it when some
-// spec has finished its slices (`needsFinalPrRead`).
+// head and base branches and whether that head is a FORK's (which is how a final PR is
+// identified — see `attachFinalPr`; branch names alone do not identify a branch across
+// repositories), whether it is still a draft, and the review decision. One list read for
+// the whole repo rather than one `gh pr list --head` per spec, and the caller only makes
+// it when some spec has finished its slices (`needsFinalPrRead`).
 //
 // `--limit 500` matches the issue reads above rather than trimming the page, because the
 // PR this is looking for is the one most likely to be trimmed: `gh` lists newest first,
@@ -246,7 +247,7 @@ export function openPullRequests(): PullRequestRecord[] {
     "--limit",
     "500",
     "--json",
-    "number,title,url,headRefName,baseRefName,isDraft,reviewDecision",
+    "number,title,url,headRefName,baseRefName,isCrossRepository,isDraft,reviewDecision",
   ]);
   return JSON.parse(json) as PullRequestRecord[];
 }

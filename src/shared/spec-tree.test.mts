@@ -436,6 +436,7 @@ function pr(over: Partial<PullRequestRecord> & { number: number }): PullRequestR
     url: `https://github.com/o/r/pull/${over.number}`,
     headRefName: "agent/spec-94-x",
     baseRefName: "main",
+    isCrossRepository: false,
     isDraft: true,
     reviewDecision: null,
     ...over,
@@ -516,6 +517,33 @@ test("the lowest-numbered PR wins where the base cannot narrow the field", () =>
     "",
   );
   assert.equal(spec.finalPr?.number, 134);
+});
+
+// GitHub's "one open PR per head/base pair" rule is scoped per head REPOSITORY, so a fork
+// branch of the same name against the same base coexists with the real final PR — and,
+// opened while the spec was still building, wins the lowest-number tie-break. The fleet
+// pushes spec branches to origin, so a final PR is never cross-repository.
+test("a fork PR sharing the branch name and base is not the final PR", () => {
+  const [spec] = attachFinalPr(
+    completeSpec(),
+    [pr({ number: 7, isCrossRepository: true }), pr({ number: 134 })],
+    BASE,
+  );
+  assert.equal(spec.finalPr?.number, 134);
+});
+
+test("a fork PR is not the final PR where it is the only candidate either", () => {
+  const [spec] = attachFinalPr(completeSpec(), [pr({ number: 7, isCrossRepository: true })], BASE);
+  assert.equal(spec.state, "awaiting-final-pr");
+});
+
+// What the caller hands over when the PR read itself fails (`gh` down, rate-limited): an
+// empty list, so the row degrades to the pre-existing `awaiting final PR` rather than
+// costing the reader the tree.
+test("no PRs at all leaves the spec exactly as the tree built it", () => {
+  const [spec] = attachFinalPr(completeSpec(), [], BASE);
+  assert.equal(spec.state, "awaiting-final-pr");
+  assert.equal(spec.finalPr, undefined);
 });
 
 // A human may open a PR off a spec branch early. The read is gated on completeness, so

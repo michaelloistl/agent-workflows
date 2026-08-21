@@ -224,6 +224,11 @@ export interface PullRequestRecord {
   readonly url: string;
   readonly headRefName: string;
   readonly baseRefName: string;
+  // Whether the head branch lives in a FORK rather than in this repository. Carried
+  // because branch names alone do not identify a branch across repositories: the
+  // one-open-PR-per-head/base rule `attachFinalPr` leans on holds per head repo, so a
+  // fork's `agent/spec-94-x` can sit open beside the real final PR.
+  readonly isCrossRepository: boolean;
   readonly isDraft: boolean;
   readonly reviewDecision?: string | null;
 }
@@ -318,9 +323,14 @@ export function needsFinalPrRead(specs: readonly SpecNode[]): boolean {
 // --state open`) — and never by the `agent:review-pr` label, which is a TRIGGER label the
 // review run retires as it starts and `finalPrReview: false` suppresses outright.
 //
+// A PR from a FORK is never it, whatever it is called: the fleet pushes spec branches to
+// `origin` and opens the final PR from there, while the head/base uniqueness the match
+// leans on is scoped per head repository — so a fork branch of the same name against the
+// same base can sit open beside the real one, and being the older of the two would win.
+//
 // `base` is the base the orchestrator opens the final PR against, resolved by the caller
-// exactly as `openFinalPr` resolves it (the configured base branch, else the repository
-// default). Empty means the caller could not resolve one; the head branch alone then
+// through `finalPrBase` — the same function `openFinalPr` opens it with, so the two cannot
+// drift. Empty means the caller could not resolve one; the head branch alone then
 // decides, which is the same answer in every repo where nobody has opened a second PR off
 // a spec branch — a degraded match beats a spec that silently reads as `awaiting final PR`
 // forever because the base could not be named.
@@ -335,12 +345,14 @@ export function attachFinalPr(
 ): SpecNode[] {
   return specs.map((spec) => {
     if (!awaitsFinalPr(spec)) return spec;
-    // GitHub allows only ONE open PR per head/base pair, so with a base to match on there
-    // is at most one candidate. The lowest number is the tie-break for the degraded match
-    // above, where a human's PR off the spec branch to some other base can be a candidate
-    // too — and where it was opened FIRST, it wins and is shown; naming the wrong PR is
-    // the accepted cost of not being able to name the base at all.
+    // GitHub allows only ONE open PR per head/base pair in one repository, so with a base
+    // to match on and forks excluded there is at most one candidate. The lowest number is
+    // the tie-break for the degraded match above, where a human's PR off the spec branch
+    // to some other base can be a candidate too — and where it was opened FIRST, it wins
+    // and is shown; naming the wrong PR is the accepted cost of not being able to name the
+    // base at all.
     const pr = prs
+      .filter((candidate) => !candidate.isCrossRepository)
       .filter((candidate) => candidate.headRefName === spec.branch)
       .filter((candidate) => base === "" || candidate.baseRefName === base)
       .sort((a, b) => a.number - b.number)[0];
