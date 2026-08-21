@@ -28,6 +28,10 @@ A central workflow file invoked via `uses:` with `on: workflow_call`. Provides t
 A run a human is watching and can intervene in — started from the terminal, on the human's own machine. The counterpart is an **unattended run**, started by a *trigger label* and observed only through its output. The two differ in where the work happens and what a human can do mid-flight; they do not differ in what the run *does*. "Attended" names the human's *ability* to intervene, not a promise that someone is at the keyboard — and the ability is what survives when nobody is: the spec loop runs its prompts pre-accepted by default (`--pause` puts them back), so a launcher, an unattended resume, or a developer who walks away all start one, and it stays attended in the sense that matters — same machine, same output on the terminal, still interruptible.
 _Avoid_: local run vs remote run (describes the machine, not the property that matters), manual run
 
+**Supervised / unsupervised**:
+Whether a human is actually at the terminal while a run proceeds. Orthogonal to *attended*, which names the ability to intervene rather than the presence of anyone to exercise it: a local spec run is attended and, since ADR-0011 made a bare `implement-spec <n>` pre-accept its gates, usually unsupervised. It is the axis a *run surface* exists for — an unsupervised run is legible only through what it pushes and what it leaves behind.
+_Avoid_: unattended (that names the entry point, not who is watching), headless, background, fire-and-forget
+
 **Thin caller**:
 The minimal workflow file in a consuming repo: event triggers + `workflow_dispatch` + `uses:` the central workflow + `with:` config + `secrets: inherit`. One per verb.
 _Avoid_: wrapper, stub
@@ -119,6 +123,10 @@ _Avoid_: installed version, declared version, latest version (each names a diffe
 
 **Spec tree**:
 The shared reader (`shared/spec-tree.mts`) that resolves a repo's specs and their tracer-bullets with states, and folds in the *final PR* of a spec whose slices have all closed. It holds both edge rules, and they are deliberately different rules (ADR-0007). Membership is **native-first**: a slice's spec is GitHub's sub-issue `parent` where that edge exists and the body's textual `## Parent` otherwise. Dependencies are a **union**, not a fallback: `unionBlockers` merges the native `blockedBy` edges with the `## Blocked by` refs, because a parent is one value while blockers are a set — over-blocking is a deadlocked row a human clears, under-blocking builds on a dependency that has not landed. Both make adopting native hierarchy gradual and per-repo rather than a flag day. A native blocker in another repository is excluded from the order and shown instead, since issue numbers are per-repo; the native sub-issue priority order is never displayed. The orchestrator takes the union too, and still resolves membership textually — it adopts that rule when native parents are written rather than merely read.
+
+**Run surface**:
+A best-effort outbound report of a run's progress, pushed into a UI that already exists — the Herdr pane and the Discord channel are the two. Strictly optional and strictly non-blocking: unconfigured it is a silent no-op with no warning, and no emit may fail or delay a run, which is ADR-0005's *contact, not dependency* rule applied to reporting. Distinct from the *run log*, which is written and never read, and from the *progress comment*, which is tracker state the orchestrator writes deliberately; a surface pushes, and nothing downstream depends on it having arrived. Its own health is the one thing it may break silence for, because a surface that has died mid-run is otherwise indistinguishable from one that was never configured. See ADR-0012.
+_Avoid_: notifier, integration, webhook (the transport of one surface, not the category), progress surface (collides with the *progress comment*)
 
 ### Tracker
 

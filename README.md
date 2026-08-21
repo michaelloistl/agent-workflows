@@ -901,7 +901,8 @@ Pass with `secrets: inherit`.
   sequential; 0004 no per-slice review; 0005 one sequencer, two entry points;
   0006 attended spec runs; 0007 the status view; 0008 `init` and `sync`; 0009 the
   local-run marker outlives a halt; 0010 an attended PR run's tooling is the
-  invoking checkout; 0011 unattended by default for local spec runs).
+  invoking checkout; 0011 unattended by default for local spec runs; 0012 a
+  Discord run surface for unsupervised local runs).
 
 ## Local checks
 
