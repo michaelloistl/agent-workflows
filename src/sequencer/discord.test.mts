@@ -24,9 +24,12 @@ const WEBHOOK = "https://discord.com/api/webhooks/1540/tok";
 // A fake transport. Records every call, answers from a queue of scripted replies,
 // and defaults to a created-thread reply so the common path needs no setup.
 function fakeFetch(replies: Array<HttpResponse | Error> = []) {
-  const calls: Array<{ url: string; body: unknown }> = [];
-  const fetchImpl = async (url: string, init: { body: string }): Promise<HttpResponse> => {
-    calls.push({ url, body: JSON.parse(init.body) });
+  const calls: Array<{ url: string; body: unknown; signal?: AbortSignal }> = [];
+  const fetchImpl = async (
+    url: string,
+    init: { body: string; signal?: AbortSignal },
+  ): Promise<HttpResponse> => {
+    calls.push({ url, body: JSON.parse(init.body), signal: init.signal });
     const next = replies.shift();
     if (next instanceof Error) throw next;
     return next ?? ok({ id: "9001", channel_id: "9001" });
@@ -73,28 +76,30 @@ test("resolveDiscord is UNUSABLE, not unset, for a value that is not an https UR
 
 test("threadName names the spec and its title", () => {
   assert.equal(
-    threadName({ spec: 94, title: "A Discord run surface", resumed: false }),
+    threadName({ spec: 94, title: "A Discord run surface", repeat: false }),
     "spec #94 — A Discord run surface",
   );
 });
 
-// The thread id does not survive a halt (ADR-0012), so a resumed spec opens a SECOND
-// thread. Marking it is what keeps the two apart in the channel list.
-test("threadName marks a resumed run", () => {
+// The thread id does not survive the process (ADR-0012), so ANY second local run of
+// the same spec — a resume after a halt, but equally a real run after a dry run —
+// opens a SECOND thread. The mark says "this spec has run here before", which is all
+// the run log it is derived from can honestly claim; it is not a claim about resume.
+test("threadName marks a repeat run", () => {
   assert.equal(
-    threadName({ spec: 94, title: "A Discord run surface", resumed: true }),
-    "spec #94 (resumed) — A Discord run surface",
+    threadName({ spec: 94, title: "A Discord run surface", repeat: true }),
+    "spec #94 (re-run) — A Discord run surface",
   );
 });
 
 test("threadName stays within Discord's 100-character limit", () => {
-  const name = threadName({ spec: 94, title: "x".repeat(300), resumed: true });
+  const name = threadName({ spec: 94, title: "x".repeat(300), repeat: true });
   assert.ok(name.length <= THREAD_NAME_MAX, `${name.length} > ${THREAD_NAME_MAX}`);
-  assert.match(name, /^spec #94 \(resumed\) — x+…$/);
+  assert.match(name, /^spec #94 \(re-run\) — x+…$/);
 });
 
 test("threadName tolerates a spec with no title", () => {
-  assert.equal(threadName({ spec: 94, title: "", resumed: false }), "spec #94");
+  assert.equal(threadName({ spec: 94, title: "", repeat: false }), "spec #94");
 });
 
 // — progress content —
@@ -223,7 +228,7 @@ test("with no webhook the surface is inactive, silent, and sends nothing", async
   assert.equal(surface.active, false);
   // Silent means SILENT: an unconfigured surface contributes no preview line at all,
   // because most consuming repos will never configure one.
-  assert.equal(await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false }), null);
+  assert.equal(await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false }), null);
   await surface.noteSliceBuilding({ slice: 1, position: 1, total: 1 });
   await surface.noteSliceMerged({ slice: 1, position: 1, total: 1 });
   await surface.notifyHalt({ spec: 94, reason: "x", refused: false, runLog: "/l", issueUrl: "u" });
@@ -239,7 +244,7 @@ test("a misconfigured webhook says so in the preview and sends nothing", async (
     { DISCORD_WEBHOOK_URL: "http://discord.com/api/webhooks/1/t" },
     fetchImpl,
   );
-  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
   assert.match(line ?? "", /^off \(DISCORD_WEBHOOK_URL is not an https URL\)$/);
   assert.equal(surface.active, false);
   await surface.notifyHalt({ spec: 94, reason: "x", refused: false, runLog: "/l", issueUrl: "u" });
@@ -257,7 +262,7 @@ test("openThread creates the forum thread and reports it for the preview", async
     specBranch: "agent/spec-94-x",
     slices: 3,
     dryRun: false,
-    resumed: false,
+    repeat: false,
   });
   assert.equal(line, "spec #94 thread created");
   assert.equal(calls.length, 1);
@@ -272,7 +277,7 @@ test("openThread creates the forum thread and reports it for the preview", async
 test("later sends are addressed to the thread the create returned", async () => {
   const { calls, fetchImpl } = fakeFetch([ok({ id: "9001", channel_id: "9001" })]);
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
-  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
   await surface.noteSliceBuilding({ slice: 7, position: 1, total: 1 });
   assert.equal(calls.length, 2);
   assert.equal(calls[1].url, `${WEBHOOK}?wait=true&thread_id=9001`);
@@ -284,7 +289,7 @@ test("later sends are addressed to the thread the create returned", async () => 
 test("a failed create disables the surface for the run and says so in the preview", async () => {
   const { calls, fetchImpl } = fakeFetch([status(400), status(400)]);
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
-  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
   // A bare status phrase — the preview owns its own label column.
   assert.match(line ?? "", /^off \(/);
   assert.match(line ?? "", /forum channel/);
@@ -293,20 +298,30 @@ test("a failed create disables the surface for the run and says so in the previe
   assert.equal(calls.length, 2, "the create was tried twice and nothing was sent after");
 });
 
-test("the create is retried exactly once", async () => {
+// A REFUSED create — Discord answered, and the answer was not a success — demonstrably
+// created nothing, so it is the one create failure that may safely be tried again.
+test("a refused create is retried exactly once", async () => {
   const { calls, fetchImpl } = fakeFetch([status(500), ok({ id: "9001" })]);
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
-  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
   assert.equal(line, "spec #94 thread created");
   assert.equal(calls.length, 2);
 });
 
-test("a thrown transport error on create is retried and then reported", async () => {
-  const { calls, fetchImpl } = fakeFetch([new Error("ETIMEDOUT"), new Error("ETIMEDOUT")]);
+// An UNANSWERED create — a 2s timeout, a severed network — may have landed anyway:
+// Discord may have created the thread and lost the reply inside the budget. Since
+// `thread_name` is not an idempotency key (verified by probe, ADR-0012), retrying
+// would leave a duplicate forum post, so it is never retried. The preview says which
+// case it was, because "it may exist" is a different thing to go and check than "the
+// channel is the wrong type".
+test("an UNANSWERED create is not retried, and the preview says it may exist", async () => {
+  const { calls, fetchImpl } = fakeFetch([new Error("ETIMEDOUT")]);
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
-  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
-  assert.match(line ?? "", /off \(/);
-  assert.equal(calls.length, 2);
+  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
+  assert.equal(calls.length, 1);
+  assert.match(line ?? "", /^off \(/);
+  assert.match(line ?? "", /may/);
+  assert.equal(surface.active, false);
 });
 
 // Discord documents that a 404 must NOT be retried, on pain of an IP-level block at
@@ -319,7 +334,7 @@ test("a 404 on create is NOT retried, and still warns on stderr", async () => {
   const warnings: string[] = [];
   const { calls, fetchImpl } = fakeFetch([status(404)]);
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl, (l) => warnings.push(l));
-  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /404/);
   assert.equal(calls.length, 1);
@@ -331,7 +346,7 @@ test("a 404 on create is NOT retried, and still warns on stderr", async () => {
 test("halt and complete post embeds into the thread", async () => {
   const { calls, fetchImpl } = fakeFetch();
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
-  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
   await surface.notifyHalt({ spec: 94, reason: "boom", refused: false, runLog: "/l", issueUrl: "u" });
   await surface.notifyComplete({ spec: 94, merged: 1, issueUrl: "u" });
   const halt = calls[1].body as { embeds: Array<{ color: number }> };
@@ -345,7 +360,7 @@ test("halt and complete post embeds into the thread", async () => {
 test("every send suppresses mention parsing", async () => {
   const { calls, fetchImpl } = fakeFetch();
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
-  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
   await surface.notifyHalt({ spec: 94, reason: "@everyone boom", refused: false, runLog: "/l", issueUrl: "u" });
   for (const call of calls) {
     assert.deepEqual((call.body as { allowed_mentions: unknown }).allowed_mentions, { parse: [] });
@@ -356,7 +371,7 @@ test("every send suppresses mention parsing", async () => {
 test("a failing send after the thread is open never propagates", async () => {
   const { fetchImpl } = fakeFetch([ok({ id: "9001" }), new Error("network down"), status(500)]);
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
-  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
   await assert.doesNotReject(() => surface.noteSliceBuilding({ slice: 1, position: 1, total: 1 }));
   await assert.doesNotReject(() => surface.notifyHalt({ spec: 94, reason: "x", refused: false, runLog: "/l", issueUrl: "u" }));
 });
@@ -368,7 +383,7 @@ test("a 404 mid-run disables the surface for the process and warns once", async 
   const warnings: string[] = [];
   const { calls, fetchImpl } = fakeFetch([ok({ id: "9001" }), status(404)]);
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl, (line) => warnings.push(line));
-  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
   await surface.noteSliceBuilding({ slice: 1, position: 1, total: 1 });
   await surface.noteSliceMerged({ slice: 1, position: 1, total: 1 });
   await surface.notifyHalt({ spec: 94, reason: "x", refused: false, runLog: "/l", issueUrl: "u" });
@@ -383,7 +398,7 @@ test("a non-404 failure mid-run warns about nothing and keeps the surface up", a
   const warnings: string[] = [];
   const { calls, fetchImpl } = fakeFetch([ok({ id: "9001" }), status(500)]);
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl, (line) => warnings.push(line));
-  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
   await surface.noteSliceBuilding({ slice: 1, position: 1, total: 1 });
   await surface.noteSliceMerged({ slice: 1, position: 1, total: 1 });
   assert.deepEqual(warnings, []);
@@ -393,12 +408,31 @@ test("a non-404 failure mid-run warns about nothing and keeps the surface up", a
 
 // A create that returns 200 but no usable id is a create that did not happen, and
 // must be reported like one rather than leaving the run posting to nowhere.
-test("a create with no id in the reply is treated as a failure", async () => {
-  const { fetchImpl } = fakeFetch([ok({}), ok({})]);
+test("a create with no id in the reply is treated as a failure, and not retried", async () => {
+  const { calls, fetchImpl } = fakeFetch([ok({}), ok({ id: "9001" })]);
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
-  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
   assert.match(line ?? "", /off \(/);
   assert.equal(surface.active, false);
+  // A 2xx means Discord SAVED the message, so the thread exists even though its id
+  // did not come back readable. Trying again would post a second one.
+  assert.equal(calls.length, 1);
+});
+
+// Rule 2 rests entirely on this. The surface cannot claim Herdr's flat "no delay"
+// because it must await its sends, so "bounded by 2s" is what makes "never delays a
+// run" true — and an unasserted bound is one deleted argument away from unbounded.
+test("every send carries an abort signal, so no send is unbounded", async () => {
+  const { calls, fetchImpl } = fakeFetch();
+  const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
+  await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, repeat: false });
+  await surface.noteSliceBuilding({ slice: 1, position: 1, total: 1 });
+  await surface.notifyComplete({ spec: 94, merged: 1, issueUrl: "u" });
+  assert.equal(calls.length, 3);
+  for (const call of calls) {
+    assert.ok(call.signal instanceof AbortSignal, "no abort signal on a send");
+    assert.equal(call.signal?.aborted, false);
+  }
 });
 
 // Nothing may be emitted before the thread exists — a forum channel would reject it,

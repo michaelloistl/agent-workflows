@@ -20,32 +20,37 @@ version without editing their workflow on every release.
   The channel **must be a forum channel**: an incoming webhook can create a thread only
   there, and no API finds one by name. **Unconfigured it is completely silent** — no preview
   line, no warning, nothing emitted — and no emit may fail or delay a run (every send is
-  bounded by a 2s timeout with no retry). Exactly **two things break that silence**, and both
+  bounded by a 2s timeout and never retried, except the initial thread create, which is
+  tried twice when Discord answers and refuses it — never when it goes unanswered, which
+  may have created the thread anyway). Exactly **two things break that silence**, and both
   report the surface's own health rather than the run's: a failed thread create, stated in
   the preview as `discord     : off (…)` because a forum channel accepts no message outside
   a thread and so a failed create silences the *whole* run including the halt notification;
   and an HTTP `404`, meaning the webhook was deleted or rotated, which prints one line to
   stderr and stands the surface down for the process. Scope is **local spec runs only** — CI
   already has reach through `agent:blocked` and the run URL, and attended single-verb runs
-  are minutes long and typed by hand. A **resumed** run opens a second thread (`spec #94
-  (resumed)`): the thread id lives in memory for the length of the process, so nothing is
+  are minutes long and typed by hand. A **second local run of a spec** opens a second
+  thread (`spec #94 (re-run)` — a resume after a halt, but equally a real run after a dry
+  run): the thread id lives in memory for the length of the process, so nothing is
   persisted and resume still derives entirely from the tracker and the branches.
-- **The sequencer now reads `.sandcastle/.env`.** Sandcastle merges that file into each
-  **agent's** environment inside `run()` and never touches the calling process, so the
-  sequencer — which is what emits every run-surface event — could not otherwise see
-  `DISCORD_WEBHOOK_URL`. It now loads the file at startup using sandcastle's own parser and
-  its own precedence: **the file wins over the shell** (an empty value in the file falls
-  through), so one key cannot resolve two ways depending on which process reads it. Note
-  this **inverts** `.sandcastle/agent-workflows/config.json`, where an environment variable
-  is the per-run override; the two are not inconsistent (`config.json` is committed repo
-  policy a run may override, `.env` is the machine's credential store the agent already
-  treats as authoritative), but a key set in the shell *and* in the file now resolves to the
-  file. Values loaded this way are also inherited by the children the sequencer spawns.
+- **The sequencer now reads `.sandcastle/.env` — for one key.** Sandcastle merges that
+  file into each **agent's** environment inside `run()` and never touches the calling
+  process, so the sequencer — which is what emits every run-surface event — could not
+  otherwise see `DISCORD_WEBHOOK_URL`. It now loads the file at startup using sandcastle's
+  own parser and its own precedence: **the file wins over the shell** (an empty value in
+  the file falls through), so one key cannot resolve two ways depending on which process
+  reads it. Only `DISCORD_WEBHOOK_URL` is taken — the agent still receives the whole file
+  from sandcastle — so a `GH_TOKEN` or `DEFAULT_BRANCH` kept there does not start beating
+  the shell for the sequencer or for the children it spawns. Note this **inverts**
+  `.sandcastle/agent-workflows/config.json`, where an environment variable is the per-run
+  override; the two are not inconsistent (`config.json` is committed repo policy a run may
+  override, `.env` is the machine's credential store the agent already treats as
+  authoritative), but the webhook set in the shell *and* in the file now resolves to the
+  file.
 - **Fixed a documentation error that disabled the Herdr surface for anyone following the
   README.** It named `HERDR_PANE`; the variable Herdr actually sets, and the one the code
   has always read, is `HERDR_PANE_ID`. Best-effort emission means a wrong name looked
   exactly like "not in a Herdr pane" — silent, with no warning.
-
 - **BREAKING (local CLI): the attended spec loop is now unattended by default.** A bare
   `agent-workflows implement-spec <n>` builds every slice, **merges each one for real**,
   and stops for nothing — what `--execute --yes --no-pause` used to spell. Under the old

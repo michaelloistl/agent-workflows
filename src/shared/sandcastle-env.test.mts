@@ -8,6 +8,9 @@ import {
   readSandcastleEnv,
   applySandcastleEnv,
   sandcastleEnvPath,
+  scopeToKeys,
+  loadSandcastleEnv,
+  SEQUENCER_ENV_KEYS,
 } from "./sandcastle-env.mts";
 
 // — parseEnvFile: mirrors sandcastle's own parser, deliberately —
@@ -125,4 +128,50 @@ test("sandcastleEnvPath points at .sandcastle/.env under the checkout", () => {
   const dir = mkdtempSync(join(tmpdir(), "sandcastle-root-"));
   mkdirSync(join(dir, ".sandcastle"));
   assert.equal(sandcastleEnvPath(dir), join(dir, ".sandcastle", ".env"));
+});
+
+// — the SCOPE: which keys the sequencer takes at all —
+//
+// A scope is not a precedence rule. The precedence stays sandcastle's `||`; it is
+// simply applied to fewer keys. The sequencer takes the one key it has a reason to
+// want, because `run()` spreads `process.env` into every child — so anything applied
+// here beats the shell for the sequencer, for each `gh`/`git` call, for the bootstrap
+// command, and for each slice's sequence, which is a reach sandcastle's own
+// agent-only merge does not have.
+
+test("SEQUENCER_ENV_KEYS is the run surface's webhook and nothing else", () => {
+  assert.deepEqual([...SEQUENCER_ENV_KEYS], ["DISCORD_WEBHOOK_URL"]);
+});
+
+test("scopeToKeys keeps only the listed keys", () => {
+  const file = { DISCORD_WEBHOOK_URL: "https://x/y", GH_TOKEN: "ghp_x", DEFAULT_BRANCH: "trunk" };
+  assert.deepEqual(scopeToKeys(file, ["DISCORD_WEBHOOK_URL"]), {
+    DISCORD_WEBHOOK_URL: "https://x/y",
+  });
+});
+
+test("scopeToKeys omits a listed key the file does not have", () => {
+  assert.deepEqual(scopeToKeys({ A: "1" }, ["B"]), {});
+});
+
+// The end-to-end shape: the webhook arrives, and a `GH_TOKEN` a developer keeps in
+// the same file does NOT quietly replace the one they exported for this run.
+test("loadSandcastleEnv applies the webhook and leaves out-of-scope keys alone", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sandcastle-load-"));
+  mkdirSync(join(dir, ".sandcastle"));
+  writeFileSync(
+    join(dir, ".sandcastle", ".env"),
+    "DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1/tok\nGH_TOKEN=from-file\n",
+  );
+  const env: NodeJS.ProcessEnv = { GH_TOKEN: "from-shell" };
+  assert.deepEqual(loadSandcastleEnv(env, dir), ["DISCORD_WEBHOOK_URL"]);
+  assert.equal(env.DISCORD_WEBHOOK_URL, "https://discord.com/api/webhooks/1/tok");
+  assert.equal(env.GH_TOKEN, "from-shell");
+});
+
+test("loadSandcastleEnv is a no-op when the checkout has no .sandcastle/.env", () => {
+  const dir = mkdtempSync(join(tmpdir(), "sandcastle-none-"));
+  const env: NodeJS.ProcessEnv = {};
+  assert.deepEqual(loadSandcastleEnv(env, dir), []);
+  assert.deepEqual(env, {});
 });

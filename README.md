@@ -582,12 +582,17 @@ Three things are worth knowing before you point it anywhere:
   An incoming webhook can create a thread *only* there, and no API finds a thread by
   name, so this is forced rather than preferred. Pointed at an ordinary text channel
   the surface creates nothing and every preview reports `off`.
-- **The thread is created before the preview prints, and the preview says so** —
+- **The thread is created before the preview prints — and after the local lock is
+  taken — and the preview says so** —
   `discord     : spec #94 thread created`, or `discord     : off (…)` when the create
   failed. That line is loud on purpose: a forum channel accepts no message outside a
   thread, so a failed create silences the whole run *including the halt notification*,
-  and the preview is the last moment anyone is looking. A failed create never halts
-  the run.
+  and the preview is the last moment anyone is looking. The lock comes first so that a
+  second terminal colliding on it leaves no orphan thread behind. A failed create never
+  halts the run. The create is the one send that may be tried twice — only when Discord
+  answers and refuses it — so kickoff can pause for a few seconds before the preview
+  appears. A create that simply goes unanswered is *not* retried: it may have created
+  the thread anyway, and a second attempt would leave a duplicate.
 - **Unconfigured it is completely silent** — no line in the preview, no warning,
   nothing emitted. The only other thing that breaks silence is an HTTP `404`, meaning
   the webhook was deleted or rotated: the surface prints one line to stderr and stands
@@ -596,10 +601,12 @@ Three things are worth knowing before you point it anywhere:
 
 Scope is deliberately **local spec runs only** — not CI, which already has reach
 through `agent:blocked` and the run URL, and not attended single-verb runs, which are
-minutes long and typed by hand. A **resumed** run opens a second thread (`spec #94
-(resumed)`): the thread id lives in memory for the length of the process and nothing
-persists it, so resume still derives entirely from the tracker and the branches. Every
-send is bounded by a 2s timeout with no retry, and no emit can fail or delay a run.
+minutes long and typed by hand. A **second local run of a spec** opens a second thread
+(`spec #94 (re-run)` — a resume after a halt, but equally a real run after a dry run):
+the thread id lives in memory for the length of the process and nothing persists it,
+so resume still derives entirely from the tracker and the branches. Every send is
+bounded by a 2s timeout and never retried, the initial thread create excepted, and no
+emit can fail or delay a run.
 See [ADR-0012](docs/adr/0012-a-discord-run-surface-for-unsupervised-local-runs.md).
 
 Reading `.sandcastle/.env` is itself new. Sandcastle merges that file into each
@@ -607,7 +614,9 @@ Reading `.sandcastle/.env` is itself new. Sandcastle merges that file into each
 sequencer — which is what emits every event — could not otherwise see the webhook. The
 sequencer now loads the file at startup using sandcastle's own parser and its own
 precedence: **the file wins over the shell** (an empty value in the file falls
-through). Note this is the *opposite* of `.sandcastle/agent-workflows/config.json`,
+through). It takes **only `DISCORD_WEBHOOK_URL`** from the file — everything the agent
+needs, sandcastle still merges into the agent's own environment, and the narrow scope
+keeps a `GH_TOKEN` in that file from quietly beating one exported for a single run. Note this is the *opposite* of `.sandcastle/agent-workflows/config.json`,
 where an environment variable is the per-run override — `config.json` is committed repo
 policy a run may override, while `.env` is the machine's credential store the agent
 already treats as authoritative.

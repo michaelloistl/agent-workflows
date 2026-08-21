@@ -67,7 +67,8 @@
 // ASYNC — it ends in `process.exit`, which would kill an un-awaited terminal send
 // before it left the process. Reading `.sandcastle/.env` is new too: sandcastle
 // resolves that file into each AGENT's environment and never the caller's, so the
-// sequencer loads it itself, with sandcastle's parser and its file-wins precedence.
+// sequencer loads it itself — with sandcastle's parser and its file-wins precedence,
+// scoped to the one key it has a reason to want.
 //
 // A real run also holds the LOCAL-RUN MARKER (`agent:local`) on the spec issue for
 // its whole length. Merging a slice PR into the spec branch is precisely the event
@@ -260,6 +261,10 @@ function closedSet(issues: RawIssue[]): Set<number> {
 // run-surface event and never enters an agent's environment — could not otherwise see
 // `DISCORD_WEBHOOK_URL`. The file wins over the shell, matching sandcastle's own
 // precedence, so one key cannot resolve two ways depending on which process reads it.
+// SCOPED to `SEQUENCER_ENV_KEYS`: `run()` spreads `process.env` into every child, so an
+// unscoped load would put the file above the shell for each `gh` call, the bootstrap
+// command and every slice's sequence — a reach sandcastle's agent-only merge does not
+// have. The agent still gets the whole file; sandcastle still merges it.
 loadSandcastleEnv();
 
 const config = resolveConfig();
@@ -383,26 +388,57 @@ const issues0 = listIssues();
 const bullets0 = tracerBullets(specNum, issues0, DEPENDENCY_EDGES);
 const { order, deadlocked } = resolveOrder(bullets0);
 
+// Nothing ready to build: print the plan and stop before the lock, the worktree root,
+// and the Discord thread. A no-op run takes nothing and leaves nothing behind.
+if (order.length === 0) {
+  console.log(formatPreview({ spec: specNum, specBranch, base, order, deadlocked, dryRun, runLog }));
+  console.log("spec-loop: no ready tracer-bullets to build — nothing to do.");
+  process.exit(0);
+}
+
+mkdirSync(root, { recursive: true });
+
+// The local lock (the mutex between two terminals) keyed by the spec, so two specs
+// never collide. `--force` takes over a live holder; a stale lock is cleared.
+//
+// Taken BEFORE the Discord thread is opened (ADR-0012). A second terminal colliding
+// here would otherwise have created its own `spec #94` thread first, posted `run
+// started` into it and then exited — leaving a phone watcher two threads for one spec,
+// one of them permanently silent, which is the very ambiguity the surface exists to
+// remove. The only cost is holding the lock across the preview gate's think-time, and
+// that think-time exists under `--pause` alone.
+const acquired = acquireLock(lock, process.pid, { force });
+if (!acquired.acquired) {
+  console.error(
+    `spec-loop: another local run holds the lock at ${lock}` +
+      (acquired.heldBy ? ` (pid ${acquired.heldBy})` : "") +
+      `. Re-run with --force to take it over.`,
+  );
+  process.exit(1);
+}
+if (acquired.clearedStale) {
+  console.log(`spec-loop: cleared a stale lock at ${lock} (its owner was gone).`);
+}
+
 // Open the run's Discord thread BEFORE the preview prints (ADR-0012). The ordering is
 // the whole point: a forum channel accepts no message outside a thread, so a failed
 // create silences the entire run — including the halt notification the surface exists
 // to deliver — and the preview is the last moment the developer is still looking.
-// Skipped when there is nothing to build, so a no-op run leaves no empty thread.
 //
-// `resumed` is cosmetic and nothing decides anything from it: the thread id is the one
-// thing that does not survive a halt (resume derives from the tracker and the branches
-// alone, ADR-0006), so a resumed spec opens a SECOND thread, and an existing run log
-// for this spec is the cheapest honest signal that this has happened before.
-const discordLine = order.length
-  ? await discord.openThread({
-      spec: specNum,
-      title: specTitle,
-      specBranch,
-      slices: order.length,
-      dryRun,
-      resumed: existsSync(runLog),
-    })
-  : null;
+// `repeat` is cosmetic and nothing decides anything from it: the thread id is the one
+// thing that does not survive the process (resume derives from the tracker and the
+// branches alone, ADR-0006), so a second local run of this spec opens a SECOND thread.
+// An existing run log is the cheapest honest signal that this spec has run here
+// before — which a resume satisfies, and so does a real run after a dry run, hence
+// `(re-run)` rather than `(resumed)`.
+const discordLine = await discord.openThread({
+  spec: specNum,
+  title: specTitle,
+  specBranch,
+  slices: order.length,
+  dryRun,
+  repeat: existsSync(runLog),
+});
 
 const plan: SpecPlan = {
   spec: specNum,
@@ -418,10 +454,6 @@ const plan: SpecPlan = {
 // The preview — the blast radius, visible before it is incurred. Printed on every run;
 // under `--pause` the run does not begin until it is accepted.
 console.log(formatPreview(plan));
-if (order.length === 0) {
-  console.log("spec-loop: no ready tracer-bullets to build — nothing to do.");
-  process.exit(0);
-}
 // The preview is printed above either way — the unattended default (or `--yes` under
 // `--pause`) answers the prompt, it does not suppress the blast radius, and the notice
 // records what proceeded without asking, naming the flags that would have stopped it.
@@ -429,24 +461,10 @@ const gate = previewGate({ pause, yes, dryRun });
 if (gate.notice) console.log(gate.notice);
 if (gate.prompt && !confirm(gate.prompt)) {
   console.log("spec-loop: declined — nothing done.");
+  // The lock is held from above now, so a decline hands it back rather than leaving
+  // one the next terminal would have to force.
+  releaseLock(lock);
   process.exit(0);
-}
-
-mkdirSync(root, { recursive: true });
-
-// The local lock (the mutex between two terminals) keyed by the spec, so two specs
-// never collide. `--force` takes over a live holder; a stale lock is cleared.
-const acquired = acquireLock(lock, process.pid, { force });
-if (!acquired.acquired) {
-  console.error(
-    `spec-loop: another local run holds the lock at ${lock}` +
-      (acquired.heldBy ? ` (pid ${acquired.heldBy})` : "") +
-      `. Re-run with --force to take it over.`,
-  );
-  process.exit(1);
-}
-if (acquired.clearedStale) {
-  console.log(`spec-loop: cleared a stale lock at ${lock} (its owner was gone).`);
 }
 
 // The end-of-run accounting the summary reports.
