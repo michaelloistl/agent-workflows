@@ -98,9 +98,10 @@ test("formatPreview says nothing about Discord when the surface has nothing to s
 });
 
 // A failed thread create silences the WHOLE run, so it is stated at the one moment
-// the developer is still looking.
-test("formatPreview carries the Discord status line when there is one", () => {
-  const out = formatPreview({ ...PLAN, discord: "discord     : off (the thread could not be created)" });
+// the developer is still looking. The plan carries a bare STATUS; this module renders
+// the label column, as it does for every other row.
+test("formatPreview labels the Discord status when there is one", () => {
+  const out = formatPreview({ ...PLAN, discord: "off (the thread could not be created)" });
   assert.match(out, /^discord {5}: off \(the thread could not be created\)$/m);
 });
 

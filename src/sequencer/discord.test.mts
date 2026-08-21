@@ -1,13 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  detectDiscord,
+  resolveDiscord,
   threadName,
   runStartedContent,
   sliceBuildingContent,
   sliceMergedContent,
   haltSummary,
-  isRefusal,
   haltEmbed,
   completeEmbed,
   sendRequest,
@@ -43,22 +42,31 @@ function status(code: number): HttpResponse {
   return { status: code, json: async () => ({}) };
 }
 
-// — detectDiscord —
+// — resolveDiscord —
+//
+// THREE states, not two. `unset` and `unusable` must not collapse into each other:
+// silence is right for the first and wrong for the second, since a typo'd webhook
+// that says nothing lands in exactly the hole this surface exists to close.
 
-test("detectDiscord returns the webhook when DISCORD_WEBHOOK_URL is set", () => {
-  assert.deepEqual(detectDiscord({ DISCORD_WEBHOOK_URL: WEBHOOK }), { webhook: WEBHOOK });
+test("resolveDiscord is ready when DISCORD_WEBHOOK_URL is a usable https URL", () => {
+  assert.deepEqual(resolveDiscord({ DISCORD_WEBHOOK_URL: WEBHOOK }), {
+    state: "ready",
+    webhook: WEBHOOK,
+  });
 });
 
-test("detectDiscord returns null when the variable is absent or empty", () => {
-  assert.equal(detectDiscord({}), null);
-  assert.equal(detectDiscord({ DISCORD_WEBHOOK_URL: "" }), null);
+test("resolveDiscord is unset when the variable is absent or empty", () => {
+  assert.equal(resolveDiscord({}).state, "unset");
+  assert.equal(resolveDiscord({ DISCORD_WEBHOOK_URL: "" }).state, "unset");
 });
 
 // A pasted value that is not an https URL can only ever 404, and a 404 is the one
 // response this surface must not retry — so it is rejected before it is ever sent.
-test("detectDiscord rejects a value that is not an https URL", () => {
-  assert.equal(detectDiscord({ DISCORD_WEBHOOK_URL: "not a url" }), null);
-  assert.equal(detectDiscord({ DISCORD_WEBHOOK_URL: "http://discord.com/api/webhooks/1/t" }), null);
+test("resolveDiscord is UNUSABLE, not unset, for a value that is not an https URL", () => {
+  const notUrl = resolveDiscord({ DISCORD_WEBHOOK_URL: "not a url" });
+  assert.equal(notUrl.state, "unusable");
+  const notHttps = resolveDiscord({ DISCORD_WEBHOOK_URL: "http://discord.com/api/webhooks/1/t" });
+  assert.equal(notHttps.state, "unusable");
 });
 
 // — threadName —
@@ -92,14 +100,14 @@ test("threadName tolerates a spec with no title", () => {
 // — progress content —
 
 test("runStartedContent reports the branch and the slice count", () => {
-  const text = runStartedContent({ spec: 94, specBranch: "agent/spec-94-x", slices: 3, dryRun: false });
+  const text = runStartedContent({ specBranch: "agent/spec-94-x", slices: 3, dryRun: false });
   assert.match(text, /run started/);
   assert.match(text, /agent\/spec-94-x/);
   assert.match(text, /3 slices/);
 });
 
 test("runStartedContent says so when the run is a dry run", () => {
-  const text = runStartedContent({ spec: 94, specBranch: "agent/spec-94-x", slices: 1, dryRun: true });
+  const text = runStartedContent({ specBranch: "agent/spec-94-x", slices: 1, dryRun: true });
   assert.match(text, /dry run/i);
   assert.match(text, /1 slice\b/);
 });
@@ -132,27 +140,18 @@ test("haltSummary falls back when the reason is blank", () => {
   assert.equal(haltSummary("   \n  "), "no reason recorded");
 });
 
-// — isRefusal: what makes a halt amber rather than red —
-//
-// A refusal is not a failure (CONTEXT.md). Under the spec loop it arrives as a halt
-// REASON rather than a distinct outcome, so colour is what carries the distinction.
-
-test("isRefusal recognises a sequence refusal", () => {
-  assert.equal(isRefusal("the sequence refused at guards"), true);
-  assert.equal(isRefusal("The sequence REFUSED at fetch-spec"), true);
-});
-
-test("isRefusal does not claim an ordinary failure", () => {
-  assert.equal(isRefusal("the merge was not confirmed on GitHub"), false);
-  assert.equal(isRefusal("interrupted (Ctrl-C)"), false);
-});
-
 // — embeds —
+//
+// A refusal is not a failure (CONTEXT.md), and colour is what carries that
+// distinction. `refused` arrives as a FACT from the loop, which has a dedicated
+// branch for it — never re-derived from the reason's wording, which nobody is
+// obliged to keep phrased any particular way.
 
 test("haltEmbed is red, links the issue, and carries the run log", () => {
   const embed = haltEmbed({
     spec: 94,
     reason: "the merge was not confirmed on GitHub",
+    refused: false,
     runLog: "/tmp/wt/spec-94.log",
     issueUrl: "https://github.com/o/r/issues/94",
   });
@@ -163,15 +162,24 @@ test("haltEmbed is red, links the issue, and carries the run log", () => {
   assert.ok(embed.fields?.some((f) => f.value.includes("/tmp/wt/spec-94.log")));
 });
 
-test("haltEmbed is AMBER when the halt's reason is a refusal", () => {
+test("haltEmbed is AMBER when the halt was a refusal", () => {
   const embed = haltEmbed({
     spec: 94,
-    reason: "the sequence refused at guards",
+    reason: "the implement sequence refused at `guards`",
+    refused: true,
     runLog: "/tmp/wt/spec-94.log",
     issueUrl: "https://github.com/o/r/issues/94",
   });
   assert.equal(embed.color, COLOUR_REFUSED);
   assert.match(embed.title, /refused/);
+});
+
+// The colour follows the FLAG, not the prose — the regression the fact-passing
+// exists to prevent.
+test("haltEmbed colours by the flag even when the wording disagrees", () => {
+  const base = { spec: 94, runLog: "/l", issueUrl: "u" };
+  assert.equal(haltEmbed({ ...base, reason: "the agent refused to build", refused: false }).color, COLOUR_HALT);
+  assert.equal(haltEmbed({ ...base, reason: "guards declined", refused: true }).color, COLOUR_REFUSED);
 });
 
 test("completeEmbed is green and says the final PR opened", () => {
@@ -218,8 +226,23 @@ test("with no webhook the surface is inactive, silent, and sends nothing", async
   assert.equal(await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false }), null);
   await surface.noteSliceBuilding({ slice: 1, position: 1, total: 1 });
   await surface.noteSliceMerged({ slice: 1, position: 1, total: 1 });
-  await surface.notifyHalt({ spec: 94, reason: "x", runLog: "/l", issueUrl: "u" });
+  await surface.notifyHalt({ spec: 94, reason: "x", refused: false, runLog: "/l", issueUrl: "u" });
   await surface.notifyComplete({ spec: 94, merged: 1, issueUrl: "u" });
+  assert.deepEqual(calls, []);
+});
+
+// A webhook somebody MEANT to configure and got wrong is not silent — that is the
+// hole the two loud exceptions exist to close, and a typo falls straight into it.
+test("a misconfigured webhook says so in the preview and sends nothing", async () => {
+  const { calls, fetchImpl } = fakeFetch();
+  const surface = createDiscordSurface(
+    { DISCORD_WEBHOOK_URL: "http://discord.com/api/webhooks/1/t" },
+    fetchImpl,
+  );
+  const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  assert.match(line ?? "", /^off \(DISCORD_WEBHOOK_URL is not an https URL\)$/);
+  assert.equal(surface.active, false);
+  await surface.notifyHalt({ spec: 94, reason: "x", refused: false, runLog: "/l", issueUrl: "u" });
   assert.deepEqual(calls, []);
 });
 
@@ -236,7 +259,7 @@ test("openThread creates the forum thread and reports it for the preview", async
     dryRun: false,
     resumed: false,
   });
-  assert.equal(line, "discord     : spec #94 thread created");
+  assert.equal(line, "spec #94 thread created");
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, `${WEBHOOK}?wait=true`);
   const body = calls[0].body as { thread_name: string; content: string };
@@ -262,10 +285,11 @@ test("a failed create disables the surface for the run and says so in the previe
   const { calls, fetchImpl } = fakeFetch([status(400), status(400)]);
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
   const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
-  assert.match(line ?? "", /^discord {5}: off \(/);
+  // A bare status phrase — the preview owns its own label column.
+  assert.match(line ?? "", /^off \(/);
   assert.match(line ?? "", /forum channel/);
   assert.equal(surface.active, false);
-  await surface.notifyHalt({ spec: 94, reason: "x", runLog: "/l", issueUrl: "u" });
+  await surface.notifyHalt({ spec: 94, reason: "x", refused: false, runLog: "/l", issueUrl: "u" });
   assert.equal(calls.length, 2, "the create was tried twice and nothing was sent after");
 });
 
@@ -273,7 +297,7 @@ test("the create is retried exactly once", async () => {
   const { calls, fetchImpl } = fakeFetch([status(500), ok({ id: "9001" })]);
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
   const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
-  assert.equal(line, "discord     : spec #94 thread created");
+  assert.equal(line, "spec #94 thread created");
   assert.equal(calls.length, 2);
 });
 
@@ -288,10 +312,16 @@ test("a thrown transport error on create is retried and then reported", async ()
 // Discord documents that a 404 must NOT be retried, on pain of an IP-level block at
 // 10,000 invalid requests in ten minutes. It is also the deleted-or-rotated-webhook
 // case, which would otherwise fail silently forever.
-test("a 404 on create is NOT retried", async () => {
+// ADR-0012 specifies stderr for the 404 exception, so it prints here too even though
+// the preview also names the cause — the two go to different streams, and a developer
+// who has redirected stdout still needs to see why the surface went quiet.
+test("a 404 on create is NOT retried, and still warns on stderr", async () => {
+  const warnings: string[] = [];
   const { calls, fetchImpl } = fakeFetch([status(404)]);
-  const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
+  const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl, (l) => warnings.push(l));
   const line = await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /404/);
   assert.equal(calls.length, 1);
   assert.match(line ?? "", /404|no longer exists|deleted/i);
 });
@@ -302,7 +332,7 @@ test("halt and complete post embeds into the thread", async () => {
   const { calls, fetchImpl } = fakeFetch();
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
   await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
-  await surface.notifyHalt({ spec: 94, reason: "boom", runLog: "/l", issueUrl: "u" });
+  await surface.notifyHalt({ spec: 94, reason: "boom", refused: false, runLog: "/l", issueUrl: "u" });
   await surface.notifyComplete({ spec: 94, merged: 1, issueUrl: "u" });
   const halt = calls[1].body as { embeds: Array<{ color: number }> };
   const done = calls[2].body as { embeds: Array<{ color: number }> };
@@ -316,7 +346,7 @@ test("every send suppresses mention parsing", async () => {
   const { calls, fetchImpl } = fakeFetch();
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
   await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
-  await surface.notifyHalt({ spec: 94, reason: "@everyone boom", runLog: "/l", issueUrl: "u" });
+  await surface.notifyHalt({ spec: 94, reason: "@everyone boom", refused: false, runLog: "/l", issueUrl: "u" });
   for (const call of calls) {
     assert.deepEqual((call.body as { allowed_mentions: unknown }).allowed_mentions, { parse: [] });
   }
@@ -328,7 +358,7 @@ test("a failing send after the thread is open never propagates", async () => {
   const surface = createDiscordSurface({ DISCORD_WEBHOOK_URL: WEBHOOK }, fetchImpl);
   await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
   await assert.doesNotReject(() => surface.noteSliceBuilding({ slice: 1, position: 1, total: 1 }));
-  await assert.doesNotReject(() => surface.notifyHalt({ spec: 94, reason: "x", runLog: "/l", issueUrl: "u" }));
+  await assert.doesNotReject(() => surface.notifyHalt({ spec: 94, reason: "x", refused: false, runLog: "/l", issueUrl: "u" }));
 });
 
 // The second loud exception. A 404 mid-run means the webhook was deleted or rotated;
@@ -341,7 +371,7 @@ test("a 404 mid-run disables the surface for the process and warns once", async 
   await surface.openThread({ spec: 94, title: "t", specBranch: "b", slices: 1, dryRun: false, resumed: false });
   await surface.noteSliceBuilding({ slice: 1, position: 1, total: 1 });
   await surface.noteSliceMerged({ slice: 1, position: 1, total: 1 });
-  await surface.notifyHalt({ spec: 94, reason: "x", runLog: "/l", issueUrl: "u" });
+  await surface.notifyHalt({ spec: 94, reason: "x", refused: false, runLog: "/l", issueUrl: "u" });
   assert.equal(calls.length, 2, "nothing was sent after the 404");
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /404/);

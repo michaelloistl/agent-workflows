@@ -451,7 +451,12 @@ if (acquired.clearedStale) {
 
 // The end-of-run accounting the summary reports.
 const built: number[] = [];
-let halted: { slice: number; reason: string } | null = null;
+// `refused` records that the halt was a guard or a sequence standing the run DOWN
+// deliberately, rather than something breaking — a refusal is not a failure
+// (CONTEXT.md). It is carried as a fact because the Discord surface colours a refusal
+// amber and a failure red (ADR-0012), and a colour that had to be re-derived by
+// matching the reason's English would flip the first time somebody reworded a message.
+let halted: { slice: number; reason: string; refused?: boolean } | null = null;
 let finalPrOpened = false;
 // Run-ceiling accounting (issue #61). `runStart` clocks the run's wall-clock from
 // here — after the preview is accepted and the lock is held, so human think-time at
@@ -569,7 +574,13 @@ async function finish(code: number, opts: { removeWorktree?: boolean } = {}): Pr
   if (halted) {
     record(halted.slice, "halt", halted.reason);
     herdr.notifyHalt({ spec: specNum, reason: halted.reason });
-    await discord.notifyHalt({ spec: specNum, reason: halted.reason, runLog, issueUrl });
+    await discord.notifyHalt({
+      spec: specNum,
+      reason: halted.reason,
+      refused: halted.refused === true,
+      runLog,
+      issueUrl,
+    });
   } else if (finalPrOpened) {
     record(null, "complete", "final PR opened");
     herdr.notifyComplete({ spec: specNum });
@@ -976,7 +987,11 @@ async function drive(): Promise<never> {
     if (sliceState.outcome === "refused") {
       const reason = sliceRefusedHaltReason({ slice, step: sliceState.step ?? "" });
       console.error(reason);
-      halted = { slice, reason: `the implement sequence refused at \`${sliceState.step ?? "?"}\`` };
+      halted = {
+        slice,
+        reason: `the implement sequence refused at \`${sliceState.step ?? "?"}\``,
+        refused: true,
+      };
       record(slice, "refused", `the sequence refused at ${sliceState.step ?? "?"}`);
       console.log(formatSliceFooter({ slice, outcome: "refused" }));
       await finish(1);

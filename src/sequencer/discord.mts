@@ -5,12 +5,17 @@
 // progress comment — and no REACH. This is the reach: one forum thread per run,
 // carrying five events, pushed into a channel the developer already has on a phone.
 //
-// It is the second *run surface*, and it inherits Herdr's three rules verbatim:
+// It is the second *run surface*, and it inherits Herdr's three rules, with the second
+// stated more precisely than Herdr needs it:
 //   1. STRICTLY best-effort — with no `DISCORD_WEBHOOK_URL` it is a silent no-op that
 //      warns about nothing and contributes no preview line at all. Most consuming
 //      repos will never configure one, and they must not be nagged.
-//   2. NEVER fail or delay a run — every emit swallows everything, and every send is
-//      bounded by a 2s timeout with no retry.
+//   2. NEVER fail a run, and never delay one UNBOUNDEDLY — every emit swallows
+//      everything, and every send is bounded by a 2s timeout with no retry. Herdr can
+//      claim a flat "no delay" because it spawns and ignores the result; this surface
+//      cannot, because it must await (see `sendRequest` on `wait=true`), so the bound
+//      is what does the work. A send measured at ~0.3s sits against a slice measured
+//      in minutes.
 //   3. No required dependency — a webhook URL and `fetch`. No bot, no token, no
 //      gateway connection held open for the length of the run.
 //
@@ -53,24 +58,33 @@ export const COLOUR_HALT = 0xd83c3e;
 export const COLOUR_REFUSED = 0xe6a817;
 export const COLOUR_COMPLETE = 0x2ecc71;
 
-// The resolved Discord context: the webhook every send posts to. Null when unset.
-export interface DiscordContext {
-  readonly webhook: string;
-}
+// What the environment says about the surface. THREE states, not two, and the third
+// is the point: `unset` is the ordinary case and stays silent, while `unusable` is a
+// surface somebody meant to configure and misconfigured. Collapsing those two would
+// put a typo'd webhook into exactly the hole this design exists to close — a surface
+// that is not working, looking identical to one that was never asked for.
+export type DiscordResolution =
+  | { readonly state: "unset" }
+  | { readonly state: "unusable"; readonly detail: string }
+  | { readonly state: "ready"; readonly webhook: string };
 
-// Detect the webhook from the environment — the single point that decides whether
+// Resolve the webhook from the environment — the single point that decides whether
 // anything is sent at all. A value that is not an https URL is rejected here rather
 // than sent, because the only answer it could ever get is a 404, and a 404 is the one
 // response this surface must not retry.
-export function detectDiscord(env: NodeJS.ProcessEnv): DiscordContext | null {
+export function resolveDiscord(env: NodeJS.ProcessEnv): DiscordResolution {
   const webhook = env[DISCORD_WEBHOOK_ENV];
-  if (!webhook) return null;
+  if (!webhook) return { state: "unset" };
+  let url: URL;
   try {
-    if (new URL(webhook).protocol !== "https:") return null;
+    url = new URL(webhook);
   } catch {
-    return null;
+    return { state: "unusable", detail: `${DISCORD_WEBHOOK_ENV} is not a URL` };
   }
-  return { webhook };
+  if (url.protocol !== "https:") {
+    return { state: "unusable", detail: `${DISCORD_WEBHOOK_ENV} is not an https URL` };
+  }
+  return { state: "ready", webhook };
 }
 
 // The forum thread's name. One thread per run, so it must read at a glance in a
@@ -86,7 +100,6 @@ export function threadName(o: { spec: number; title: string; resumed: boolean })
 // The thread's opening message: what this run is about to do, so the thread is
 // readable on its own without scrolling back to the terminal it came from.
 export function runStartedContent(o: {
-  spec: number;
   specBranch: string;
   slices: number;
   dryRun: boolean;
@@ -113,13 +126,6 @@ export function haltSummary(reason: string): string {
   return first ? truncate(first, HALT_REASON_MAX) : "no reason recorded";
 }
 
-// Whether a halt's reason is a REFUSAL — a guard standing the run down deliberately —
-// rather than something breaking. The spec loop records a refusal as a halt reason
-// rather than a distinct outcome, so this is what earns the amber.
-export function isRefusal(reason: string): boolean {
-  return /\brefused\b/i.test(reason);
-}
-
 // A Discord embed, narrowed to the fields this surface uses.
 export interface Embed {
   readonly title: string;
@@ -132,18 +138,23 @@ export interface Embed {
 // The halt embed. The title links the spec issue, so the one tap a phone affords
 // lands somewhere useful, and the run log's path travels for the developer who is
 // back at the machine.
+//
+// `refused` is passed IN as a fact, never re-derived from the reason's wording. The
+// loop already knows — it has a dedicated branch for a sequence that declined — and a
+// colour that depended on matching English prose would silently turn amber into red
+// the first time somebody rephrased a halt message.
 export function haltEmbed(o: {
   spec: number;
   reason: string;
+  refused: boolean;
   runLog: string;
   issueUrl: string;
 }): Embed {
-  const refused = isRefusal(o.reason);
   return {
-    title: `spec #${o.spec} ${refused ? "refused" : "halted"}`,
+    title: `spec #${o.spec} ${o.refused ? "refused" : "halted"}`,
     url: o.issueUrl,
     description: haltSummary(o.reason),
-    color: refused ? COLOUR_REFUSED : COLOUR_HALT,
+    color: o.refused ? COLOUR_REFUSED : COLOUR_HALT,
     fields: [{ name: "run log", value: `\`${o.runLog}\`` }],
   };
 }
@@ -212,8 +223,9 @@ export type Warn = (line: string) => void;
 
 // The run surface the loop drives. With no webhook every method is a silent no-op.
 // With one, `openThread` must succeed before anything else sends — a forum channel
-// accepts no message outside a thread — and its return value is the preview's
-// `discord:` line, or null when there is nothing to say.
+// accepts no message outside a thread — and it returns the surface's STATUS for the
+// preview, or null when there is nothing to say. The status is a bare phrase: the
+// preview owns its own label column, so this module does not spell one.
 export interface DiscordSurface {
   readonly active: boolean;
   openThread(o: {
@@ -226,7 +238,13 @@ export interface DiscordSurface {
   }): Promise<string | null>;
   noteSliceBuilding(o: { slice: number; position: number; total: number }): Promise<void>;
   noteSliceMerged(o: { slice: number; position: number; total: number }): Promise<void>;
-  notifyHalt(o: { spec: number; reason: string; runLog: string; issueUrl: string }): Promise<void>;
+  notifyHalt(o: {
+    spec: number;
+    reason: string;
+    refused: boolean;
+    runLog: string;
+    issueUrl: string;
+  }): Promise<void>;
   notifyComplete(o: { spec: number; merged: number; issueUrl: string }): Promise<void>;
 }
 
@@ -239,7 +257,8 @@ export function createDiscordSurface(
   fetchImpl: Fetch,
   warn: Warn = (line) => console.error(line),
 ): DiscordSurface {
-  const ctx = detectDiscord(env);
+  const resolution = resolveDiscord(env);
+  const webhook = resolution.state === "ready" ? resolution.webhook : null;
   let threadId: string | null = null;
   // Set by a failed create or a 404, and never unset. Distinct from "no webhook":
   // this is a surface that WAS configured and has stopped working.
@@ -249,14 +268,10 @@ export function createDiscordSurface(
   let notFound = false;
 
   // One send. Returns the reply, or null when it failed in any way at all — the
-  // caller never learns how, except for the one case that must be loud. `quiet`
-  // suppresses that one line during the create, where the preview says it better.
-  const send = async (
-    payload: Record<string, unknown>,
-    opts: { quiet?: boolean } = {},
-  ): Promise<HttpResponse | null> => {
-    if (!ctx) return null;
-    const { url, init } = sendRequest(ctx.webhook, threadId, payload);
+  // caller never learns how, except for the one case that must be loud.
+  const send = async (payload: Record<string, unknown>): Promise<HttpResponse | null> => {
+    if (!webhook) return null;
+    const { url, init } = sendRequest(webhook, threadId, payload);
     try {
       const res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) });
       // Discord documents that a webhook returning 404 must not be retried, on pain
@@ -267,12 +282,14 @@ export function createDiscordSurface(
         if (!disabled) {
           disabled = true;
           notFound = true;
-          if (!opts.quiet) {
-            warn(
-              `discord: the webhook returned 404 — it has been deleted or rotated. ` +
-                `Run reporting is off for the rest of this process (the run is unaffected).`,
-            );
-          }
+          // ADR-0012 makes this one of exactly two things that may break silence, and
+          // specifies stderr. It prints even during the create, where the preview also
+          // names the cause: the two go to different streams, so a developer who has
+          // redirected stdout to a log still sees why the surface went quiet.
+          warn(
+            `discord: the webhook returned 404 — it has been deleted or rotated. ` +
+              `Run reporting is off for the rest of this process (the run is unaffected).`,
+          );
         }
         return null;
       }
@@ -287,22 +304,29 @@ export function createDiscordSurface(
   // Post into the run's thread once it exists. Everything before that is dropped
   // rather than sent, because a forum channel would reject it anyway.
   const post = async (payload: Record<string, unknown>): Promise<void> => {
-    if (!ctx || disabled || !threadId) return;
+    if (!webhook || disabled || !threadId) return;
     await send(payload);
   };
 
   return {
     get active() {
-      return ctx !== null && !disabled;
+      return webhook !== null && !disabled;
     },
 
     async openThread(o) {
-      // Rule 1: unconfigured is SILENT. No line, no warning, nothing.
-      if (!ctx) return null;
+      // Rule 1: UNSET is silent. No line, no warning, nothing.
+      if (resolution.state === "unset") return null;
+      // Set but unusable is NOT a third exception to silence — it is the first one
+      // (a failed create) reached before a request is worth making. Somebody meant to
+      // configure this and got it wrong; saying nothing would leave them believing it
+      // works, which is the hole the loud exceptions exist to close.
+      if (resolution.state === "unusable") {
+        disabled = true;
+        return `off (${resolution.detail})`;
+      }
       const payload = {
         thread_name: threadName({ spec: o.spec, title: o.title, resumed: o.resumed }),
         content: runStartedContent({
-          spec: o.spec,
           specBranch: o.specBranch,
           slices: o.slices,
           dryRun: o.dryRun,
@@ -314,25 +338,23 @@ export function createDiscordSurface(
       // retry of a create that had actually succeeded leaves a duplicate. A 404 is
       // never retried and `send` has already stood the surface down by then.
       for (let attempt = 0; attempt < 2 && !disabled; attempt++) {
-        const res = await send(payload, { quiet: true });
+        const res = await send(payload);
         if (!res) continue;
         const id = await readMessageId(res);
         if (!id) continue;
         // The returned message's `id` IS the new thread's id (its `channel_id`
         // equals it) — undocumented, and verified by probe rather than assumed.
         threadId = id;
-        return previewLine(`spec #${o.spec} thread created`);
+        return `spec #${o.spec} thread created`;
       }
       // The first loud exception. A forum channel accepts no message outside a
       // thread, so this has silenced the whole run — including the halt notification
       // the surface exists to deliver. The preview is the one moment the developer is
       // still looking, so it is said there, and the run proceeds regardless.
       disabled = true;
-      return previewLine(
-        notFound
-          ? "off (the webhook returned 404 — it has been deleted or rotated)"
-          : "off (the thread could not be created — is the channel a forum channel?)",
-      );
+      return notFound
+        ? "off (the webhook returned 404 — it has been deleted or rotated)"
+        : "off (the thread could not be created — is the channel a forum channel?)";
     },
 
     async noteSliceBuilding(o) {
@@ -351,11 +373,6 @@ export function createDiscordSurface(
       await post({ embeds: [completeEmbed(o)] });
     },
   };
-}
-
-// The preview's `discord:` line, aligned with the block's other labels.
-function previewLine(text: string): string {
-  return `discord     : ${text}`;
 }
 
 // The new thread's id from a create's reply, or null when the reply is unusable — a

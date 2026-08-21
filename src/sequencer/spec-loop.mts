@@ -37,13 +37,14 @@ export interface SpecPlan {
   // preview can name it: a run that proceeds without being asked is a run nobody is
   // necessarily watching, and this is the one moment the path is on screen.
   readonly runLog: string;
-  // The Discord run surface's own status line, or null when there is nothing to say
-  // (ADR-0012). Null is the ordinary case — an unconfigured surface is SILENT, and
-  // most consuming repos will never configure one. It is non-null when the surface
-  // opened this run's thread, and non-null when it was configured and FAILED to,
-  // which is the case the line exists for: a forum channel accepts no message outside
-  // a thread, so a failed create silences the whole run, and the preview is the one
-  // moment the developer is still looking.
+  // The Discord run surface's own status (ADR-0012) — a bare phrase like `spec #94
+  // thread created` or `off (…)`; this module renders the label, as it does for every
+  // other row. Null when there is nothing to say, which is the ORDINARY case: an
+  // unconfigured surface is silent and most consuming repos will never configure one.
+  // It is non-null when the surface opened this run's thread, and non-null when it was
+  // configured and FAILED to — which is the case the line exists for, since a forum
+  // channel accepts no message outside a thread, so a failed create silences the whole
+  // run and the preview is the last moment the developer is looking.
   readonly discord?: string | null;
 }
 
@@ -71,7 +72,7 @@ export function formatPreview(plan: SpecPlan): string {
     `spec branch : ${plan.specBranch}`,
     `base branch : ${plan.base || "(default)"}`,
     `run log     : ${plan.runLog}`,
-    ...(plan.discord ? [plan.discord] : []),
+    ...(plan.discord ? [`discord     : ${plan.discord}`] : []),
     plan.order.length
       ? "slices (topological order):"
       : "slices: (none — nothing to build)",
