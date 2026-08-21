@@ -671,7 +671,8 @@ jobs:
 ## Status view
 
 `agent-workflows status` prints the specs currently building in the repo you are
-standing in, with their tracer-bullets nested beneath (ADR-0007):
+standing in, with their tracer-bullets — and the final PR, once one is open — nested
+beneath (ADR-0007):
 
 ```sh
 yarn agent:status                          # or: agent-workflows status
@@ -689,12 +690,13 @@ quota · session 21% used (resets Aug 14 9:20pm) · week 39% used (resets Aug 15
 
 madebyon/on-vantage — 2 specs in flight
 
-#1438      Spec: Default views in platform          2/5 · building
-  ✓ #1519  Prefactor: extract Project-type filter…  done
-  ▸ #1521  Tag Retainer and internal Projects       building
-    #1522  Replace Retainer and internal toggles    pending
+#1438         Spec: Default views in platform          2/5 · building
+  ✓ #1519     Prefactor: extract Project-type filter…  done
+  ▸ #1521     Tag Retainer and internal Projects       building
+    #1522     Replace Retainer and internal toggles    pending
 
-#1485      Spec: Port the Utilization report        5/5 · awaiting final PR
+#1485         Spec: Port the Utilization report        5/5 · final PR open
+  ● PR #1531  Port the Utilization report              ready for review
 
 agent-workflows v1.7.0
 ```
@@ -722,6 +724,18 @@ the trailing URL column comes back instead:
   is named on the row rather than ordered on, since issue numbers are per-repo.
   Each state is its issue state plus its `agent:*` label — nothing else. A slice in a
   dependency cycle is shown as blocked rather than silently dropped.
+- **The final PR gets a row of its own** once advance opens it, stating whether it is
+  still a `draft`, `ready for review`, `approved`, or has `changes requested` — which is
+  what tells "waiting on the fleet" apart from "waiting on you". It is found by its **head
+  and base branches** — an open PR in this repo from the spec branch to the base the fleet
+  opens final PRs against, resolved by the same code that opens it — never by a label:
+  `agent:review-pr` is a trigger the review run retires as it starts, and
+  `finalPrReview: false` switches it off entirely. A PR someone opens off a spec branch to
+  some *other* base, or from a fork branch of the same name, is therefore not mistaken for
+  it. The spec row says `awaiting final PR` only while there is no PR yet — all slices
+  closed and nothing opened, which is occasionally a *stuck* spec — and `final PR open`
+  once there is; a PR read that fails says `awaiting final PR` too rather than costing you
+  the tree. Checks are not joined: the row answers who the gate is, not whether CI is green.
 - **States are colour-coded on a terminal**, with `agent:blocked` in bold red because it
   is the one state that means stop and look. Colour is emitted only when stdout is a
   terminal, so piping or redirecting the view gives clean text with no escape sequences;

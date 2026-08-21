@@ -13,15 +13,22 @@
 
 import { repoFromRemoteUrl, resolveRepoSlug } from "../shared/github.mts";
 import { capture } from "../shared/process.mts";
+import { finalPrBase } from "../shared/spec-advance.mts";
 import {
   crossReferencedIssues,
   issueRecord,
   issuesChanged,
   listIssueRecords,
   nativeSubIssues,
+  openPullRequests,
   remoteBranches,
 } from "../shared/spec-tracker.mts";
-import { buildSpecTree } from "../shared/spec-tree.mts";
+import {
+  attachFinalPr,
+  buildSpecTree,
+  needsFinalPrRead,
+  type PullRequestRecord,
+} from "../shared/spec-tree.mts";
 import { statusFrame, type RunningVersion } from "./frame.mts";
 import { freshRender } from "./freshness.mts";
 import { gatherIssues } from "./gather.mts";
@@ -101,7 +108,53 @@ function pass(branches: readonly string[]): string {
     crossReferencedIssues: (spec) => crossReferencedIssues(repo, spec),
     allIssues: listIssueRecords,
   });
-  return renderStatus({ repo, specs: buildSpecTree(issues, branches) }, { colour, hyperlinks });
+  // Build from the issues, then ask whether a PR read is worth making at all, then fold
+  // the answer in. A final PR cannot exist before the last slice closes, so a pass with no
+  // complete spec makes no PR call — which is every tick of a watch on a spec that is still
+  // building. The gate is the tree's own question, so it stays in the decide half.
+  const specs = buildSpecTree(issues, branches);
+  const specsWithFinalPr = needsFinalPrRead(specs)
+    ? attachFinalPr(specs, finalPrs(), heldFinalPrBase())
+    : specs;
+  return renderStatus({ repo, specs: specsWithFinalPr }, { colour, hyperlinks });
+}
+
+// The repo's open PRs, or none of them. TOLERANT, like the quota read and unlike every
+// other read in this pass: the final PR is one row of context under a tree assembled from
+// issues and branches, so a transient `gh pr list` failure — a secondary rate limit, a 502,
+// a dropped connection — must not turn a one-shot run into an error and a `--watch` tick
+// into `could not read the tracker`, blanking the whole view for a row. Empty degrades the
+// spec to `awaiting final PR`, which is what it said before this existed. Not silent for
+// all that: `gh` writes its own reason to stderr on the way past, so a reader whose row is
+// missing is not left guessing — this swallows the exit status, not the message.
+function finalPrs(): PullRequestRecord[] {
+  try {
+    return openPullRequests();
+  } catch {
+    return [];
+  }
+}
+
+// The base branch the orchestrator opens a final PR against — `finalPrBase`, the function
+// `openFinalPr` opens it with, so the view matches on the pair advance actually opened
+// rather than on a locally-guessed one (a stale `origin/HEAD` would name a base no final
+// PR was ever opened against, and the base filter would then hide every one of them).
+//
+// Read at most ONCE per process and then held: a `--watch` left open must not re-resolve it
+// every tick — it costs a `gh` call — and a base branch does not change under a running
+// view. Resolved LAZILY, inside the gated path, so a repo with nothing complete pays for
+// neither this nor the PR read. Empty when the read fails, which `attachFinalPr` degrades
+// to a head-only match on rather than leaving a spec awaiting a PR that is open.
+let base: string | null = null;
+function heldFinalPrBase(): string {
+  base ??= (() => {
+    try {
+      return finalPrBase();
+    } catch {
+      return "";
+    }
+  })();
+  return base;
 }
 
 // How long the quota read gets before it is abandoned. Measured at ~1.4s of wall clock with

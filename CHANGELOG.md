@@ -8,6 +8,29 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- Show the **final PR** in `agent-workflows status`, on a row of its own beneath the
+  slices. The spec row's `awaiting final PR` was computed from the slices alone — every
+  slice closed while the spec issue is open — which stays true forever after advance opens
+  the PR, so the view went on saying *awaiting* at a PR that had been waiting on a human
+  for days, naming the wrong party as the one holding things up. The row states whether
+  the PR is a `draft`, `ready for review`, `approved` or has `changes requested` (draft
+  outranks the review decision, since a draft is not asking anybody for anything yet), and
+  carries the PR's OWN title so a retitled PR shows as one. `awaiting final PR` now means
+  what it always claimed — all slices closed, no PR yet, which is occasionally a stuck
+  spec — and the new `final PR open` covers the rest. The PR is identified by its **head
+  and base branches**, the same predicate `openFinalPr` uses for its idempotency check and
+  through the same base resolution (`finalPrBase`, now shared, so the view can only match
+  on the pair advance actually opened), and never by the `agent:review-pr` label, which the
+  review run retires as it starts and `finalPrReview: false` suppresses outright. The base
+  is part of the predicate because GitHub allows only one open PR per head/base pair: a
+  second PR off a spec branch is one somebody opened against something else, and being the
+  older of the two it would otherwise be shown in place of the real final PR. That rule is
+  per head repository, so PRs from **forks** are excluded — a fork branch of the same name
+  is never the final PR. It costs one `gh pr list` per pass, **gated** on some spec having
+  finished its slices, so a watch on a spec that is still building makes no PR call at all,
+  and a failed PR read leaves the spec reading `awaiting final PR` rather than taking the
+  whole view down with it. No check-run join and no change to the `--watch` freshness
+  probe (ADR-0007, amended).
 - **An attended run that fails or is aborted reports its subject `blocked`.** Every
   unattended workflow retires its own `agent:in-progress` write with an `if: failure()`
   (and `if: cancelled()`) → `status blocked` step outside the plan; an attended run had no

@@ -1,13 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  attachFinalPr,
   buildSpecTree,
   foreignBlockers,
+  needsFinalPrRead,
   resolveParent,
   sameRepoBlockers,
   unionBlockers,
   type BlockerRef,
   type IssueRecord,
+  type PullRequestRecord,
+  type SpecNode,
 } from "./spec-tree.mts";
 
 function issue(over: Partial<IssueRecord> & { number: number }): IssueRecord {
@@ -421,4 +425,157 @@ test("specs are listed in issue-number order", () => {
     specs.map((s) => s.number),
     [12, 94],
   );
+});
+
+// The FINAL PR (ADR-0007, amended). The tree is built from issues alone and the PR folded
+// in afterwards, so these exercise the fold — `buildSpecTree`'s signature does not move.
+
+function pr(over: Partial<PullRequestRecord> & { number: number }): PullRequestRecord {
+  return {
+    title: `pr ${over.number}`,
+    url: `https://github.com/o/r/pull/${over.number}`,
+    headRefName: "agent/spec-94-x",
+    baseRefName: "main",
+    isCrossRepository: false,
+    isDraft: true,
+    reviewDecision: null,
+    ...over,
+  };
+}
+
+// The base the orchestrator opens final PRs against, as the caller resolves it.
+const BASE = "main";
+
+function completeSpec(): SpecNode[] {
+  return buildSpecTree(
+    [issue({ number: 94 }), slice(95, 94, { state: "CLOSED" })],
+    ["agent/spec-94-x"],
+  );
+}
+
+// The read is GATED on this: a final PR cannot exist before the last slice closes, so a
+// pass with nothing complete makes no PR call at all — which is every tick of a watch on
+// a spec that is still building.
+test("no PR read is needed while every spec is still building", () => {
+  const specs = buildSpecTree([issue({ number: 94 }), slice(95, 94)], ["agent/spec-94-x"]);
+  assert.equal(needsFinalPrRead(specs), false);
+});
+
+test("a spec whose slices have all closed is what asks for the PR read", () => {
+  assert.equal(needsFinalPrRead(completeSpec()), true);
+});
+
+// Identity is the HEAD and BASE branches, never a label: `agent:review-pr` is a trigger
+// label the review run retires as it starts, and `finalPrReview: false` suppresses it.
+test("the final PR is the open PR whose head is the spec branch", () => {
+  const [spec] = attachFinalPr(
+    completeSpec(),
+    [
+      pr({ number: 7, headRefName: "some/other-branch" }),
+      pr({ number: 134, title: "Status view", headRefName: "agent/spec-94-x" }),
+    ],
+    BASE,
+  );
+  assert.equal(spec.state, "final-pr-open");
+  assert.equal(spec.finalPr?.number, 134);
+  assert.equal(spec.finalPr?.title, "Status view");
+});
+
+// `awaiting-final-pr` narrows to what it always claimed — all slices closed, no PR yet —
+// which is a real and occasionally STUCK state: advance failed to open it.
+test("a complete spec with no PR keeps awaiting its final PR", () => {
+  const [spec] = attachFinalPr(completeSpec(), [pr({ number: 7, headRefName: "other" })], BASE);
+  assert.equal(spec.state, "awaiting-final-pr");
+  assert.equal(spec.finalPr, undefined);
+});
+
+// The case the base filter exists for: GitHub allows only one open PR per head/base pair,
+// so a SECOND PR off the spec branch is one somebody opened against something else. It
+// can easily be the older of the two — a human opens it while the spec is still building,
+// advance opens the real one later — so a lowest-number tie-break alone would show the
+// wrong PR, with the wrong title and the wrong state, exactly when the spec completes.
+test("a PR off the spec branch to another base is not the final PR", () => {
+  const [spec] = attachFinalPr(
+    completeSpec(),
+    [pr({ number: 7, baseRefName: "some/integration-branch" }), pr({ number: 134 })],
+    BASE,
+  );
+  assert.equal(spec.finalPr?.number, 134);
+});
+
+// Nothing resolved the base — no config, no `origin/HEAD`, no `gh`. A degraded match on
+// the head branch alone beats a spec that reads as `awaiting final PR` forever.
+test("an unresolvable base falls back to matching the head branch alone", () => {
+  const [spec] = attachFinalPr(completeSpec(), [pr({ number: 134, baseRefName: "trunk" })], "");
+  assert.equal(spec.finalPr?.number, 134);
+});
+
+test("the lowest-numbered PR wins where the base cannot narrow the field", () => {
+  const [spec] = attachFinalPr(
+    completeSpec(),
+    [pr({ number: 200 }), pr({ number: 134, baseRefName: "trunk" })],
+    "",
+  );
+  assert.equal(spec.finalPr?.number, 134);
+});
+
+// GitHub's "one open PR per head/base pair" rule is scoped per head REPOSITORY, so a fork
+// branch of the same name against the same base coexists with the real final PR — and,
+// opened while the spec was still building, wins the lowest-number tie-break. The fleet
+// pushes spec branches to origin, so a final PR is never cross-repository.
+test("a fork PR sharing the branch name and base is not the final PR", () => {
+  const [spec] = attachFinalPr(
+    completeSpec(),
+    [pr({ number: 7, isCrossRepository: true }), pr({ number: 134 })],
+    BASE,
+  );
+  assert.equal(spec.finalPr?.number, 134);
+});
+
+test("a fork PR is not the final PR where it is the only candidate either", () => {
+  const [spec] = attachFinalPr(completeSpec(), [pr({ number: 7, isCrossRepository: true })], BASE);
+  assert.equal(spec.state, "awaiting-final-pr");
+});
+
+// What the caller hands over when the PR read itself fails (`gh` down, rate-limited): an
+// empty list, so the row degrades to the pre-existing `awaiting final PR` rather than
+// costing the reader the tree.
+test("no PRs at all leaves the spec exactly as the tree built it", () => {
+  const [spec] = attachFinalPr(completeSpec(), [], BASE);
+  assert.equal(spec.state, "awaiting-final-pr");
+  assert.equal(spec.finalPr, undefined);
+});
+
+// A human may open a PR off a spec branch early. The read is gated on completeness, so
+// such a PR is invisible on most passes; it must be invisible on the passes another spec
+// paid for too, rather than blinking in and out as the rest of the repo changes.
+test("a PR on a still-building spec's branch is not shown", () => {
+  const specs = buildSpecTree([issue({ number: 94 }), slice(95, 94)], ["agent/spec-94-x"]);
+  const [spec] = attachFinalPr(specs, [pr({ number: 134 })], BASE);
+  assert.equal(spec.state, "building");
+  assert.equal(spec.finalPr, undefined);
+});
+
+// Draft outranks the review decision: a draft is not asking anybody for anything yet, so
+// an approval left on one must not read as "ready to merge".
+test("a draft PR is a draft whatever the review decision says", () => {
+  const [spec] = attachFinalPr(
+    completeSpec(),
+    [pr({ number: 134, isDraft: true, reviewDecision: "APPROVED" })],
+    BASE,
+  );
+  assert.equal(spec.finalPr?.state, "draft");
+});
+
+test("a ready PR takes its state from the review decision", () => {
+  const state = (reviewDecision: string | null) =>
+    attachFinalPr(completeSpec(), [pr({ number: 134, isDraft: false, reviewDecision })], BASE)[0]
+      .finalPr?.state;
+  assert.equal(state("APPROVED"), "approved");
+  assert.equal(state("CHANGES_REQUESTED"), "changes-requested");
+  assert.equal(state("REVIEW_REQUIRED"), "ready");
+  // No decision at all — no reviewer assigned, or a repo that requires none. `gh` serves
+  // that as an empty string as readily as null, and both mean the same thing.
+  assert.equal(state(null), "ready");
+  assert.equal(state(""), "ready");
 });
