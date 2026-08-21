@@ -19,6 +19,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.mts\" \"bin/**/*.test.mts\"",
+    "agent-workflows": "node bin/agent-workflows.mjs",
     "agent:explore": "node bin/agent-workflows.mjs explore",
     "agent:implement": "node bin/agent-workflows.mjs implement",
     "agent:implement-spec": "node bin/agent-workflows.mjs implement-spec",
