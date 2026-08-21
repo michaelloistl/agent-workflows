@@ -90,6 +90,20 @@ test("formatPreview names the run log, so a run left alone can be read later", (
   assert.match(formatPreview(PLAN), /run log {5}: \/tmp\/agent-workflows-worktrees\/spec-3-run\.log/);
 });
 
+// The Discord run surface's status (ADR-0012). Absent by default, because an
+// unconfigured surface is silent and most consuming repos will never configure one.
+test("formatPreview says nothing about Discord when the surface has nothing to say", () => {
+  assert.doesNotMatch(formatPreview(PLAN), /discord/i);
+  assert.doesNotMatch(formatPreview({ ...PLAN, discord: null }), /discord/i);
+});
+
+// A failed thread create silences the WHOLE run, so it is stated at the one moment
+// the developer is still looking.
+test("formatPreview carries the Discord status line when there is one", () => {
+  const out = formatPreview({ ...PLAN, discord: "discord     : off (the thread could not be created)" });
+  assert.match(out, /^discord {5}: off \(the thread could not be created\)$/m);
+});
+
 test("formatPreview lists deadlocked slices separately", () => {
   const out = formatPreview({ ...PLAN, order: [4], deadlocked: [7, 8] });
   assert.match(out, /deadlocked \(dependency cycle — not built\):/);
