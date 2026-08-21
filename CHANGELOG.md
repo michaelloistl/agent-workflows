@@ -8,6 +8,115 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- **An attended run that fails or is aborted reports its subject `blocked`.** Every
+  unattended workflow retires its own `agent:in-progress` write with an `if: failure()`
+  (and `if: cancelled()`) → `status blocked` step outside the plan; an attended run had no
+  counterpart, so the label it wrote outlived the run and the next one — attended or
+  unattended — was refused until someone cleared it by hand. `implement-pr`'s commonest
+  failure, the run hook's deliberate non-zero exit when the agent produced no commits,
+  walked straight into it. Which runs report is a tested predicate in the plan module
+  beside the retention policy rather than a condition in the entry point: a failed or
+  aborted run reports, a succeeded one already reported done in its tail, and a refused
+  one stopped at guards before the status write and posted its own explanation. A
+  WITHHELD run is left alone — its plan never wrote the label — so `--finalize=never`
+  still touches the pull request not at all. The report is invoked exactly as CI invokes
+  it, through the verb's own `sandcastle:<verb>-status` script from the tooling checkout,
+  and a report that itself fails says so and changes nothing else.
+- **Three corrections to the attended PR verbs, and the trail behind them.** An `ask` on
+  `implement-pr` counts the commits it is about to push against the pull request's head
+  **as the remote has it** (re-fetched at the moment you are asked) rather than against
+  the worktree's head before the run: the push lands everything the remote head does not
+  have, so a retry on a tree retained from an earlier withheld run used to understate it.
+  A **confirmed** finalize that then fails is now reported as one that ran and did not
+  succeed — the run is a failure and its tree is retained — instead of falling into the
+  withheld bucket and claiming nothing left the machine, which for this verb's bundled
+  push-and-finalize could be false. And the composed replies live in the run's worktree
+  beside the review payload, so a withheld run's file is where the summary says its work
+  is; a stale one is removed before the run rather than read back as if this run had
+  written it. `gh` is pinned to the same repository slug the worktree is fetched from and
+  the hooks are given, so the run cannot read one pull request and check out another's
+  head. The tooling-directory inversion the PR verbs' attended path makes — hooks loaded
+  from the invoking checkout, not a detached default-branch worktree — is now recorded in
+  **ADR-0010** and in the hook contract, which described only CI's filling of the slot.
+
+- **Withhold an attended `implement-pr` finalize** with `--finalize=ask|never`, the flag
+  the issue `implement` verb and the read-only `review-pr` already had, now on the verb
+  that commits onto a pull request. `never` stops with the commits on the retained
+  worktree — nothing pushed, no replies posted, the tracker untouched; `ask` prints how
+  many commits it is about to push, to which head ref, and how many threaded replies it
+  will post, and pushes only on an explicit `y` (a bare Enter or a non-interactive stdin
+  declines — the safe default). `auto` remains the default and remains full parity with
+  the unattended path, its plan pin unaltered. A withheld run touches the pull request NOT
+  AT ALL: the plan drops the in-progress status write along with the tail, so a `never`
+  run and a declined `ask` run leave no label, no comment and no commit on the remote. A
+  confirmed `ask` lands exactly what an `auto` run would have, down to the
+  non-fast-forward self-report: this verb's push and finalize are one bundled step —
+  finalize only makes sense after a successful push — so the plan gained two shapes, the
+  run without that tail and the tail alone, each pinned by the plan module's tests, and
+  the confirmation runs the tail as a second slice. The worktree is retained either way,
+  as a commit-producing verb's clean success already was: the commits are what you
+  inspect. The run summary reports the mode, whether the run finalized, and where the tree
+  is, in this verb's own terms — commits on the pull request's head, never an agent branch
+  it does not cut. `--interactive` composes with every mode. `update-branch`, whose whole
+  point is the push, still does not read the flag and its plan is unaltered by a mode.
+- **Withhold an attended `review-pr` finalize** with `--finalize=ask|never`, the flag the
+  issue `implement` verb already had, extended to a pull-request-numbered verb. `never`
+  composes the review and posts nothing; `ask` prints what finalize is about to post — the
+  summary, the inline-comment count, and the file holding it — and runs the finalize only
+  on an explicit `y`, a bare Enter or a non-interactive stdin declining, which is the safe
+  default. `auto` remains the default and remains full parity with the unattended path, its
+  plan pin unaltered. A withheld run touches the pull request NOT AT ALL: the plan drops
+  the in-progress status write along with the finalize tail, so a `never` run and a
+  declined `ask` run leave no label, no comment and no review — the same trace, which is
+  none. What the run composed is still written, now to a file inside the run's worktree,
+  and a withheld run RETAINS that worktree whatever the verb (a read-only verb's clean
+  success otherwise removes it), so you can read exactly what would have been posted. A
+  confirmed `ask` posts precisely what an `auto` run would have: the confirmation runs the
+  same plan's tail on its own — the review posted, then the run reported done. An
+  unrecognised mode is still refused by name rather than defaulting to the posting path,
+  and the run summary reports the mode and whether the run finalized, in the verb's own
+  terms. Which verbs read the flag is now a tested predicate in the plan module rather than
+  a condition in the entry point; `implement-pr` and `update-branch` do not read it yet and
+  their plans are unaltered by a mode.
+- Run **`implement-pr` as an attended run**: `agent-workflows implement-pr <pr>` addresses a
+  pull request's review feedback on your own machine, end to end. It reuses everything the
+  attended `review-pr` run established — the worktree at the pull request's head, the
+  bootstrap, the fork refusal, the tooling directory at the invoking checkout, both mutexes,
+  `--force`, the streamed output, the summary — and adds the difference between a read-only
+  verb and one that produces commits. The agent commits onto the checked-out pull-request
+  head and the run pushes those commits to the head ref BY NAME, which is why the worktree
+  can stay detached at the fetched head. The push is a plain one: a branch that advanced
+  remotely during the run self-reports blocked rather than being overwritten. The
+  per-comment replies are then posted and the tracker updated exactly as the unattended path
+  does — the replies file being another slot the workflow fills under the runner's temp
+  directory in CI and the entry point fills locally. A clean success **retains** the
+  worktree, unlike the read-only verb's: what provides inspection is the surviving tree you
+  can open and diff, the same reasoning the issue `implement` verb already follows; a
+  failure or a Ctrl-C abort retains it too. `--interactive` becomes reachable for the first
+  time — the eligibility predicate already admitted this verb — so the fixes can be steered
+  in a live agent session rather than watched headless; the push and finalize that follow
+  are unchanged by it. Finalize is full parity with the unattended path; withholding it with
+  `--finalize=ask|never` is the next slice. The unattended `implement-pr` path is unchanged,
+  its plan pin unaltered.
+- Run **`review-pr` as an attended run**: `agent-workflows review-pr <pr>` reviews a pull
+  request on your own machine, end to end. The run creates a worktree under the configured
+  root — never your checkout — detached at the pull request's head, bootstraps it with the
+  repo's own command, and hands the whole verb sequence to the sequencer, so the attended
+  and unattended paths still cannot drift; the review posts through the same reviews API.
+  Two things differ from CI deliberately. A cross-repository (fork) pull request is refused
+  before any worktree exists, naming the reason — its head lives on another repository, so
+  checking it out means a second remote and finalizing means push rights an attended run
+  must not assume. And the tooling directory points at the checkout you launched from
+  rather than a detached default-branch worktree: CI isolates the tooling because a pull
+  request's branch may predate it, while locally you want the tooling in front of you, so
+  changing a PR verb's logic and running it needs no push in between. The rest is the
+  behaviour the issue verbs already have: `agent:in-progress` on the pull request refuses
+  the run and `--force` overrules it, the local lock keeps two terminals off the same verb
+  and pull request, a guard refusal prints to the terminal and posts nothing, a failure or
+  a Ctrl-C abort retains the worktree while a clean success removes it (it is read-only),
+  `--interactive` is still refused by naming interactivity, and the run closes with a
+  summary of the outcome, the worktree's fate, and what finalize did. The unattended
+  `review-pr` path is untouched, its plan pin unaltered.
 - **Keep the local-run marker when an attended spec run halts.** `agent:local` on the
   spec issue used to share the local lock's lifecycle: every exit released it, halts
   included. A halt seconds after a merge released it before that merge's `advance` run

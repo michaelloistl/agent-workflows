@@ -345,18 +345,74 @@ fleet (the *unattended* path), you can run a verb on your own machine:
 agent-workflows explore 55            # run `explore` locally against issue #55
 agent-workflows implement 57          # build issue #57 end to end (--finalize=ask|never)
 agent-workflows implement 57 --interactive   # steer a live agent session
+agent-workflows review-pr 138         # review PR #138 (--finalize=ask|never to hold it back)
+agent-workflows implement-pr 138      # address PR #138's feedback (--finalize=ask|never)
+agent-workflows implement-pr 138 --interactive   # steer the fixes live
 ```
 
 Each run gets its own git **worktree** under `worktreeRoot` — never the checkout
-you are sitting in — created detached at the configured base branch. The
-`bootstrap` command runs on that fresh tree (a non-zero exit fails the run before
-the agent starts), the agent's output streams to your terminal, and Ctrl-C aborts.
-Credentials come from your already-authenticated `gh` and existing agent
-credentials — the sequencer reads and writes no secret material. A `read-only`
-run's clean worktree is removed on success; an `implement` worktree is **retained**
-(it is what you inspect), and every run retains its tree on failure or abort. Each
-verb runs the SAME sequence the unattended path hands the sequencer, so the two
+you are sitting in — created detached at the configured base branch, or at the
+**pull request's head** for a PR verb, so the agent reads the code actually under
+review. The `bootstrap` command runs on that fresh tree (a non-zero exit fails the
+run before the agent starts), the agent's output streams to your terminal, and
+Ctrl-C aborts. Credentials come from your already-authenticated `gh` and existing
+agent credentials — the sequencer reads and writes no secret material. A read-only
+run's clean worktree is removed on success; a commit-producing verb's worktree
+(`implement`, `implement-pr`) is **retained** — it is what you inspect and diff — as
+is any run that **withheld** its finalize, whatever the verb, that tree being where
+you read what nothing published; and every run retains its tree on failure or abort.
+Each verb runs the SAME sequence the unattended path hands the sequencer, so the two
 paths cannot drift.
+
+A run that fails or is aborted **reports its subject `agent:blocked`**, exactly as
+every unattended workflow's failure step does, so the `agent:in-progress` label the
+run wrote does not outlive it and refuse the next one. A withheld run wrote no
+label, so nothing is reported for it.
+
+Both PR verbs finalize with full parity by default, and both hold that finalize
+back on request. `review-pr`'s review posts to the pull request through the reviews
+API, exactly as the unattended run's does — and `--finalize=ask|never` holds it
+back, as it does for `implement`: `never` composes the review and posts nothing,
+while `ask` prints what it is about to post and posts only on an explicit `y` (a
+bare Enter, or a non-interactive stdin, declines — the safe default). A withheld
+review run touches the pull request **not at all**: no label, no comment, no review,
+the in-progress status write dropping along with the finalize tail, so a `never` run
+and a declined `ask` run leave the same trace, which is none. The composed review is
+left in the retained worktree as `agent-workflows-review.json`, so you can read
+exactly what would have been posted; confirming an `ask` posts precisely what an
+`auto` run would have, the confirmed finalize being the same plan's tail run on its
+own.
+
+`implement-pr` commits onto the checked-out pull-request head, pushes those commits
+to the head ref **by name** — a plain push, never `--force`, so a branch that
+advanced remotely during the run self-reports `agent:blocked` rather than being
+overwritten — and then posts the threaded replies and updates the tracker. A run
+that produced no commits addressed nothing: the agent run is a failing step of the
+shared plan, so the sequence stops there — the same disposition that reports an
+unattended run blocked — rather than pushing an unchanged branch and claiming the
+feedback was addressed. It reads `--finalize=ask|never` too, so you can read the
+commits before they are pushed: `never` leaves them on the retained worktree, with
+the composed replies beside them as `agent-workflows-replies.json`, and pushes
+nothing; `ask` prints how many commits the pull request's head does not yet have
+(counted against that head as the remote has it, so a retried run on a retained
+worktree still names every commit the push would land), to which head ref, and how
+many replies it will post, then does it only on an explicit `y`. A confirmed `ask`
+pushes and posts exactly what an `auto` run would have — the confirmation runs the
+same plan's tail on its own, non-fast-forward self-report included, that push and
+finalize being one bundled step; a confirmed finalize that then fails is reported as
+one that ran and did not succeed, never as work you withheld. `--interactive` is
+available for it, handing the composed prompt to a live agent session you steer;
+everything after the agent run — the push, the replies, the tracker update — is
+unchanged by it, and it composes with every finalize mode.
+
+Two things differ from CI on purpose. A **cross-repository (fork)** pull request is
+refused before any worktree is created — its head lives on another repository, which
+an attended run would need a second remote and push rights for. And the run's
+tracker hooks load from **the checkout you launched from** rather than from a
+detached default-branch worktree: CI isolates the tooling because a pull request's
+branch may predate it, while locally you want the opposite — the tooling in front of
+you, so changing a PR verb's logic and running it needs no push in between
+(ADR-0010).
 
 **Attended spec loop — build a whole spec from your terminal.** `implement-spec`
 with a spec issue number drives the entire spec as a **slice loop**: it builds the
@@ -804,7 +860,8 @@ Pass with `secrets: inherit`.
   toolchain generalization + feedback-loop boundary; 0003 spec strictly
   sequential; 0004 no per-slice review; 0005 one sequencer, two entry points;
   0006 attended spec runs; 0007 the status view; 0008 `init` and `sync`; 0009 the
-  local-run marker outlives a halt).
+  local-run marker outlives a halt; 0010 an attended PR run's tooling is the
+  invoking checkout).
 
 ## Local checks
 

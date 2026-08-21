@@ -7,7 +7,12 @@ import {
   retainWorktree,
   parseFinalizeMode,
   interactiveEligible,
+  attendable,
+  attendedVerbs,
+  attendedRunShape,
   formatRunSummary,
+  honoursFinalizeMode,
+  reportsBlocked,
   type Step,
 } from "./plan.mts";
 
@@ -138,6 +143,51 @@ test("planVerb('review-pr') pins the workflow's sequence", () => {
   ]);
 });
 
+// An attended `review-pr` run with `--finalize=never` keeps everything off the pull
+// request (issue #143): it drops BOTH the tail — the posted review and the terminal
+// status — AND the `in-progress` status write, so the run touches the pull request not
+// at all. Guards and the read-only agent run remain, so the review is still composed.
+test("planVerb('review-pr') drops the tail and the status step for finalize:never", () => {
+  const plan = planVerb("review-pr", { finalize: "never" });
+
+  assert.deepEqual(plan.map(shape), [
+    { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: "tooling" },
+    { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: "work" },
+  ]);
+});
+
+// `--finalize=ask` holds the same things back until the developer confirms — same
+// dropped status write and tail; the tail runs afterwards as its own confirmed slice,
+// so the first slice must stop at the composed review.
+test("planVerb('review-pr') drops the tail and the status step for finalize:ask", () => {
+  const plan = planVerb("review-pr", { finalize: "ask" });
+
+  assert.deepEqual(plan.map(shape), [
+    { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: "tooling" },
+    { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: "work" },
+  ]);
+});
+
+// The default (`auto`, or an absent mode as an unattended run leaves it) is the
+// unaltered pin above: full parity with CI, the review posted in the one sequence.
+test("planVerb('review-pr') keeps the tail for finalize:auto", () => {
+  const plan = planVerb("review-pr", { finalize: "auto" });
+
+  assert.deepEqual(plan.map(shape), planVerb("review-pr", {}).map(shape));
+});
+
+// The tail alone (the attended `ask` path's confirmed second slice, issue #143) is
+// exactly the two steps the full sequence ends with — no guards, no status write, no
+// agent run — so a confirmed local finalize posts what CI's tail posts and no more.
+test("planVerb('review-pr') finalizeTailOnly returns just finalize then status done", () => {
+  const plan = planVerb("review-pr", { finalizeTailOnly: true });
+
+  assert.deepEqual(plan.map(shape), [
+    { kind: "hook", hook: "finalize", args: [], onNonZero: "failure", cwd: "tooling" },
+    { kind: "hook", hook: "status", args: ["done"], onNonZero: "failure", cwd: "tooling" },
+  ]);
+});
+
 // Pin `implement-pr`'s plan: guards → report in-progress → the agent run (commits
 // onto the PR head) → push-and-finalize. The agent run exits non-zero on a no-op
 // (`failure`), so nothing to commit reports blocked. Unlike review-pr, the push
@@ -150,6 +200,53 @@ test("planVerb('implement-pr') pins the workflow's sequence", () => {
     { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: "tooling" },
     { kind: "hook", hook: "status", args: ["in-progress"], onNonZero: "failure", cwd: "tooling" },
     { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: "work" },
+    { kind: "shell", name: "push-and-finalize", onNonZero: "failure", cwd: "work" },
+  ]);
+});
+
+// An attended `implement-pr` run with `--finalize=never` keeps everything off the pull
+// request (issue #144): it drops the whole push-and-finalize tail — the push, the posted
+// replies, and the terminal status — AND the `in-progress` status write, so the run
+// touches the pull request not at all. Guards and the agent run remain, so the commits
+// are still made on the worktree's checked-out head.
+test("planVerb('implement-pr') drops the tail and the status step for finalize:never", () => {
+  const plan = planVerb("implement-pr", { finalize: "never" });
+
+  assert.deepEqual(plan.map(shape), [
+    { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: "tooling" },
+    { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: "work" },
+  ]);
+});
+
+// `--finalize=ask` holds the same things back until the developer confirms — same dropped
+// status write and tail; the tail runs afterwards as its own confirmed slice, so the first
+// slice must stop with the commits sitting in the worktree.
+test("planVerb('implement-pr') drops the tail and the status step for finalize:ask", () => {
+  const plan = planVerb("implement-pr", { finalize: "ask" });
+
+  assert.deepEqual(plan.map(shape), [
+    { kind: "hook", hook: "guards", args: [], onNonZero: "refusal", cwd: "tooling" },
+    { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: "work" },
+  ]);
+});
+
+// The default (`auto`, or an absent mode as an unattended run leaves it) is the unaltered
+// pin above: full parity with CI, the commits pushed and the replies posted in the one
+// sequence.
+test("planVerb('implement-pr') keeps the tail for finalize:auto", () => {
+  const plan = planVerb("implement-pr", { finalize: "auto" });
+
+  assert.deepEqual(plan.map(shape), planVerb("implement-pr", {}).map(shape));
+});
+
+// The tail alone (the attended `ask` path's confirmed second slice, issue #144) is the ONE
+// step the full sequence ends with — no guards, no status write, no agent run. It is the
+// same bundled work-tree step, so a confirmed local finalize pushes to the head ref, posts
+// the replies, and self-reports a non-fast-forward exactly as CI's tail does.
+test("planVerb('implement-pr') finalizeTailOnly returns just push-and-finalize", () => {
+  const plan = planVerb("implement-pr", { finalizeTailOnly: true });
+
+  assert.deepEqual(plan.map(shape), [
     { kind: "shell", name: "push-and-finalize", onNonZero: "failure", cwd: "work" },
   ]);
 });
@@ -167,6 +264,18 @@ test("planVerb('update-branch') pins the workflow's sequence", () => {
     { kind: "hook", hook: "run", args: [], onNonZero: "failure", cwd: "work" },
     { kind: "shell", name: "push-and-finalize", onNonZero: "failure", cwd: "work" },
   ]);
+});
+
+// A verb that does NOT honour `--finalize` (issue #143) has an unaltered plan whatever
+// the mode says: the attended entry point never sets a mode for one, and a mode that
+// reached it anyway must not half-withhold a run whose tail is a shell step it keeps —
+// dropping the in-progress write while the push-and-finalize still ran would leave the
+// pull request labelled by nothing and finalized anyway.
+test("planVerb leaves a verb that does not honour finalize unaltered by a mode", () => {
+  for (const verb of ["update-branch"]) {
+    assert.deepEqual(planVerb(verb, { finalize: "never" }).map(shape), planVerb(verb, {}).map(shape));
+    assert.deepEqual(planVerb(verb, { finalize: "ask" }).map(shape), planVerb(verb, {}).map(shape));
+  }
 });
 
 // Pin the `implement-spec` orchestrator's KICKOFF plan to the sequence its run
@@ -310,6 +419,48 @@ test("retainWorktree keeps a successful implement tree but not a successful expl
   assert.equal(retainWorktree("aborted", "implement"), true);
 });
 
+// An attended `review-pr` run is read-only (issue #141), so a clean success leaves
+// nothing to open and its tree is REMOVED, exactly as `explore`'s is. A failure or a
+// Ctrl-C abort still retains the tree the developer reproduces the run in.
+test("retainWorktree removes a successful review-pr tree but keeps a failed one", () => {
+  assert.equal(retainWorktree("succeeded", "review-pr"), false);
+  assert.equal(retainWorktree("refused", "review-pr"), false);
+  assert.equal(retainWorktree("failed", "review-pr"), true);
+  assert.equal(retainWorktree("aborted", "review-pr"), true);
+});
+
+// An attended `implement-pr` run produces COMMITS, so a clean success retains its tree
+// (issue #142) for the same reason `implement`'s does: what provides inspection is the
+// surviving tree the developer can open and diff, not a withheld push.
+test("retainWorktree keeps a successful implement-pr tree", () => {
+  assert.equal(retainWorktree("succeeded", "implement-pr"), true);
+  assert.equal(retainWorktree("refused", "implement-pr"), false);
+  assert.equal(retainWorktree("failed", "implement-pr"), true);
+  assert.equal(retainWorktree("aborted", "implement-pr"), true);
+});
+
+// A WITHHELD run retains its tree whatever the verb (issue #143): the read-only
+// `review-pr` composed a review nothing published, so the tree is what the developer
+// opens to read it. An `auto` review-pr success still removes — the review is on the
+// pull request.
+test("retainWorktree keeps a withheld run's tree even for a read-only verb", () => {
+  assert.equal(retainWorktree("succeeded", "review-pr", true), true);
+  assert.equal(retainWorktree("succeeded", "review-pr", false), false);
+  assert.equal(retainWorktree("refused", "review-pr", true), false);
+});
+
+// Which verbs' attended runs honour `--finalize=ask|never` (issues #57, #143): the
+// issue verb that produces commits and the pull-request verb that composes a review.
+// `explore`'s read-only comment always posts, and the remaining PR verbs finalize with
+// full parity until their own slice lands.
+test("honoursFinalizeMode admits every verb but explore and update-branch", () => {
+  assert.equal(honoursFinalizeMode("implement"), true);
+  assert.equal(honoursFinalizeMode("review-pr"), true);
+  assert.equal(honoursFinalizeMode("implement-pr"), true);
+  assert.equal(honoursFinalizeMode("explore"), false);
+  assert.equal(honoursFinalizeMode("update-branch"), false);
+});
+
 // The `--finalize=<mode>` flag (issue #57) parses to a mode, defaults to `auto`
 // when absent, and throws on a typo rather than silently defaulting to the pushing
 // path — the surprise the flag exists to prevent.
@@ -334,6 +485,78 @@ test("interactiveEligible admits implement and implement-pr, refuses the rest", 
   assert.equal(interactiveEligible("review-pr"), false);
   assert.equal(interactiveEligible("update-branch"), false);
   assert.equal(interactiveEligible("implement-spec"), false);
+});
+
+// Attendability (issues #140, #141, #142): which verbs may be run as an attended run is a
+// decision of the plan module, not a constant inside the attended entry point — so
+// extending it to a PR verb is a one-line change with a test. It admits the two
+// issue-numbered verbs and both commit-producing/read-only PR verbs; `update-branch`, the
+// third PR verb, is deliberately still out.
+test("attendable admits explore, implement, review-pr and implement-pr, refuses the rest", () => {
+  assert.equal(attendable("explore"), true);
+  assert.equal(attendable("implement"), true);
+  assert.equal(attendable("review-pr"), true);
+  assert.equal(attendable("implement-pr"), true);
+  assert.equal(attendable("update-branch"), false);
+  assert.equal(attendable("implement-spec"), false);
+});
+
+test("attendedVerbs names exactly the verbs the predicate admits", () => {
+  assert.deepEqual([...attendedVerbs], ["explore", "implement", "review-pr", "implement-pr"]);
+  for (const verb of attendedVerbs) assert.equal(attendable(verb), true);
+});
+
+// Every verb an interactive run may drive must be attendable, since `--interactive` is a
+// flag of the attended entry point alone (issue #142): the predicate admitting a verb the
+// attended path refuses would offer a mode no command can reach.
+test("every interactive-eligible verb is attendable", () => {
+  for (const verb of ["implement", "implement-pr"]) {
+    assert.equal(interactiveEligible(verb) && attendable(verb), true);
+  }
+});
+
+// The attended run shape (issue #140): the difference between an issue-numbered verb and
+// a PR-numbered one, derived from the verb alone and returned as DATA the entry point
+// applies — which environment variables carry the number and the title, which `gh`
+// subcommand reads the subject's title and labels (and so which object carries the
+// `agent:in-progress` mutex), and what the worktree checks out.
+test("attendedRunShape derives the issue-numbered shape for the issue verbs", () => {
+  for (const verb of ["explore", "implement"]) {
+    assert.deepEqual(attendedRunShape(verb), {
+      subject: "issue",
+      numberEnv: "ISSUE_NUMBER",
+      titleEnv: "ISSUE_TITLE",
+      ghSubcommand: "issue",
+      checkout: "base",
+    });
+  }
+});
+
+// The shape every PR-numbered verb runs under — the one `review-pr` is attended through
+// (issue #141), and the fact the remaining two branch on when they follow.
+test("attendedRunShape derives the pull-request-numbered shape for the PR verbs", () => {
+  for (const verb of ["review-pr", "implement-pr", "update-branch"]) {
+    assert.deepEqual(attendedRunShape(verb), {
+      subject: "pull-request",
+      numberEnv: "PR_NUMBER",
+      titleEnv: "PR_TITLE",
+      ghSubcommand: "pr",
+      checkout: "pr-head",
+    });
+  }
+});
+
+// Total over the attendable verbs: the entry point reads a shape for every verb the
+// predicate admits, so an addition to one list without the other cannot ship.
+test("attendedRunShape is total over the attendable verbs", () => {
+  for (const verb of attendedVerbs) assert.doesNotThrow(() => attendedRunShape(verb));
+});
+
+// `implement-spec` is an orchestrator, not a verb an attended run numbers a subject for
+// — it has no shape, and an unknown verb has none either.
+test("attendedRunShape throws for a verb with no attended shape", () => {
+  assert.throws(() => attendedRunShape("implement-spec"), /no attended run shape for verb "implement-spec"/);
+  assert.throws(() => attendedRunShape("nope"), /no attended run shape for verb "nope"/);
 });
 
 // The end-of-run summary (issue #57) states the outcome, the worktree's fate, and —
@@ -385,4 +608,181 @@ test("formatRunSummary renders outcome, worktree fate, and finalize disposition"
   });
   assert.match(explore, /worktree: removed at/);
   assert.doesNotMatch(explore, /finalize:/);
+});
+
+// An attended `review-pr` run finalizes with full parity (issue #141), so its summary
+// reports what finalize DID — posted the review — rather than the push and pull request
+// an `implement` run reports.
+test("formatRunSummary reports a review-pr run's posted review", () => {
+  const posted = formatRunSummary({
+    verb: "review-pr",
+    issue: "138",
+    outcome: "succeeded",
+    retained: false,
+    tree: "/tmp/wt/review-pr-138",
+    finalize: "auto",
+    finalized: true,
+  });
+  assert.match(posted, /review-pr #138: succeeded/);
+  assert.match(posted, /worktree: removed at \/tmp\/wt\/review-pr-138/);
+  assert.match(posted, /finalize: auto — posted the review to the pull request/);
+
+  // A withheld review-pr run reports what did NOT happen in the verb's own terms: the
+  // review was not posted, and it is in the retained worktree to read (issue #143).
+  const withheld = formatRunSummary({
+    verb: "review-pr",
+    issue: "138",
+    outcome: "succeeded",
+    retained: true,
+    tree: "/tmp/wt/review-pr-138",
+    finalize: "never",
+    finalized: false,
+  });
+  assert.match(withheld, /finalize: never — nothing posted; the composed review is in the retained worktree/);
+
+  const declinedReview = formatRunSummary({
+    verb: "review-pr",
+    issue: "138",
+    outcome: "succeeded",
+    retained: true,
+    tree: "/tmp/wt/review-pr-138",
+    finalize: "ask",
+    finalized: false,
+  });
+  assert.match(declinedReview, /finalize: ask — not finalized; the composed review is in the retained worktree/);
+
+  const failed = formatRunSummary({
+    verb: "review-pr",
+    issue: "138",
+    outcome: "failed",
+    retained: true,
+    tree: "/tmp/wt/review-pr-138",
+    finalize: "auto",
+    finalized: false,
+  });
+  assert.match(failed, /finalize: auto — not finalized \(the run did not succeed\)/);
+});
+
+// An attended `implement-pr` run finalizes with full parity too (issue #142), but what
+// its finalize DID is neither the review one verb posts nor the pull request the other
+// opens: it pushed the agent's commits to the pull request's head ref and posted the
+// replies. Reporting an opened pull request for a verb that only ever pushes onto an
+// existing one would be the summary's chance to mislead.
+test("formatRunSummary reports an implement-pr run's push and replies", () => {
+  const pushed = formatRunSummary({
+    verb: "implement-pr",
+    issue: "138",
+    outcome: "succeeded",
+    retained: true,
+    tree: "/tmp/wt/implement-pr-138",
+    finalize: "auto",
+    finalized: true,
+  });
+  assert.match(pushed, /implement-pr #138: succeeded/);
+  assert.match(pushed, /worktree: retained at \/tmp\/wt\/implement-pr-138/);
+  assert.match(pushed, /finalize: auto — pushed the commits to the pull request's head, posted the replies/);
+
+  // A withheld implement-pr run reports what did NOT happen in its own terms: nothing was
+  // pushed, and the commits are on the pull request's head in the retained worktree — not
+  // on an agent branch, which this verb never cuts (issue #144).
+  const withheld = formatRunSummary({
+    verb: "implement-pr",
+    issue: "138",
+    outcome: "succeeded",
+    retained: true,
+    tree: "/tmp/wt/implement-pr-138",
+    finalize: "never",
+    finalized: false,
+  });
+  assert.match(
+    withheld,
+    /finalize: never — nothing pushed; the commits are on the pull request's head in the retained worktree/,
+  );
+
+  const declined = formatRunSummary({
+    verb: "implement-pr",
+    issue: "138",
+    outcome: "succeeded",
+    retained: true,
+    tree: "/tmp/wt/implement-pr-138",
+    finalize: "ask",
+    finalized: false,
+  });
+  assert.match(
+    declined,
+    /finalize: ask — not finalized; the commits are on the pull request's head in the retained worktree/,
+  );
+
+  const failed = formatRunSummary({
+    verb: "implement-pr",
+    issue: "138",
+    outcome: "failed",
+    retained: true,
+    tree: "/tmp/wt/implement-pr-138",
+    finalize: "auto",
+    finalized: false,
+  });
+  assert.match(failed, /finalize: auto — not finalized \(the run did not succeed\)/);
+});
+
+// A confirmed `ask` whose finalize tail FAILED is neither finalized nor withheld — the
+// one disposition the summary must not get wrong. `implement-pr` bundles the push and
+// the finalize into a single step, so a tail that exits non-zero may have pushed the
+// commits already; reporting "not finalized; the commits are on the pull request's head
+// in the retained worktree" would tell the developer nothing left the machine. The line
+// says the finalize RAN and did not succeed, and points at checking what landed.
+test("formatRunSummary reports a confirmed finalize that failed as neither posted nor withheld", () => {
+  const failedTail = formatRunSummary({
+    verb: "implement-pr",
+    issue: "138",
+    outcome: "failed",
+    retained: true,
+    tree: "/tmp/wt/implement-pr-138",
+    finalize: "ask",
+    finalized: false,
+    finalizeFailed: true,
+  });
+  assert.match(failedTail, /finalize: ask — finalize ran and did not succeed/);
+  assert.doesNotMatch(failedTail, /the commits are on the pull request's head/);
+  assert.doesNotMatch(failedTail, /nothing pushed/);
+
+  // The same for the read-only verb: a review whose posting failed is not a review the
+  // developer withheld.
+  const failedReview = formatRunSummary({
+    verb: "review-pr",
+    issue: "138",
+    outcome: "failed",
+    retained: true,
+    tree: "/tmp/wt/review-pr-138",
+    finalize: "ask",
+    finalized: false,
+    finalizeFailed: true,
+  });
+  assert.match(failedReview, /finalize: ask — finalize ran and did not succeed/);
+  assert.doesNotMatch(failedReview, /nothing posted/);
+});
+
+// Whether a finished attended run reports `blocked` on its subject. The unattended path
+// clears its own `agent:in-progress` write with an `if: failure()` → `status blocked`
+// step in every verb's workflow; an attended run has no workflow, so the same decision
+// lives here. A failed or aborted run that WROTE the label reports blocked, so the next
+// run is not refused by a label the crashed one left behind; a run that succeeded (its
+// tail already reported done) does not, nor does a REFUSED one, whose guard stopped the
+// sequence before the status write and posted its own explanation.
+test("reportsBlocked names the runs that must retire their in-progress write", () => {
+  assert.equal(reportsBlocked("failed", "auto"), true);
+  assert.equal(reportsBlocked("aborted", "auto"), true);
+  assert.equal(reportsBlocked("succeeded", "auto"), false);
+  assert.equal(reportsBlocked("refused", "auto"), false);
+});
+
+// A WITHHELD run never wrote the label — its plan drops the in-progress status step
+// along with the finalize tail — so there is nothing to retire, and reporting blocked
+// would be the one trace on the pull request that `--finalize=never` promises not to
+// leave. An absent mode is an unattended-shaped `auto` run and reports.
+test("reportsBlocked leaves a withheld run's subject untouched", () => {
+  assert.equal(reportsBlocked("failed", "never"), false);
+  assert.equal(reportsBlocked("failed", "ask"), false);
+  assert.equal(reportsBlocked("aborted", "never"), false);
+  assert.equal(reportsBlocked("failed", undefined), true);
 });

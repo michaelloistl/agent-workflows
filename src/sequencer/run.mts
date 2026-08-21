@@ -48,10 +48,11 @@ const context: RunContext = {
   // A forced run overrules a guard refusal (the guards step is tolerated). Set by
   // the attended entry point's `--force`; unattended never sets it (issue #56).
   force: process.env.FORCE === "true",
-  // How an attended `implement` run finalizes (issue #57). Unset (unattended, or an
-  // attended `auto` run) keeps the push + finalize tail — full parity; `ask`/`never`
-  // drop it. `FINALIZE_TAIL_ONLY` selects the tail-only slice the attended `ask`
-  // path runs after its confirmation.
+  // How an attended run finalizes (issues #57, #143, #144). Unset (unattended, or an
+  // attended `auto` run) keeps the finalize tail — full parity; `ask`/`never` drop it,
+  // along with the in-progress status write, for the verbs that read it (`implement`,
+  // `review-pr`, `implement-pr`). `FINALIZE_TAIL_ONLY` selects the tail-only slice the
+  // attended `ask` path runs after its confirmation.
   finalize: process.env.FINALIZE_MODE as FinalizeMode | undefined,
   finalizeTailOnly: process.env.FINALIZE_TAIL_ONLY === "true",
 };
