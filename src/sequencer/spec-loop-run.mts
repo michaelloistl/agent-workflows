@@ -141,7 +141,7 @@ const specArg = process.argv[2];
 if (!specArg || !/^\d+$/.test(specArg)) {
   console.error(
     "spec-loop: usage: agent-workflows implement-spec <spec-issue> " +
-      "[--dry-run] [--pause] [--force] [--interactive] [--stop]",
+      "[--dry-run] [--pause] [--yes] [--force] [--interactive] [--stop]",
   );
   process.exit(2);
 }
@@ -174,11 +174,20 @@ const runThrough = !pause;
 // running one is occupied): it signals the live loop to finish its current slice and
 // halt at the next checkpoint, rather than starting a run of its own.
 const stop = process.argv.includes("--stop");
-// `--execute`, `--yes` and `--no-pause` are the pre-ADR-0011 spelling of what is now
-// the default. Accepted as silent no-ops so existing muscle memory, scripts, and
-// launchers keep working; a warning on every run would be noise for flags that still
-// describe exactly the behaviour they get. `--no-pause` is still READ, because it is
-// the half of the one contradiction that can still be typed out loud.
+// `--yes` pre-accepts the one-time preview gate. Under the unattended default there is
+// no gate for it to answer and it changes nothing; under `--pause` — and therefore
+// under `--interactive`, which implies it — it is what lets a launcher, an unattended
+// resume, or an agent prompt start a run that still stops between slices. Without it
+// an interactive run could not be started by anything but a human at a terminal, since
+// `confirm` treats a non-interactive stdin as a decline.
+const yes = process.argv.includes("--yes");
+// `--execute` and `--no-pause` are the pre-ADR-0011 spelling of what is now the
+// default. Accepted as no-ops so existing muscle memory, scripts, and launchers keep
+// working; a warning on every run would be noise for flags that still describe exactly
+// the behaviour they get. A no-op never overrules the flag that takes the default
+// back — `--execute --dry-run` is a dry run, `--no-pause --pause` pauses. `--no-pause`
+// is still READ, because it is the half of the one contradiction that can be typed out
+// loud. Unknown flags never reach here: the bin refuses them rather than dropping them.
 const noPause = process.argv.includes("--no-pause");
 
 const flagConflict = specFlagConflict({ interactive, noPause });
@@ -350,10 +359,10 @@ if (order.length === 0) {
   console.log("spec-loop: no ready tracer-bullets to build — nothing to do.");
   process.exit(0);
 }
-// The preview is printed above either way — the unattended default answers the prompt,
-// it does not suppress the blast radius, and the notice records that the run proceeded
-// without being asked, naming the flags that would have stopped it.
-const gate = previewGate({ pause, dryRun });
+// The preview is printed above either way — the unattended default (or `--yes` under
+// `--pause`) answers the prompt, it does not suppress the blast radius, and the notice
+// records what proceeded without asking, naming the flags that would have stopped it.
+const gate = previewGate({ pause, yes, dryRun });
 if (gate.notice) console.log(gate.notice);
 if (gate.prompt && !confirm(gate.prompt)) {
   console.log("spec-loop: declined — nothing done.");

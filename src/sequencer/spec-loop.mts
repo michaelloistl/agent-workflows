@@ -263,7 +263,13 @@ export function formatSliceFooter(o: { slice: number; outcome: SliceOutcome }): 
 //
 // `--pause` governs both gates together: this one-time "may this run start at all"
 // question and the recurring between-slices checkpoints. They are the same concept —
-// stop and ask a human — and splitting them bought a combination nobody used.
+// stop and ask a human — so one flag turns both back on.
+//
+// `--yes` survives that merge, answering this gate alone. Under the default it has
+// nothing to answer and changes nothing; its remaining job is the combination
+// `--pause` cannot express — start without being asked, but keep stopping between
+// slices — which is exactly what `--interactive` needs, since it implies `--pause`
+// and would otherwise be unreachable from anything without a terminal.
 //
 // Exactly one of the two is non-null: the loop either asks or reports that it is
 // proceeding. The prompt text lives here rather than in the shell (as
@@ -276,9 +282,21 @@ export interface PreviewGate {
   readonly notice: string | null;
 }
 
-export function previewGate(o: { pause: boolean; dryRun: boolean }): PreviewGate {
+export function previewGate(o: { pause: boolean; yes: boolean; dryRun: boolean }): PreviewGate {
   const radius = o.dryRun ? "this DRY RUN" : "REAL merges";
-  if (o.pause) return { prompt: `spec-loop: proceed with ${radius}? [y/N] `, notice: null };
+  if (o.pause && !o.yes) {
+    return { prompt: `spec-loop: proceed with ${radius}? [y/N] `, notice: null };
+  }
+  // A gated run started by a flag rather than a human: say which flag, and say what it
+  // did NOT answer, so nobody reads it as the unattended default.
+  if (o.pause) {
+    return {
+      prompt: null,
+      notice:
+        `spec-loop: --yes — proceeding with ${radius} without prompting; ` +
+        `the between-slices checkpoints still stop.`,
+    };
+  }
   // Name only the hatches still available. Advising `--dry-run` to a run that is
   // already dry is noise, and worse than noise: it implies the run is about to merge.
   const escapes = o.dryRun

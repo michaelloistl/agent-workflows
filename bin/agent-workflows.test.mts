@@ -110,6 +110,7 @@ test("classifyInvocation treats implement-spec + issue number as the spec loop",
     noPause: false,
     interactive: false,
     stop: false,
+    yes: false,
   });
 });
 
@@ -125,6 +126,7 @@ test("classifyInvocation reads --dry-run / --pause on the spec loop", () => {
     noPause: false,
     interactive: false,
     stop: false,
+    yes: false,
   });
 });
 
@@ -138,6 +140,7 @@ test("classifyInvocation reads --force on the spec loop", () => {
     noPause: false,
     interactive: false,
     stop: false,
+    yes: false,
   });
 });
 
@@ -153,16 +156,18 @@ test("classifyInvocation reads --interactive on the spec loop", () => {
     noPause: false,
     interactive: true,
     stop: false,
+    yes: false,
   });
 });
 
-// `--execute` and `--yes` are the pre-ADR-0011 spelling of what is now the default,
-// kept as silent no-ops. The bin does not forward what it cannot change: they classify
-// as a plain unattended run, which is exactly what they asked for. `--no-pause` is the
-// exception — still recorded, because the entry point needs it to reject an explicit
-// `--interactive --no-pause` pair.
-test("classifyInvocation ignores the deprecated --execute / --yes", () => {
-  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--execute", "--yes"]), {
+// `--execute` is the pre-ADR-0011 spelling of what is now the default: the bin does
+// not forward what it cannot change, so it classifies as a plain unattended run, which
+// is exactly what it asked for. `--yes` and `--no-pause` are still RECORDED — `--yes`
+// because it still answers the preview when a gate is back (`--pause`, and therefore
+// `--interactive`), `--no-pause` because the entry point needs it to reject an
+// explicit `--interactive --no-pause` pair.
+test("classifyInvocation ignores the deprecated --execute", () => {
+  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--execute"]), {
     kind: "spec-loop",
     spec: "48",
     dryRun: false,
@@ -171,7 +176,49 @@ test("classifyInvocation ignores the deprecated --execute / --yes", () => {
     noPause: false,
     interactive: false,
     stop: false,
+    yes: false,
   });
+});
+
+// `--interactive` implies `--pause`, which puts the PREVIEW gate back too — so
+// without `--yes` an interactive run can no longer be started by anything that has no
+// terminal to answer with. It is forwarded for exactly that combination.
+test("classifyInvocation reads --yes, which still answers the preview under a gate", () => {
+  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--interactive", "--yes"]), {
+    kind: "spec-loop",
+    spec: "48",
+    dryRun: false,
+    pause: false,
+    force: false,
+    noPause: false,
+    interactive: true,
+    stop: false,
+    yes: true,
+  });
+});
+
+// An unrecognised flag is REFUSED, not dropped. `runSpecLoop` forwards only the flags
+// it knows, so a mistyped `--dryrun` would otherwise vanish between the two parsers
+// and leave the developer with the full unattended real-merge run they were trying to
+// suppress. Same shape as `init`/`sync`'s parser, for a higher-stakes command.
+test("classifyInvocation refuses an unrecognised spec-loop flag rather than dropping it", () => {
+  const bad = classifyInvocation(["implement-spec", "48", "--dryrun"]);
+  assert.equal(bad.kind, "error");
+  assert.match(String(bad.message), /unrecognised flag `--dryrun`/);
+  assert.match(String(bad.message), /--dry-run/);
+});
+
+test("classifyInvocation refuses a valued spelling of a spec-loop flag", () => {
+  assert.match(
+    String(classifyInvocation(["implement-spec", "48", "--dry-run=true"]).message),
+    /unrecognised flag `--dry-run=true`/,
+  );
+});
+
+test("classifyInvocation refuses a stray non-flag argument on the spec loop", () => {
+  const bad = classifyInvocation(["implement-spec", "48", "49"]);
+  assert.equal(bad.kind, "error");
+  assert.match(String(bad.message), /unrecognised argument `49`/);
 });
 
 test("classifyInvocation still records a typed --no-pause, so the conflict is catchable", () => {
@@ -184,6 +231,7 @@ test("classifyInvocation still records a typed --no-pause, so the conflict is ca
     noPause: true,
     interactive: true,
     stop: false,
+    yes: false,
   });
 });
 
@@ -197,6 +245,7 @@ test("classifyInvocation reads --stop as the graceful-stop control on the spec l
     noPause: false,
     interactive: false,
     stop: true,
+    yes: false,
   });
 });
 

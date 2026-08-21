@@ -48,6 +48,25 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
   return { path: join(srcDir, rel), source: "packaged" };
 }
 
+// Every argument the spec loop accepts, the three ADR-0011 kept from the old spelling
+// included. It is a closed list because `runSpecLoop` forwards only what it recognises:
+// an argument missing from here is not passed on, so it has to be refused instead.
+const SPEC_LOOP_FLAGS = [
+  "--dry-run",
+  "--pause",
+  "--yes",
+  "--force",
+  "--interactive",
+  "--stop",
+  // Accepted, and no-ops: they name the behaviour that is now the default (ADR-0011).
+  "--execute",
+  "--no-pause",
+];
+
+const SPEC_LOOP_USAGE =
+  "usage: agent-workflows implement-spec <spec-issue> " +
+  "[--dry-run] [--pause] [--yes] [--force] [--interactive] [--stop]";
+
 // Classify the raw argv tail into an invocation kind. Three shapes are supported:
 //
 //   agent-workflows <verb>                → "verb": run the verb's whole sequence
@@ -55,10 +74,12 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
 //   agent-workflows <verb> --guards-only  → "verb" in guards-only mode: run just
 //                                           the guard step, for the light guard
 //                                           job's cheap preflight (issue #50).
-//   agent-workflows implement-spec <spec-issue> [--dry-run] [--pause] [--force]
-//                                               [--interactive] [--stop]
+//   agent-workflows implement-spec <spec-issue> [--dry-run] [--pause] [--yes]
+//                                               [--force] [--interactive] [--stop]
 //                                         → "spec-loop": drive a whole spec locally,
-//                                           unattended by default (ADR-0011).
+//                                           unattended by default (ADR-0011). An
+//                                           argument outside the accepted list is
+//                                           REFUSED here rather than dropped.
 //   agent-workflows <verb> <issue-number> [--force] [--finalize=auto|ask|never]
 //                                          [--interactive]
 //                                         → "attended": run the verb locally as an
@@ -102,6 +123,20 @@ export function classifyInvocation(args) {
     // merges, no checkpoints, preview auto-accepted — so every flag here takes
     // something BACK rather than opting in.
     if (verb === "implement-spec") {
+      // Refuse anything outside the accepted list before classifying. Only recognised
+      // flags are forwarded to the entry point, so a dropped one is a SILENT one:
+      // `--dryrun` would leave the developer with exactly the unattended real-merge
+      // run they were trying to suppress. That was survivable while the default was
+      // the safe one; under ADR-0011 the opt-outs have to actually arrive.
+      const stray = rest.find((arg) => !SPEC_LOOP_FLAGS.includes(arg));
+      if (stray !== undefined) {
+        return {
+          kind: "error",
+          message:
+            `unrecognised ${stray.startsWith("-") ? "flag" : "argument"} \`${stray}\`\n` +
+            `       ${SPEC_LOOP_USAGE}`,
+        };
+      }
       return {
         kind: "spec-loop",
         spec: second,
@@ -118,11 +153,16 @@ export function classifyInvocation(args) {
         // control command run from a second terminal.
         interactive: rest.includes("--interactive"),
         stop: rest.includes("--stop"),
-        // `--execute` and `--yes` were the pre-ADR-0011 spelling of the default and
-        // are now silent no-ops — not read here, because there is nothing left for
-        // them to change. `--no-pause` is read even though it is equally a no-op: it
-        // is half of the one contradiction a developer can still type out loud
-        // (`--interactive --no-pause`), which the entry point refuses.
+        // `--yes` pre-accepts the one-time preview gate. Under the unattended default
+        // there is no gate for it to answer, but `--pause` puts one back — and so does
+        // `--interactive`, which implies it — so this stays the way a launcher or an
+        // unattended resume starts a gated run with no terminal to answer from.
+        yes: rest.includes("--yes"),
+        // `--execute` is the pre-ADR-0011 spelling of the default and a silent no-op —
+        // not read here, because there is nothing left for it to change. `--no-pause`
+        // is equally a no-op but still read: it is half of the one contradiction a
+        // developer can type out loud (`--interactive --no-pause`), which the entry
+        // point refuses.
         noPause: rest.includes("--no-pause"),
       };
     }
@@ -206,6 +246,7 @@ function runSpecLoop(invocation) {
   if (invocation.force) runnerArgs.push("--force");
   if (invocation.interactive) runnerArgs.push("--interactive");
   if (invocation.stop) runnerArgs.push("--stop");
+  if (invocation.yes) runnerArgs.push("--yes");
   if (invocation.noPause) runnerArgs.push("--no-pause");
   const child = spawnSync(process.execPath, runnerArgs, {
     stdio: "inherit",
@@ -281,6 +322,13 @@ function main() {
         "       agent-workflows status [options] (--help for the option list)\n" +
         "       agent-workflows init|sync [--enable=…] [--ref=…] [--dry-run] [--yes] (--help for the rest)",
     );
+    process.exit(2);
+  }
+  // A refusal from the classifier: an argument it could neither act on nor safely
+  // ignore. Reported the way the install parser reports one, and exits before anything
+  // is spawned.
+  if (invocation.kind === "error") {
+    console.error(`agent-workflows: ${invocation.message}`);
     process.exit(2);
   }
   if (invocation.kind === "status") {

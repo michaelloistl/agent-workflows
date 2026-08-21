@@ -297,31 +297,58 @@ test("specFlagConflict's message does not credit --no-pause with running anythin
 // default that accepted it and the two flags that take it back.
 
 test("previewGate proceeds without asking by default", () => {
-  const gate = previewGate({ pause: false, dryRun: false });
+  const gate = previewGate({ pause: false, yes: false, dryRun: false });
   assert.equal(gate.prompt, null);
   assert.match(String(gate.notice), /REAL merges/);
 });
 
 test("previewGate asks the human when --pause is given", () => {
-  const gate = previewGate({ pause: true, dryRun: false });
+  const gate = previewGate({ pause: true, yes: false, dryRun: false });
   assert.match(String(gate.prompt), /proceed with REAL merges\?/);
   assert.equal(gate.notice, null);
+});
+
+// `--yes` survives the flip, and is not merely tolerated: `--interactive` implies
+// `--pause`, and `--pause` restores the PREVIEW gate as well as the checkpoints, so
+// without `--yes` there would be no way at all to start an interactive run from
+// anything that has no terminal to answer with (a non-interactive stdin declines).
+test("previewGate lets --yes answer the preview when --pause put the gate back", () => {
+  const gate = previewGate({ pause: true, yes: true, dryRun: false });
+  assert.equal(gate.prompt, null);
+  assert.match(String(gate.notice), /--yes/);
+  assert.match(String(gate.notice), /REAL merges/);
+});
+
+// It answers that ONE gate only — the checkpoints are `--pause`'s other half and keep
+// stopping, which is the whole point of pairing it with `--interactive`.
+test("previewGate's --yes notice says the checkpoints still stop", () => {
+  const notice = String(previewGate({ pause: true, yes: true, dryRun: false }).notice);
+  assert.match(notice, /checkpoints still stop/);
+});
+
+// Under the default there is no gate for it to answer, so it changes nothing: the
+// notice is the ordinary auto-accepted one, naming the default rather than the flag.
+test("previewGate treats --yes as a no-op under the unattended default", () => {
+  const withFlag = previewGate({ pause: false, yes: true, dryRun: false });
+  assert.deepEqual(withFlag, previewGate({ pause: false, yes: false, dryRun: false }));
+  assert.match(String(withFlag.notice), /default/);
 });
 
 // The question and the notice are built from one blast-radius string, so they can
 // never drift into describing different things.
 test("previewGate's prompt and notice name the same blast radius", () => {
-  assert.match(String(previewGate({ pause: true, dryRun: true }).prompt), /this DRY RUN/);
-  assert.match(String(previewGate({ pause: false, dryRun: true }).notice), /this DRY RUN/);
-  assert.match(String(previewGate({ pause: true, dryRun: false }).prompt), /REAL merges/);
-  assert.match(String(previewGate({ pause: false, dryRun: false }).notice), /REAL merges/);
+  assert.match(String(previewGate({ pause: true, yes: false, dryRun: true }).prompt), /this DRY RUN/);
+  assert.match(String(previewGate({ pause: false, yes: false, dryRun: true }).notice), /this DRY RUN/);
+  assert.match(String(previewGate({ pause: true, yes: true, dryRun: true }).notice), /this DRY RUN/);
+  assert.match(String(previewGate({ pause: true, yes: false, dryRun: false }).prompt), /REAL merges/);
+  assert.match(String(previewGate({ pause: false, yes: false, dryRun: false }).notice), /REAL merges/);
 });
 
 // Nothing was typed to accept the preview any more, so the notice has to name the
 // DEFAULT that accepted it and the way back — otherwise a run that merges for real
 // looks like one nobody chose.
 test("previewGate's notice names the default and both escape hatches", () => {
-  const notice = String(previewGate({ pause: false, dryRun: false }).notice);
+  const notice = String(previewGate({ pause: false, yes: false, dryRun: false }).notice);
   assert.match(notice, /default/);
   assert.match(notice, /--pause/);
   assert.match(notice, /--dry-run/);
@@ -330,14 +357,14 @@ test("previewGate's notice names the default and both escape hatches", () => {
 // Only the hatches still available: telling an already-dry run to try `--dry-run` is
 // noise, and implies the run is about to merge when it is not.
 test("previewGate's notice omits --dry-run when the run is already dry", () => {
-  const notice = String(previewGate({ pause: false, dryRun: true }).notice);
+  const notice = String(previewGate({ pause: false, yes: false, dryRun: true }).notice);
   assert.match(notice, /--pause/);
   assert.doesNotMatch(notice, /--dry-run/);
 });
 
 // `--pause` covers BOTH gates, so the notice must not describe it as only one of them.
 test("previewGate's notice says --pause covers the start and the checkpoints", () => {
-  const notice = String(previewGate({ pause: false, dryRun: false }).notice);
+  const notice = String(previewGate({ pause: false, yes: false, dryRun: false }).notice);
   assert.match(notice, /asked first and between slices/);
 });
 

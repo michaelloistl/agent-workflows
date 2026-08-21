@@ -17,18 +17,31 @@ version without editing their workflow on every release.
   **`--dry-run`** suppresses every irreversible action and halts where the loop would
   first merge; **`--pause`** restores both human gates (the one-time preview
   confirmation *and* the between-slices checkpoints, which `--yes` and `--no-pause`
-  covered separately). `--execute`, `--yes`, and `--no-pause` are accepted as silent
-  no-ops — they still describe the behaviour they get. `--force` is deliberately **not**
-  folded in: it overrules a *refusal* (the local lock, a slice's guards) rather than a
-  prompt, so it stays explicit. `--interactive` now **implies** `--pause` instead of
-  contradicting it; only an explicitly typed `--interactive --no-pause` is refused.
+  covered separately). `--execute` and `--no-pause` are accepted as silent no-ops —
+  they still describe the behaviour they get — though a no-op never overrules the flag
+  that takes the default back, so `--execute --dry-run` is now a **dry** run where it
+  used to be a real one, and `--no-pause --pause` pauses. **`--yes` is kept with its
+  one job**: it answers the preview gate alone, which is what makes `--pause --yes`
+  (start unasked, still stop between slices) and therefore a scripted `--interactive`
+  run possible at all — `--interactive` implies `--pause`, so without it an interactive
+  run could only be started by a human at a terminal. A flag on **none** of these lists
+  is now **refused** with the flag list and a non-zero exit instead of being silently
+  dropped: only recognised flags were ever forwarded, so a mistyped `--dryrun` used to
+  leave you with the full real-merge run you were trying to suppress. `--force` is
+  deliberately **not** folded in: it overrules a *refusal* (the local lock, a slice's
+  guards) rather than a prompt, so it stays explicit. `--interactive` now **implies**
+  `--pause` instead of contradicting it; only an explicitly typed
+  `--interactive --no-pause` is refused.
   Nothing that guards the *work* moves — both CI gates, the merge read-back, the local
   lock, the `agent:local` marker, halt-on-failure, no automatic retry, and
-  absent-means-unbounded run ceilings are all unchanged. The preview still prints on
-  every run, now naming the default that accepted it, both ways back, and the run log's
-  path, so a run nobody was asked about is never a run nobody was told about. Shipped as
-  a minor rather than a `v2` because no reusable workflow, thin caller, or CI path can
-  reach the flip — only a human typing the command locally. See ADR-0011, which
+  absent-means-unbounded run ceilings are all unchanged — but note the marker is now
+  claimed by the **bare** command, and a halted run keeps it (ADR-0009), so a mistyped
+  spec number costs a spec branch, some slice PRs, and an `agent:local` label to remove
+  before CI advance runs on that spec again. The preview still prints on every run,
+  now naming the default that accepted it, both ways back, and the run log's path, so
+  a run nobody was asked about is never a run nobody was told about. Shipped as a minor
+  rather than a `v2` because no reusable workflow, thin caller, or CI path can reach
+  the flip — only a human typing the command locally. See ADR-0011, which
   supersedes ADR-0006's "Stepwise by default" clause and its dry-run-on-by-default
   amendment.
 - Show the **final PR** in `agent-workflows status`, on a row of its own beneath the
