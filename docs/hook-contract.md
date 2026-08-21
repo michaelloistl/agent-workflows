@@ -111,6 +111,12 @@ Output files the agent run writes (path supplied by the workflow):
   (guards/status/finalize) run as `yarn --cwd "$TOOLING_DIR"
   sandcastle:<verb>-<hook>` (cwd is irrelevant — they act on the tracker via
   `PR_NUMBER`).
+  - The **detached default-branch worktree** is how the *unattended* path fills
+    `$TOOLING_DIR`. An attended (local) PR run makes the same split but points
+    `$TOOLING_DIR` at **the checkout the developer launched from**, so a PR verb's
+    own logic can be changed and run without pushing it first (ADR-0010). The
+    contract is unchanged either way: `$TOOLING_DIR` is *where the tooling is*,
+    cwd is *the code under review*.
 
 `<verb-dir>` is the source/override directory name: `review-pr` lives under
 `review/`; the rest match the verb. The dispatcher maps the `run` hook to the
