@@ -31,8 +31,12 @@ export interface SpecPlan {
   // in the preview rather than silently dropped.
   readonly deadlocked: readonly number[];
   // A dry run suppresses every irreversible action (merge, close, final PR) and
-  // halts where it would first merge. The safer default (issue #59).
+  // halts where it would first merge. Opt-in via `--dry-run` (ADR-0011).
   readonly dryRun: boolean;
+  // Where the append-only run log for this run lives. Carried in the plan so the
+  // preview can name it: a run that proceeds without being asked is a run nobody is
+  // necessarily watching, and this is the one moment the path is on screen.
+  readonly runLog: string;
 }
 
 // Split the tracer-bullets into the strict build order and the cycle remainder.
@@ -48,15 +52,17 @@ export function resolveOrder(bullets: TracerBullet[]): {
 }
 
 // The preview block printed before the first agent runs (issue #59): the resolved
-// slice list in topological order, the spec branch, the base branch, and whether
-// this is a dry run — the whole blast radius, visible before it is incurred. The
-// driver prints this and does not begin until it is accepted.
+// slice list in topological order, the spec branch, the base branch, the run log, and
+// whether this is a dry run — the whole blast radius, visible before it is incurred.
+// It prints on EVERY run, including the auto-accepted default (ADR-0011), because
+// printing it is what keeps an unasked-for start from being an unannounced one.
 export function formatPreview(plan: SpecPlan): string {
   const mode = plan.dryRun ? "DRY RUN" : "EXECUTE";
   const lines = [
     `════ implement-spec #${plan.spec} — ${mode} ════`,
     `spec branch : ${plan.specBranch}`,
     `base branch : ${plan.base || "(default)"}`,
+    `run log     : ${plan.runLog}`,
     plan.order.length
       ? "slices (topological order):"
       : "slices: (none — nothing to build)",
@@ -233,51 +239,64 @@ export function formatSliceFooter(o: { slice: number; outcome: SliceOutcome }): 
 
 // ── Checkpoints, resume, and graceful stop (issue #60) ──────────────────────────
 //
-// A long spec run is made controllable, stoppable, and restartable. The loop pauses
-// between slices by DEFAULT — the checkpoint where the developer inspects the
-// accumulated spec branch before the next slice stacks on it, which is what makes a
-// parity finalize acceptable rather than a loss of control. `--no-pause` runs
-// straight through; interactive mode steers every slice and is therefore mutually
-// exclusive with running straight through. Resume derives ENTIRELY from the tracker
-// and the branches — no local file — so a spec interrupted under one entry point
-// resumes under the other.
+// A long spec run is made controllable, stoppable, and restartable. The loop runs
+// STRAIGHT THROUGH by default (ADR-0011); `--pause` stops it at the checkpoint between
+// slices, where the developer inspects the accumulated spec branch before the next one
+// stacks on it. Interactive mode steers every slice and therefore implies pausing.
+// Resume derives ENTIRELY from the tracker and the branches — no local file — so a spec
+// interrupted under one entry point resumes under the other.
 
 // Whether the preview must be ANSWERED by a human before the run starts.
 //
-// The preview's confirmation is the gate between a typed command and real merges into
-// a spec branch, and `confirm` treats a non-interactive stdin as a decline — the safe
-// default, but it also means nothing without a terminal can ever start a run: not a
-// launcher script, not an unattended resume, not a `!`-prefixed command from an agent
-// prompt. `--yes` pre-accepts it.
+// The loop runs UNATTENDED by default (ADR-0011): the preview is auto-accepted and the
+// run proceeds. `--pause` puts the gate back, and it is then a real one — `confirm`
+// treats a non-interactive stdin as a decline, so under `--pause` nothing without a
+// terminal can start a run: not a launcher script, not an unattended resume, not a
+// `!`-prefixed command from an agent prompt.
 //
-// The safety property this preserves is that the bypass is never SILENT, not that it
-// cannot exist: the caller still PRINTS the whole preview, and `notice` names the flag
-// that answered in the human's place, so a run started this way says so in its own log.
-// `--yes` covers this one-time "may this run start at all" gate only; the recurring
-// between-slices checkpoints are governed by `--no-pause`, so a fully non-interactive
-// run passes both.
-// Exactly one of the two is non-null: the loop either asks or reports that a flag
-// answered. The prompt text lives here rather than in the shell (as `checkpointPrompt`
-// already does) so the question and the notice name the same blast radius by
-// construction — they cannot drift into describing different things.
+// The safety property is that proceeding is never SILENT, not that it cannot happen:
+// the caller still PRINTS the whole preview, and `notice` names the DEFAULT that
+// accepted it along with both ways back — `--pause` to be asked, `--dry-run` to look
+// without merging. Nothing was typed to accept this run, so the notice is the only
+// thing that distinguishes "the developer chose real merges" from "the developer did
+// not know real merges were on the table".
+//
+// `--pause` governs both gates together: this one-time "may this run start at all"
+// question and the recurring between-slices checkpoints. They are the same concept —
+// stop and ask a human — and splitting them bought a combination nobody used.
+//
+// Exactly one of the two is non-null: the loop either asks or reports that it is
+// proceeding. The prompt text lives here rather than in the shell (as
+// `checkpointPrompt` already does) so the question and the notice name the same blast
+// radius by construction — they cannot drift into describing different things.
 export interface PreviewGate {
-  // The question to put to the human, or null when `--yes` already answered it.
+  // The question to put to the human, or null on the auto-accepted default.
   readonly prompt: string | null;
   // The line to print in place of the prompt, or null when the human is being asked.
   readonly notice: string | null;
 }
 
-export function previewGate(o: { yes: boolean; dryRun: boolean }): PreviewGate {
+export function previewGate(o: { pause: boolean; dryRun: boolean }): PreviewGate {
   const radius = o.dryRun ? "this DRY RUN" : "REAL merges";
-  if (!o.yes) return { prompt: `spec-loop: proceed with ${radius}? [y/N] `, notice: null };
-  return { prompt: null, notice: `spec-loop: --yes — proceeding with ${radius} without prompting.` };
+  if (o.pause) return { prompt: `spec-loop: proceed with ${radius}? [y/N] `, notice: null };
+  return {
+    prompt: null,
+    notice:
+      `spec-loop: proceeding with ${radius} — auto-accepted (default). ` +
+      "--pause to confirm each step, --dry-run to look without merging.",
+  };
 }
 
 // Interactive per-slice mode and run-straight-through are mutually exclusive: one
 // stops to steer every slice, the other never stops at all — asking for both is a
 // contradiction. Returns the refusal message when both are set, null otherwise.
-export function specFlagConflict(o: { interactive: boolean; runThrough: boolean }): string | null {
-  if (o.interactive && o.runThrough) {
+//
+// Narrowed by ADR-0011: running straight through is now the DEFAULT rather than a
+// flag, so `noPause` is whether `--no-pause` was actually TYPED — the deprecated flag
+// kept as a no-op. `--interactive` on its own implies pausing and is accepted; only
+// the explicit pair is a contradiction the developer wrote down.
+export function specFlagConflict(o: { interactive: boolean; noPause: boolean }): string | null {
+  if (o.interactive && o.noPause) {
     return (
       "spec-loop: --interactive and --no-pause are mutually exclusive — interactive mode " +
       "hands over a live session per slice, while --no-pause runs the whole spec straight " +
@@ -303,7 +322,7 @@ export function sliceDisposition(pr: PrMergeView | null, specBranch: string): Sl
 
 // The checkpoint framing printed between slices (issue #60): the slice that just
 // landed, the spec branch to inspect, and the next slice that will stack on it. The
-// driver follows it with a confirmation prompt (unless `--no-pause` is set).
+// driver follows it with a confirmation prompt, but only under `--pause`.
 export function formatCheckpoint(o: { lastMerged: number; next: number; specBranch: string }): string {
   return (
     `\n⏸ checkpoint: slice #${o.lastMerged} is merged into \`${o.specBranch}\`. ` +

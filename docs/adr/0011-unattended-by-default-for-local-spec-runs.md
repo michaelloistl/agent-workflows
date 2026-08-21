@@ -1,0 +1,54 @@
+# Unattended by default for local spec runs
+
+ADR-0006 gave the attended spec loop two defaults that stop it: a dry run, and a checkpoint between every slice. Both were right for a loop nobody had watched yet. After a year of running it, the command that gets typed is `implement-spec <n> --execute --yes --no-pause` — every time, unchanged, on every spec. A default nobody uses is not a safety property; it is a prefix. So a bare `implement-spec <n>` now runs the whole spec unattended, and two flags — `--dry-run` and `--pause` — take that back.
+
+## Status
+
+accepted (supersedes ADR-0006's "Stepwise by default" clause and its dry-run-on-by-default amendment — those two only; every other decision in ADR-0006, and all of ADR-0009, stand unchanged)
+
+## Context
+
+ADR-0006 recorded both defaults deliberately, and its reasoning was sound at the time. The dry run came from surveying prior art: *"This is the only way to watch a full pass before trusting the loop with real merges into a spec branch, which is the highest blast-radius action in the feature and had no safety valve at all."* The checkpoint came from the finalize argument: *"The pause between slices is where the worktree gets inspected, which is what makes a parity finalize acceptable rather than a loss of control."*
+
+What has changed is not the blast radius. It is that the loop has been watched — many full passes of it — and the operator watching it is the person who wrote it. The dry run's purpose was to build trust that no longer needs building, and the checkpoint's purpose was inspection that, in practice, nobody performs: the accumulated spec branch is inspected at the end, from the final PR, because that is where a reviewable diff lives.
+
+The cost of a default nobody wants is not just typing. Three flags on every invocation is three chances to forget one, and forgetting `--execute` on a 26-slice spec means watching a loop report what it would have done and then starting over. Worse, a prefix typed by rote stops being read: `--yes --no-pause` was supposed to be the developer *declaring* that nobody is at the terminal, and instead it became noise in front of the issue number. The declaration carried no information because it was never absent.
+
+There is a second, sharper reason. ADR-0006's consequences already noted that a pre-accepted run *"costs the assumption used to reject automatic retry — that a human is present to see a halt"*. That assumption was already false on every real run; it was only nominally true because the flags were nominally opt-in. Recording the truth in the default makes the consequence visible in the one place it can be acted on — the preview.
+
+## Decision
+
+**A bare `implement-spec <n>` runs the spec unattended: real merges, no checkpoints, preview auto-accepted.** This is the invocation that was already being typed; it is now the one that is spelled.
+
+**Exactly two flags take it back, and each takes back exactly one thing.** `--dry-run` governs what is IRREVERSIBLE — every merge, issue close, and the final PR are suppressed, and the loop halts where it would first merge. `--pause` governs what is ASKED — it restores both the one-time preview confirmation and the recurring between-slices checkpoints. The two axes are independent and were always independent; naming them separately is what makes the default legible rather than a bundle.
+
+**`--pause` covers both gates, where `--yes` and `--no-pause` covered one each.** They are one concept — stop and ask a human — and splitting them bought exactly one combination ("pre-accept the start but stop between slices") that nothing used. A developer who wants to be asked wants to be asked; a run that stops 26 times is not made safer by also stopping a 27th at the start.
+
+**`--force` is not part of the unattended default and never becomes one.** Every flag folded into the default skips *asking a human something they always answer yes to*. `--force` overrules a *refusal* — the local lock, and each slice's guards. Defaulting it on would mean a 26-slice run could no longer be stopped by anything short of a crash. A halt at slice 14 is the system working: re-run, and the loop resumes at slice 14 from the tracker, because resume derives entirely from the tracker and the branches (ADR-0006, unchanged).
+
+**`--interactive` implies pausing.** It hands each slice's build to a live agent session, which is per-slice attention by definition. ADR-0006 made it mutually exclusive with running straight through; now that running straight through is the default rather than a flag, that exclusion would reject a bare `--interactive` for contradicting something the developer never typed. The refusal survives, narrowed to the pair actually written down: `--interactive --no-pause`.
+
+**`--execute`, `--yes`, and `--no-pause` become silent no-ops.** They still describe exactly the behaviour they now get, so warning on them would be noise — and they are in muscle memory, launcher scripts, and this repo's own README history. `--no-pause` is still read, because it is half of the one contradiction that can still be typed out loud.
+
+**The preview prints on every run, and now names the default that accepted it.** ADR-0006's safety property was that a bypass is never *silent*, and that property is kept rather than dropped — it is doing more work now, not less. Under the old flags the notice named the flag that answered; there is no flag any more, so it names the default and both ways back (`--pause` to be asked, `--dry-run` to look without merging). Nothing was typed to choose real merges, so the notice is the only thing separating "the developer chose this" from "the developer did not know this was on the table". The preview also names the **run log**, because a run that proceeds without being asked is a run nobody is necessarily watching, and this is the one moment its path is on screen.
+
+**Nothing that guards correctness changes.** Both CI gates, the merge confirmation read back from GitHub, the local lock, the `agent:local` marker and its retention across a halt (ADR-0009), halt-on-failure, the rejection of automatic retry, and the run ceiling all behave exactly as before. This ADR moves gates on the *developer's attention*; it moves no gate on the *work*.
+
+**The run ceiling stays absent-means-unbounded.** The motivating case is a 26-slice spec that must run to completion without a human, and a default ceiling would halt it partway for no reason the developer chose. A repo that wants a bound configures one, as ADR-0006's amendment already provides.
+
+**The flip is a built-in default, not a config key.** `.sandcastle/agent-workflows/config.json` could carry a `dryRun` key, restoring the old behaviour per repo. Rejected: it gives one command two meanings depending on which checkout you are standing in, which is precisely the confusion a default is supposed to remove. `--dry-run` on the command line already covers every case a key would.
+
+## Considered alternatives
+
+- **A shell alias or npm script.** Zero code, and the honest baseline for "I type the same prefix every time". Rejected because it leaves the tool's own default a lie: a fresh checkout, a second machine, or anyone else reading the README still meets a command whose stated default nobody uses. The prefix would keep existing; it would just move somewhere less visible.
+- **Flip the default for every gated entry point, for consistency.** `init` and `sync` also gate on a confirmation (ADR-0008). Rejected, and the rule that makes this consistent rather than an exception is *the default is "do what I named"*: `implement-spec 139` names the work exactly, so its preview tells the developer nothing they did not already know, and asking is ritual. `init` names nothing — its plan is derived from whatever it finds in the repo — so its preview is *information the developer does not yet have*, and the prompt is what delivers it. Attended verb runs (`implement 139`) needed no change at all: they already act for real, with `finalize` defaulting to `auto`.
+- **Keep `--yes` and `--no-pause` as separate opt-outs, just inverted.** Rejected: it preserves a distinction that only ever mattered while both were opt-ins, at the cost of two flags for one intention.
+- **Cut a `v2` tag.** By strict semver, reversing a safety default is breaking, and consumers pin the moving `v1` tag. Rejected as disproportionate: the flip is reachable only by a human typing the command locally. No reusable workflow, no thin caller, and no CI path can reach it, so a `v2` would force every thin caller in every consuming repo to be rewritten to guard against a change none of them can experience. It ships as a minor whose CHANGELOG entry leads with the reversal.
+
+## Consequences
+
+- **The assumption that a human sees a halt is now false by default, not by opt-in.** ADR-0006 used that assumption to reject automatic retry, and the rejection stands — a slice that fails twice fails for a reason a third attempt will not find. What follows instead is that a halted run must be *readable* after the fact: the run log and the best-effort Herdr notification are the two things that make it so, and the preview now prints the log's path so the developer knows where to look before walking away. Richer reporting (a Discord hook) attaches at `record()` in `spec-loop-run.mts`, the single choke point every transition already passes through; nothing is built for it here.
+- **A mistyped spec number now merges.** Under the old default it printed a plan. This is the real cost of the change, and it is bounded by what has not moved: the loop still cuts a spec branch, still opens a PR per slice, still waits for CI on each, and still halts on the first failure — so the damage is a branch and some PRs on a spec that was going to be built anyway, not a merge into the default branch.
+- `CONTEXT.md`'s *attended run* entry keeps its term and loses its examples. "Attended" still names the human's *ability* to intervene — same machine, same terminal, Ctrl-C, `--stop`, the worktree left behind — which is unchanged. What changes is that the pre-accepted case is the common one, so the entry describes the default and names `--pause` as the way to put the gates back.
+- ADR-0006's Status points here for its two superseded clauses. Its per-slice PRs, CI gating, one-worktree topology, halt-on-failure, no-local-state resume, double concurrency guard, merge confirmation, preview, graceful stop, and run ceiling are all unaffected, as is ADR-0009 in full.
+- The README's spec-loop examples shrink to the bare command, and the "running without a human at the terminal" section inverts: it now explains how to get a human back into the loop.

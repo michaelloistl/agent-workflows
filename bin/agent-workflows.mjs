@@ -55,6 +55,10 @@ export function resolveEntry(verb, hook, { cwd, srcDir, exists = existsSync }) {
 //   agent-workflows <verb> --guards-only  → "verb" in guards-only mode: run just
 //                                           the guard step, for the light guard
 //                                           job's cheap preflight (issue #50).
+//   agent-workflows implement-spec <spec-issue> [--dry-run] [--pause] [--force]
+//                                               [--interactive] [--stop]
+//                                         → "spec-loop": drive a whole spec locally,
+//                                           unattended by default (ADR-0011).
 //   agent-workflows <verb> <issue-number> [--force] [--finalize=auto|ask|never]
 //                                          [--interactive]
 //                                         → "attended": run the verb locally as an
@@ -94,25 +98,32 @@ export function classifyInvocation(args) {
   if (/^\d+$/.test(second)) {
     // `implement-spec <spec-issue>` is the attended SPEC LOOP (issue #59): it drives
     // a whole spec locally rather than running a single verb, so it routes to its
-    // own entry point. A dry run is the safer default; `--execute` opts into real
-    // merges and `--force` overrules the local lock and each slice's guards.
+    // own entry point. A bare invocation runs the spec UNATTENDED (ADR-0011) — real
+    // merges, no checkpoints, preview auto-accepted — so every flag here takes
+    // something BACK rather than opting in.
     if (verb === "implement-spec") {
       return {
         kind: "spec-loop",
         spec: second,
-        execute: rest.includes("--execute"),
+        // `--dry-run` suppresses every irreversible action and halts where the loop
+        // would first merge; `--pause` restores both human gates (the one-time
+        // preview confirmation and the between-slices checkpoints).
         dryRun: rest.includes("--dry-run"),
+        pause: rest.includes("--pause"),
+        // `--force` overrules the local lock and each slice's guards. Deliberately
+        // not part of the unattended default: it overrules a refusal, not a prompt.
         force: rest.includes("--force"),
-        // Issue #60: `--no-pause` runs the whole spec straight through (the loop
-        // otherwise pauses at a checkpoint between slices); `--interactive` hands
-        // each slice's implement run to a live agent session; `--stop` is the
-        // graceful-stop control command run from a second terminal.
-        noPause: rest.includes("--no-pause"),
+        // Issue #60: `--interactive` hands each slice's implement run to a live agent
+        // session (and therefore implies pausing); `--stop` is the graceful-stop
+        // control command run from a second terminal.
         interactive: rest.includes("--interactive"),
         stop: rest.includes("--stop"),
-        // `--yes` pre-accepts the preview prompt. A non-interactive stdin declines it,
-        // so without this nothing but a human at a terminal can start a run.
-        yes: rest.includes("--yes"),
+        // `--execute` and `--yes` were the pre-ADR-0011 spelling of the default and
+        // are now silent no-ops — not read here, because there is nothing left for
+        // them to change. `--no-pause` is read even though it is equally a no-op: it
+        // is half of the one contradiction a developer can still type out loud
+        // (`--interactive --no-pause`), which the entry point refuses.
+        noPause: rest.includes("--no-pause"),
       };
     }
     // Forward the attended flags verbatim (the entry point parses their meaning):
@@ -178,7 +189,8 @@ function runAttended(verb, issue, force, finalize, interactive) {
 // Run a whole spec locally as the attended spec loop: spawn the loop entrypoint
 // under tsx. It creates one worktree on the spec branch, bootstraps it once, and
 // builds the spec's tracer-bullets one at a time — dispatching, gating, merging,
-// and confirming each slice from the terminal (issue #59).
+// and confirming each slice from the terminal (issue #59). Unattended by default
+// (ADR-0011); the flags forwarded below are the ways to take that back.
 // Takes the classified invocation whole rather than one positional boolean per flag:
 // the flags travel together, and a list of same-typed positionals is the shape a
 // mis-ordered argument slips through unnoticed.
@@ -189,13 +201,12 @@ function runSpecLoop(invocation) {
   const tsxCli = require.resolve("tsx/cli");
 
   const runnerArgs = [tsxCli, runner, spec];
-  if (invocation.execute) runnerArgs.push("--execute");
   if (invocation.dryRun) runnerArgs.push("--dry-run");
+  if (invocation.pause) runnerArgs.push("--pause");
   if (invocation.force) runnerArgs.push("--force");
-  if (invocation.noPause) runnerArgs.push("--no-pause");
   if (invocation.interactive) runnerArgs.push("--interactive");
   if (invocation.stop) runnerArgs.push("--stop");
-  if (invocation.yes) runnerArgs.push("--yes");
+  if (invocation.noPause) runnerArgs.push("--no-pause");
   const child = spawnSync(process.execPath, runnerArgs, {
     stdio: "inherit",
     env: process.env,

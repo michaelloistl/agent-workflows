@@ -6,7 +6,11 @@
 
 accepted (extends ADR-0003 and ADR-0004 to the local entry point); the
 marker-lifecycle clause under Decision is **superseded by ADR-0009** — a halted run
-keeps the marker. Everything else here stands.
+keeps the marker — and the "Stepwise by default" clause together with the dry-run
+amendment's *on by default* are **superseded by ADR-0011** — a bare `implement-spec
+<n>` now runs unattended, with `--dry-run` and `--pause` as the opt-outs. Everything
+else here stands, including the dry run itself, the preview, the merge confirmation,
+the graceful stop, and the run ceiling.
 
 ## Context
 
@@ -22,7 +26,7 @@ The port is cheaper than it looks because `advance.mts` is already decide/dispat
 
 **CI gating stays.** The loop reuses `shared/poll-checks.mts` unchanged: a slice cannot merge on red, and the next slice cannot start on a red spec-branch tip. These are the two gates from #44 (fixed in #46 and #47), and dropping them locally is worse than not having had them — the loop would keep stacking slices onto a broken spec branch while the developer watches. `CHECKS_TIMEOUT_SECONDS`, `CHECKS_GRACE_SECONDS`, and `CHECKS_INTERVAL_SECONDS` are already env-overridable, so local runs can tighten the wait without code changes.
 
-**Stepwise by default, `--auto` to run straight through.** The pause between slices is where the worktree gets inspected, which is what makes a parity finalize (push and open the PR, as in CI) acceptable rather than a loss of control — the worktree survives the run, and that is what CI cannot offer. `--interactive` is a per-slice escape hatch and is mutually exclusive with `--auto`; otherwise an eight-slice spec would hand over eight separate interactive sessions.
+**Stepwise by default, `--auto` to run straight through.** The pause between slices is where the worktree gets inspected, which is what makes a parity finalize (push and open the PR, as in CI) acceptable rather than a loss of control — the worktree survives the run, and that is what CI cannot offer. `--interactive` is a per-slice escape hatch and is mutually exclusive with `--auto`; otherwise an eight-slice spec would hand over eight separate interactive sessions. *(Superseded by ADR-0011: running straight through is the default and `--pause` is the opt-in, because the inspection this clause protects happens at the end from the final PR, not between slices. The checkpoint itself is unchanged — `--pause` still stops exactly here. `--interactive` survives too, and now implies pausing rather than contradicting it, so the mutual exclusion is narrowed to an explicitly typed `--interactive --no-pause`.)*
 
 **One worktree per spec**, created on the spec branch and bootstrapped once, with each slice branching inside it. This mirrors the **stacked** topology exactly: a slice branching from the accumulated spec-branch HEAD is what a single worktree gives for free. It is deleted when the final PR opens, and kept on failure or abort — the failed tree is the thing worth looking at.
 
@@ -40,7 +44,7 @@ The port is cheaper than it looks because `advance.mts` is already decide/dispat
 
 A survey of eight existing Herdr-based orchestrators (2026-08-11) — chiefly `sean1588/herdr-orchestrator`, `sarmientoF/herdr-pr-loop`, and `Tudor0404/dual-author` — surfaced five gaps in the above. All are small and none disturbs the decisions already recorded; they are listed here because their absence was an oversight rather than a choice.
 
-**A dry run.** The loop supports executing its whole sequence with merges and the final PR suppressed, reporting what it would have done. The prior art ships this *on by default* and halts short of the first irreversible action. This is the only way to watch a full pass before trusting the loop with real merges into a **spec branch**, which is the highest blast-radius action in the feature and had no safety valve at all.
+**A dry run.** The loop supports executing its whole sequence with merges and the final PR suppressed, reporting what it would have done. The prior art ships this *on by default* and halts short of the first irreversible action. This is the only way to watch a full pass before trusting the loop with real merges into a **spec branch**, which is the highest blast-radius action in the feature and had no safety valve at all. *(The on-by-default half is superseded by ADR-0011: the trust this was there to build has been built, so `--dry-run` is now the opt-in. The dry run itself — what it suppresses and where it halts — is unchanged.)*
 
 **The merge is confirmed, not assumed.** The survey's sharpest idea is that *GitHub is the source of truth for artifacts; an agent's reported completion is only a trigger to go and check.* Applied here it is narrower than it first appears, because the verb entrypoints already guard the obvious case — `implement` and `implement-pr` both exit non-zero when the agent produced no commits, precisely so an empty branch is never pushed. The gap is at the level this loop newly owns: on the unattended path the merge *webhook* is what proves a slice landed, and the loop replaces that webhook with its own `gh` call, giving up the proof along with it. So after merging, the loop reads the PR's merged state back and halts on anything else. It deliberately does not use the tracer-bullet's closed state as that signal, because closing is failure-tolerant by design and a merged slice can legitimately still have an open issue.
 
@@ -61,7 +65,7 @@ Also added: an append-only **run log**, so a run that halts overnight leaves som
 
 ## Consequences
 
-- The preview and the checkpoints are gates on the *human's* attention, and both can be pre-accepted (`--yes`, `--no-pause`) — otherwise nothing without a terminal could ever start a run, since a non-interactive stdin declines. This does not weaken any of the decisions above: every CI gate, the merge read-back, the local lock, and the `agent:local` marker are unchanged, and the preview is still printed in full with the accepting flag named, so the bypass is recorded rather than silent. What it costs is the assumption used to reject automatic retry — that a human is present to see a halt — so a run started this way must be read from its log or its Herdr notification instead.
+- The preview and the checkpoints are gates on the *human's* attention, and both can be pre-accepted (`--yes`, `--no-pause`) — otherwise nothing without a terminal could ever start a run, since a non-interactive stdin declines. This does not weaken any of the decisions above: every CI gate, the merge read-back, the local lock, and the `agent:local` marker are unchanged, and the preview is still printed in full with the accepting flag named, so the bypass is recorded rather than silent. What it costs is the assumption used to reject automatic retry — that a human is present to see a halt — so a run started this way must be read from its log or its Herdr notification instead. *(ADR-0011 inverts this: pre-accepted is now the default and `--pause` restores both gates together. Every clause above still holds — nothing weakens, the preview still prints in full, and the retry rejection still stands — but the cost named in the last sentence is now paid on every run rather than an opted-into one, which is why the preview names the run log's path.)*
 - `advance.mts` splits: the `gh` dispatch call separates from the close/recompute/report logic the loop reuses. `spec-graph.mts` is untouched.
 - `advance` stops being unguarded: the reusable workflow runs the `implement-spec` guard for *both* modes, and in advance mode it reads the spec's `agent:local` marker. The decision ("should advance stand down?") is a pure function of the spec state and the marker, tested beside the other step-function decisions.
 - A local spec run and a CI spec run produce identical git history and identical tracker state. Either can resume the other.

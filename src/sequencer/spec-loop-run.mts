@@ -15,24 +15,27 @@
 // slice branching inside it from the accumulated spec-branch HEAD — an eight-slice
 // spec pays setup once, not eight times, and mirrors the stacked topology directly.
 //
-// Two safety properties this loop turns on, because it is the highest-blast-radius
-// thing in the feature: a DRY RUN (the default) that runs the loop with every
-// irreversible action suppressed and halts where it would first merge, and a merge
-// CONFIRMATION read back from GitHub before the loop advances — a queued, blocked,
-// or stale merge must not be mistaken for a landed slice. A PREVIEW of the whole
-// plan is printed and accepted before the first agent runs; `--yes` accepts it
-// without a prompt, for the callers that have no terminal to answer one (a launcher,
-// an unattended resume), and the preview still prints so the bypass is never silent.
+// A bare `implement-spec <n>` runs the whole spec UNATTENDED (ADR-0011): real merges,
+// no checkpoints, preview auto-accepted. Two flags take that back — `--dry-run` runs
+// the loop with every irreversible action suppressed and halts where it would first
+// merge, and `--pause` restores both gates (the one-time preview confirmation and the
+// recurring between-slices checkpoints). Everything that guards CORRECTNESS rather
+// than the developer's attention is unchanged and unconditional: both CI gates, the
+// local lock, the `agent:local` marker, halt-on-failure, and the merge CONFIRMATION
+// read back from GitHub before the loop advances — a queued, blocked, or stale merge
+// must not be mistaken for a landed slice. The PREVIEW prints on every run, including
+// the auto-accepted default, so a run nobody asked for is never a run nobody was told
+// about; it names the run log too, since that is what is left to read afterwards.
 //
 // Credentials come from the developer's already-authenticated `gh` and existing
 // agent credentials; this loop neither reads nor writes any secret material.
 //
-// Issue #60 makes a long run controllable, stoppable, and restartable. The loop
-// PAUSES at a checkpoint between slices by default (inspect the accumulated spec
-// branch before the next stacks); `--no-pause` runs straight through and
-// `--interactive` steers each slice, the two being mutually exclusive. A GRACEFUL
-// stop from a second terminal (`--stop`, delivered as SIGTERM) finishes the current
-// slice and halts at the next checkpoint, distinct from Ctrl-C's immediate abort.
+// Issue #60 makes a long run controllable, stoppable, and restartable. `--pause`
+// stops at a checkpoint between slices (inspect the accumulated spec branch before the
+// next stacks); `--interactive` steers each slice with a live agent session and
+// therefore implies pausing. A GRACEFUL stop from a second terminal (`--stop`,
+// delivered as SIGTERM) finishes the current slice and halts at the next checkpoint,
+// distinct from Ctrl-C's immediate abort.
 // RESUME derives entirely from the tracker and the branches — no local file: a slice
 // whose PR is already open resumes at its gate rather than re-running the agent, and
 // the worktree is removed only once the final spec PR opens (retained on every halt).
@@ -138,38 +141,47 @@ const specArg = process.argv[2];
 if (!specArg || !/^\d+$/.test(specArg)) {
   console.error(
     "spec-loop: usage: agent-workflows implement-spec <spec-issue> " +
-      "[--execute] [--force] [--yes] [--no-pause] [--interactive] [--stop]",
+      "[--dry-run] [--pause] [--force] [--interactive] [--stop]",
   );
   process.exit(2);
 }
 const specNum = Number(specArg);
-// The safer default is DRY (issue #59): the loop reports what a real run would do
-// and halts where it would first merge. `--execute` opts into real merges into the
-// spec branch; `--dry-run` is accepted for explicitness but is already the default.
-const execute = process.argv.includes("--execute");
-const dryRun = !execute;
+// A bare `implement-spec <n>` runs the whole spec UNATTENDED: real merges, no
+// checkpoints, preview auto-accepted (ADR-0011). Two flags take that back, and each
+// takes back exactly one thing — what is IRREVERSIBLE and what is ASKED.
+//
+// `--dry-run` suppresses every irreversible action and halts where the loop would
+// first merge. It was the default until ADR-0011; it is now the opt-in.
+const dryRun = process.argv.includes("--dry-run");
 // `--force` overrules the local lock (the mutex between two terminals) and is
-// threaded to each slice's guards so a preflight refusal is overruled too.
+// threaded to each slice's guards so a preflight refusal is overruled too. It is
+// deliberately NOT part of the unattended default: every other flag here skips asking
+// a human something they always answer yes to, while `--force` overrules a guard's
+// considered NO. A halt at slice 14 of 26 is the system working — re-run and the loop
+// resumes there from the tracker.
 const force = process.argv.includes("--force");
-// Checkpoints (issue #60): the loop pauses between slices by DEFAULT — the
-// checkpoint where the developer inspects the accumulated spec branch before the
-// next slice stacks on it. `--no-pause` runs the whole spec straight through.
-const runThrough = process.argv.includes("--no-pause");
 // `--interactive` hands each slice's implement run to a LIVE agent session (issue
-// #58, per-slice here) so the developer steers every slice. It is mutually exclusive
-// with `--no-pause` — one stops at every slice, the other never stops.
+// #58, per-slice here) so the developer steers every slice. It IMPLIES pausing: a
+// developer steering 26 live sessions has plainly not asked to run straight through,
+// and the mutual-exclusion error below is reserved for the contradiction they typed.
 const interactive = process.argv.includes("--interactive");
+// `--pause` restores BOTH gates — the one-time preview confirmation and the recurring
+// between-slices checkpoints where the accumulated spec branch is inspected before the
+// next slice stacks on it. One flag, because they are one concept: stop and ask.
+const pause = process.argv.includes("--pause") || interactive;
+const runThrough = !pause;
 // `--stop` is the graceful-stop CONTROL command, run from a SECOND terminal (the
 // running one is occupied): it signals the live loop to finish its current slice and
 // halt at the next checkpoint, rather than starting a run of its own.
 const stop = process.argv.includes("--stop");
-// `--yes` pre-accepts the preview so a run can start with nothing at the terminal to
-// answer it — a launcher script, an unattended resume. It answers only that one-time
-// gate; between-slices checkpoints remain `--no-pause`'s business, so a fully
-// non-interactive run passes both.
-const yes = process.argv.includes("--yes");
+// `--execute`, `--yes` and `--no-pause` are the pre-ADR-0011 spelling of what is now
+// the default. Accepted as silent no-ops so existing muscle memory, scripts, and
+// launchers keep working; a warning on every run would be noise for flags that still
+// describe exactly the behaviour they get. `--no-pause` is still READ, because it is
+// the half of the one contradiction that can still be typed out loud.
+const noPause = process.argv.includes("--no-pause");
 
-const flagConflict = specFlagConflict({ interactive, runThrough });
+const flagConflict = specFlagConflict({ interactive, noPause });
 if (flagConflict) {
   console.error(flagConflict);
   process.exit(2);
@@ -329,7 +341,7 @@ const issues0 = listIssues();
 const bullets0 = tracerBullets(specNum, issues0, DEPENDENCY_EDGES);
 const { order, deadlocked } = resolveOrder(bullets0);
 
-const plan: SpecPlan = { spec: specNum, specBranch, base, order, deadlocked, dryRun };
+const plan: SpecPlan = { spec: specNum, specBranch, base, order, deadlocked, dryRun, runLog };
 
 // The preview — the blast radius, visible before it is incurred. The run does not
 // begin until it is accepted.
@@ -338,9 +350,10 @@ if (order.length === 0) {
   console.log("spec-loop: no ready tracer-bullets to build — nothing to do.");
   process.exit(0);
 }
-// The preview is printed above either way — `--yes` answers the prompt, it does not
-// suppress the blast radius, and the notice records that a flag answered for the human.
-const gate = previewGate({ yes, dryRun });
+// The preview is printed above either way — the unattended default answers the prompt,
+// it does not suppress the blast radius, and the notice records that the run proceeded
+// without being asked, naming the flags that would have stopped it.
+const gate = previewGate({ pause, dryRun });
 if (gate.notice) console.log(gate.notice);
 if (gate.prompt && !confirm(gate.prompt)) {
   console.log("spec-loop: declined — nothing done.");
@@ -737,15 +750,15 @@ async function drive(): Promise<never> {
     // build or a resumed gate merge, not an already-merged catch-up. The developer
     // inspects the accumulated branch here before the next slice stacks — the control
     // that makes a parity finalize acceptable. The first slice never pauses (the
-    // preview already gated the start). A graceful stop halts here even under
-    // --no-pause; --no-pause otherwise runs straight through. A dry run halts at the
-    // first merge, so it never reaches a between-slices checkpoint.
+    // preview already gated the start). A graceful stop halts here even when running
+    // straight through, which is the default (ADR-0011) — `--pause` is what stops
+    // here. A dry run halts at the first merge, so it never reaches a checkpoint.
     if (built.length > 0) {
       console.log(formatCheckpoint({ lastMerged: lastMerged ?? slice, next: slice, specBranch }));
       // Run ceiling (issue #61): a reached ceiling halts here CLEANLY — the same
       // clean stop as a graceful stop, distinct from a failure (exit 0), and
       // resume picks it up. Checked at the checkpoint so the halt is between
-      // slices, never mid-slice, and BEFORE the graceful-stop / --no-pause gates so
+      // slices, never mid-slice, and BEFORE the graceful-stop / `--pause` gates so
       // that even a straight-through run cannot spend past its ceiling.
       const ceilingReason = ceilingReached(ceiling, {
         slicesAttempted,
@@ -835,8 +848,8 @@ async function drive(): Promise<never> {
     if (force) buildEnv.FORCE = "true";
     if (dryRun) buildEnv.FINALIZE_MODE = "never";
     // `--interactive` (issue #60): each slice's implement run hands over a live agent
-    // session so the developer steers it. Per-slice by design — and mutually
-    // exclusive with --no-pause, rejected up front.
+    // session so the developer steers it. Per-slice by design — so it implies pausing,
+    // and an explicit `--interactive --no-pause` is rejected up front.
     if (interactive) buildEnv.INTERACTIVE = "true";
     // Ask the sequence to report its OUTCOME back here. A guard refusal exits 0 (a
     // refusal must leave CI green), so the exit code alone cannot distinguish

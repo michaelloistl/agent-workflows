@@ -8,6 +8,29 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+- **BREAKING (local CLI): the attended spec loop is now unattended by default.** A bare
+  `agent-workflows implement-spec <n>` builds every slice, **merges each one for real**,
+  and stops for nothing — what `--execute --yes --no-pause` used to spell. Under the old
+  default the same command printed a plan and halted before the first merge, so anyone
+  who upgrades and re-runs a familiar command gets real merges into the spec branch
+  where they previously got a preview. Two flags take it back, one per axis:
+  **`--dry-run`** suppresses every irreversible action and halts where the loop would
+  first merge; **`--pause`** restores both human gates (the one-time preview
+  confirmation *and* the between-slices checkpoints, which `--yes` and `--no-pause`
+  covered separately). `--execute`, `--yes`, and `--no-pause` are accepted as silent
+  no-ops — they still describe the behaviour they get. `--force` is deliberately **not**
+  folded in: it overrules a *refusal* (the local lock, a slice's guards) rather than a
+  prompt, so it stays explicit. `--interactive` now **implies** `--pause` instead of
+  contradicting it; only an explicitly typed `--interactive --no-pause` is refused.
+  Nothing that guards the *work* moves — both CI gates, the merge read-back, the local
+  lock, the `agent:local` marker, halt-on-failure, no automatic retry, and
+  absent-means-unbounded run ceilings are all unchanged. The preview still prints on
+  every run, now naming the default that accepted it, both ways back, and the run log's
+  path, so a run nobody was asked about is never a run nobody was told about. Shipped as
+  a minor rather than a `v2` because no reusable workflow, thin caller, or CI path can
+  reach the flip — only a human typing the command locally. See ADR-0011, which
+  supersedes ADR-0006's "Stepwise by default" clause and its dry-run-on-by-default
+  amendment.
 - Show the **final PR** in `agent-workflows status`, on a row of its own beneath the
   slices. The spec row's `awaiting final PR` was computed from the slices alone — every
   slice closed while the spec issue is open — which stays true forever after advance opens

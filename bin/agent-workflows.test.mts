@@ -97,81 +97,93 @@ test("classifyInvocation treats a verb + issue number as an attended local run",
 
 // `implement-spec <spec-issue>` is the attended SPEC LOOP, not a single-verb
 // attended run (issue #59): it routes to its own kind so the bin spawns the loop
-// entry point. A dry run is the default; `--execute` and `--force` ride along.
+// entry point. A BARE invocation is the unattended default (ADR-0011) — there is
+// nothing to opt into, so every flag reads false and the entry point resolves what
+// that means.
 test("classifyInvocation treats implement-spec + issue number as the spec loop", () => {
   assert.deepEqual(classifyInvocation(["implement-spec", "48"]), {
     kind: "spec-loop",
     spec: "48",
-    execute: false,
     dryRun: false,
+    pause: false,
     force: false,
     noPause: false,
     interactive: false,
     stop: false,
-    yes: false,
   });
 });
 
-test("classifyInvocation reads --execute / --force on the spec loop", () => {
-  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--execute", "--force"]), {
+// The two flags that take the unattended default back (ADR-0011): `--dry-run`
+// suppresses every irreversible action, `--pause` restores both human gates.
+test("classifyInvocation reads --dry-run / --pause on the spec loop", () => {
+  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--dry-run", "--pause"]), {
     kind: "spec-loop",
     spec: "48",
-    execute: true,
+    dryRun: true,
+    pause: true,
+    force: false,
+    noPause: false,
+    interactive: false,
+    stop: false,
+  });
+});
+
+test("classifyInvocation reads --force on the spec loop", () => {
+  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--force"]), {
+    kind: "spec-loop",
+    spec: "48",
     dryRun: false,
+    pause: false,
     force: true,
     noPause: false,
     interactive: false,
     stop: false,
-    yes: false,
   });
 });
 
-// Issue #60: `--no-pause` (run straight through), `--interactive` (steer each slice),
-// and `--stop` (the graceful-stop control command) ride along on the spec loop.
-test("classifyInvocation reads --no-pause / --interactive on the spec loop", () => {
-  assert.deepEqual(
-    classifyInvocation(["implement-spec", "48", "--execute", "--no-pause"]),
-    {
-      kind: "spec-loop",
-      spec: "48",
-      execute: true,
-      dryRun: false,
-      force: false,
-      noPause: true,
-      interactive: false,
-      stop: false,
-      yes: false,
-    },
-  );
-  assert.deepEqual(
-    classifyInvocation(["implement-spec", "48", "--execute", "--interactive"]),
-    {
-      kind: "spec-loop",
-      spec: "48",
-      execute: true,
-      dryRun: false,
-      force: false,
-      noPause: false,
-      interactive: true,
-      stop: false,
-      yes: false,
-    },
-  );
+// Issue #60: `--interactive` (steer each slice) and `--stop` (the graceful-stop
+// control command) ride along on the spec loop.
+test("classifyInvocation reads --interactive on the spec loop", () => {
+  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--interactive"]), {
+    kind: "spec-loop",
+    spec: "48",
+    dryRun: false,
+    pause: false,
+    force: false,
+    noPause: false,
+    interactive: true,
+    stop: false,
+  });
 });
 
-// `--yes` pre-accepts the preview prompt, so a launcher or script can start a run
-// without a terminal to answer it (a non-interactive stdin otherwise declines).
-test("classifyInvocation reads --yes on the spec loop", () => {
+// `--execute` and `--yes` are the pre-ADR-0011 spelling of what is now the default,
+// kept as silent no-ops. The bin does not forward what it cannot change: they classify
+// as a plain unattended run, which is exactly what they asked for. `--no-pause` is the
+// exception — still recorded, because the entry point needs it to reject an explicit
+// `--interactive --no-pause` pair.
+test("classifyInvocation ignores the deprecated --execute / --yes", () => {
   assert.deepEqual(classifyInvocation(["implement-spec", "48", "--execute", "--yes"]), {
     kind: "spec-loop",
     spec: "48",
-    execute: true,
     dryRun: false,
+    pause: false,
     force: false,
     noPause: false,
     interactive: false,
     stop: false,
-    yes: true,
+  });
+});
+
+test("classifyInvocation still records a typed --no-pause, so the conflict is catchable", () => {
+  assert.deepEqual(classifyInvocation(["implement-spec", "48", "--no-pause", "--interactive"]), {
+    kind: "spec-loop",
+    spec: "48",
+    dryRun: false,
+    pause: false,
+    force: false,
+    noPause: true,
+    interactive: true,
+    stop: false,
   });
 });
 
@@ -179,13 +191,12 @@ test("classifyInvocation reads --stop as the graceful-stop control on the spec l
   assert.deepEqual(classifyInvocation(["implement-spec", "48", "--stop"]), {
     kind: "spec-loop",
     spec: "48",
-    execute: false,
     dryRun: false,
+    pause: false,
     force: false,
     noPause: false,
     interactive: false,
     stop: true,
-    yes: false,
   });
 });
 

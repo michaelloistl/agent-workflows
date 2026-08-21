@@ -64,6 +64,7 @@ const PLAN: SpecPlan = {
   order: [4, 5, 6],
   deadlocked: [],
   dryRun: true,
+  runLog: "/tmp/agent-workflows-worktrees/spec-3-run.log",
 };
 
 test("formatPreview shows the slice list, branches, and the dry-run mode", () => {
@@ -81,6 +82,12 @@ test("formatPreview names EXECUTE mode when not a dry run", () => {
   const out = formatPreview({ ...PLAN, dryRun: false });
   assert.match(out, /implement-spec #3 — EXECUTE/);
   assert.match(out, /EXECUTE — each slice is merged/);
+});
+
+// A run that is auto-accepted by default is a run nobody is necessarily watching, so
+// the preview has to say where to read it afterwards — the one moment it is on screen.
+test("formatPreview names the run log, so a run left alone can be read later", () => {
+  assert.match(formatPreview(PLAN), /run log {5}: \/tmp\/agent-workflows-worktrees\/spec-3-run\.log/);
 });
 
 test("formatPreview lists deadlocked slices separately", () => {
@@ -254,56 +261,62 @@ test("formatSpecSummary reports a dry run as previewed", () => {
   assert.match(out, /slices previewed : #4/);
 });
 
-// — specFlagConflict (issue #60) —
+// — specFlagConflict (issue #60, narrowed by the unattended default) —
+//
+// Running straight through is now the DEFAULT, not a flag, so the conflict can only be
+// one the developer actually TYPED. `--interactive` on its own implies pausing and
+// must be accepted; only the explicit pair is a contradiction.
 
-test("specFlagConflict rejects --interactive together with run-straight-through", () => {
-  const msg = specFlagConflict({ interactive: true, runThrough: true });
+test("specFlagConflict rejects an explicit --interactive --no-pause pair", () => {
+  const msg = specFlagConflict({ interactive: true, noPause: true });
   assert.match(String(msg), /mutually exclusive/);
   assert.match(String(msg), /--interactive/);
   assert.match(String(msg), /--no-pause/);
 });
 
-test("specFlagConflict allows each flag on its own and neither", () => {
-  assert.equal(specFlagConflict({ interactive: true, runThrough: false }), null);
-  assert.equal(specFlagConflict({ interactive: false, runThrough: true }), null);
-  assert.equal(specFlagConflict({ interactive: false, runThrough: false }), null);
+test("specFlagConflict accepts --interactive alone, which implies pausing", () => {
+  assert.equal(specFlagConflict({ interactive: true, noPause: false }), null);
+  assert.equal(specFlagConflict({ interactive: false, noPause: true }), null);
+  assert.equal(specFlagConflict({ interactive: false, noPause: false }), null);
 });
 
-// — previewGate: may the run start without a human at the prompt? —
+// — previewGate: does the run stop to ask, or proceed? —
 //
-// The preview's confirmation is what stands between a command and real merges into a
-// spec branch, and a non-interactive stdin DECLINES it — the safe default, but it also
-// means no script, launcher, or unattended resume can ever start a run. `--yes`
-// pre-accepts it. The property under test is that the bypass is never SILENT: the
-// preview still prints, and the notice names the flag that answered for the human.
+// The loop runs UNATTENDED by default (ADR-0011): the preview is auto-accepted and the
+// run proceeds. `--pause` puts the gate back — and it is then a real gate, because a
+// non-interactive stdin declines it. The property under test is that proceeding is
+// never SILENT: the preview still prints in full, and the notice names both the
+// default that accepted it and the two flags that take it back.
 
-test("previewGate asks the human when --yes is absent", () => {
-  const gate = previewGate({ yes: false, dryRun: false });
+test("previewGate proceeds without asking by default", () => {
+  const gate = previewGate({ pause: false, dryRun: false });
+  assert.equal(gate.prompt, null);
+  assert.match(String(gate.notice), /REAL merges/);
+});
+
+test("previewGate asks the human when --pause is given", () => {
+  const gate = previewGate({ pause: true, dryRun: false });
   assert.match(String(gate.prompt), /proceed with REAL merges\?/);
   assert.equal(gate.notice, null);
-});
-
-test("previewGate skips the prompt when --yes is given", () => {
-  assert.equal(previewGate({ yes: true, dryRun: false }).prompt, null);
 });
 
 // The question and the notice are built from one blast-radius string, so they can
 // never drift into describing different things.
 test("previewGate's prompt and notice name the same blast radius", () => {
-  assert.match(String(previewGate({ yes: false, dryRun: true }).prompt), /this DRY RUN/);
-  assert.match(String(previewGate({ yes: true, dryRun: true }).notice), /this DRY RUN/);
-  assert.match(String(previewGate({ yes: false, dryRun: false }).prompt), /REAL merges/);
-  assert.match(String(previewGate({ yes: true, dryRun: false }).notice), /REAL merges/);
+  assert.match(String(previewGate({ pause: true, dryRun: true }).prompt), /this DRY RUN/);
+  assert.match(String(previewGate({ pause: false, dryRun: true }).notice), /this DRY RUN/);
+  assert.match(String(previewGate({ pause: true, dryRun: false }).prompt), /REAL merges/);
+  assert.match(String(previewGate({ pause: false, dryRun: false }).notice), /REAL merges/);
 });
 
-test("previewGate names the flag that answered, so the bypass is never silent", () => {
-  const notice = String(previewGate({ yes: true, dryRun: false }).notice);
-  assert.match(notice, /--yes/);
-});
-
-test("previewGate's notice states which blast radius was accepted", () => {
-  assert.match(String(previewGate({ yes: true, dryRun: false }).notice), /REAL merges/);
-  assert.match(String(previewGate({ yes: true, dryRun: true }).notice), /DRY RUN/);
+// Nothing was typed to accept the preview any more, so the notice has to name the
+// DEFAULT that accepted it and the way back — otherwise a run that merges for real
+// looks like one nobody chose.
+test("previewGate's notice names the default and both escape hatches", () => {
+  const notice = String(previewGate({ pause: false, dryRun: false }).notice);
+  assert.match(notice, /default/);
+  assert.match(notice, /--pause/);
+  assert.match(notice, /--dry-run/);
 });
 
 // — sliceDisposition (issue #60): resume derives from the PR state alone —
