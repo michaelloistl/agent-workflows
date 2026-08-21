@@ -280,6 +280,14 @@ test("specFlagConflict accepts --interactive alone, which implies pausing", () =
   assert.equal(specFlagConflict({ interactive: false, noPause: false }), null);
 });
 
+// The refusal names --no-pause as a no-op rather than describing behaviour it no
+// longer has — it asks for the straight-through run that is already the default.
+test("specFlagConflict's message does not credit --no-pause with running anything", () => {
+  const msg = String(specFlagConflict({ interactive: true, noPause: true }));
+  assert.match(msg, /already the default/);
+  assert.match(msg, /no-op/);
+});
+
 // — previewGate: does the run stop to ask, or proceed? —
 //
 // The loop runs UNATTENDED by default (ADR-0011): the preview is auto-accepted and the
@@ -317,6 +325,20 @@ test("previewGate's notice names the default and both escape hatches", () => {
   assert.match(notice, /default/);
   assert.match(notice, /--pause/);
   assert.match(notice, /--dry-run/);
+});
+
+// Only the hatches still available: telling an already-dry run to try `--dry-run` is
+// noise, and implies the run is about to merge when it is not.
+test("previewGate's notice omits --dry-run when the run is already dry", () => {
+  const notice = String(previewGate({ pause: false, dryRun: true }).notice);
+  assert.match(notice, /--pause/);
+  assert.doesNotMatch(notice, /--dry-run/);
+});
+
+// `--pause` covers BOTH gates, so the notice must not describe it as only one of them.
+test("previewGate's notice says --pause covers the start and the checkpoints", () => {
+  const notice = String(previewGate({ pause: false, dryRun: false }).notice);
+  assert.match(notice, /asked first and between slices/);
 });
 
 // — sliceDisposition (issue #60): resume derives from the PR state alone —

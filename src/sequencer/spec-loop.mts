@@ -279,11 +279,14 @@ export interface PreviewGate {
 export function previewGate(o: { pause: boolean; dryRun: boolean }): PreviewGate {
   const radius = o.dryRun ? "this DRY RUN" : "REAL merges";
   if (o.pause) return { prompt: `spec-loop: proceed with ${radius}? [y/N] `, notice: null };
+  // Name only the hatches still available. Advising `--dry-run` to a run that is
+  // already dry is noise, and worse than noise: it implies the run is about to merge.
+  const escapes = o.dryRun
+    ? "--pause to be asked first and between slices."
+    : "--pause to be asked first and between slices, --dry-run to look without merging.";
   return {
     prompt: null,
-    notice:
-      `spec-loop: proceeding with ${radius} — auto-accepted (default). ` +
-      "--pause to confirm each step, --dry-run to look without merging.",
+    notice: `spec-loop: proceeding with ${radius} — auto-accepted (default). ${escapes}`,
   };
 }
 
@@ -294,13 +297,21 @@ export function previewGate(o: { pause: boolean; dryRun: boolean }): PreviewGate
 // Narrowed by ADR-0011: running straight through is now the DEFAULT rather than a
 // flag, so `noPause` is whether `--no-pause` was actually TYPED — the deprecated flag
 // kept as a no-op. `--interactive` on its own implies pausing and is accepted; only
-// the explicit pair is a contradiction the developer wrote down.
+// this pair is a contradiction the developer wrote down.
+//
+// This is the ONLY pair that refuses, and the rule behind that is continuity: it is
+// exactly the pair ADR-0006 already refused, so nothing that used to error stops
+// erroring. Pairs that became typeable only under ADR-0011 — `--pause --no-pause` is
+// the one — resolve toward the LIVE flag instead of refusing, because `--no-pause` is
+// deprecated and a script carrying it must keep working when a developer adds
+// `--pause`. Refusing there would break the no-op promise to catch a contradiction
+// nobody can express by accident.
 export function specFlagConflict(o: { interactive: boolean; noPause: boolean }): string | null {
   if (o.interactive && o.noPause) {
     return (
       "spec-loop: --interactive and --no-pause are mutually exclusive — interactive mode " +
-      "hands over a live session per slice, while --no-pause runs the whole spec straight " +
-      "through without pausing. Pick one."
+      "hands over a live session per slice, while --no-pause asks for the straight-through " +
+      "run that is already the default. Drop one; --no-pause is a no-op either way."
     );
   }
   return null;

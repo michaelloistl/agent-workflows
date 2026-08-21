@@ -445,8 +445,8 @@ the default that accepted the run and both ways back, so a run nobody was asked 
 is never a run nobody was told about. A real run merges each slice into the spec branch
 exactly as CI does, then **reads the PR's merged state back from GitHub** before
 advancing — a queued, blocked, or stale merge halts the run rather than being mistaken
-for a landed slice. Both CI gates are kept
-(a slice cannot merge on red; the next slice cannot start on a red spec-branch tip),
+for a landed slice. Both CI gates are kept (a slice cannot merge on red; the next
+slice cannot start on a red spec-branch tip),
 a failed slice halts the whole run with no skip and no retry, the spec issue's
 progress comment is posted each iteration, and the final spec→base PR opens — labelled
 `agent:review-pr` for an advisory review — when the last slice lands. A spec run this
@@ -457,9 +457,9 @@ because both paths open (and label) the final PR through the same shared routine
 branch is exactly the event the unattended **advance** workflow triggers on — and
 advance responds by labelling the next tracer-bullet `agent:implement`, which would
 start CI building the very slice the loop is about to build itself. So a real (non
-`--dry-run`) run claims `agent:local` on the spec issue before its first merge, and the advance
-guard **refuses** (stands down; not a failure, nothing is dispatched) while that
-marker is present. The marker is released when the run **completes** — after the final
+`--dry-run`) run claims `agent:local` on the spec issue before its first merge, and
+the advance guard **refuses** (stands down; not a failure, nothing is dispatched)
+while that marker is present. The marker is released when the run **completes** — after the final
 PR is open. Every **halt** keeps it: a failed slice, a slice refusal, an unconfirmed
 merge, a declined checkpoint, a graceful stop, a reached ceiling, a Ctrl-C. That is
 deliberate — a halt means the run is waiting for you, and the merge that would make CI
@@ -888,7 +888,7 @@ Pass with `secrets: inherit`.
   sequential; 0004 no per-slice review; 0005 one sequencer, two entry points;
   0006 attended spec runs; 0007 the status view; 0008 `init` and `sync`; 0009 the
   local-run marker outlives a halt; 0010 an attended PR run's tooling is the
-  invoking checkout).
+  invoking checkout; 0011 unattended by default for local spec runs).
 
 ## Local checks
 

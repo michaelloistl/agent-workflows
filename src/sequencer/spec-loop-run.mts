@@ -343,8 +343,8 @@ const { order, deadlocked } = resolveOrder(bullets0);
 
 const plan: SpecPlan = { spec: specNum, specBranch, base, order, deadlocked, dryRun, runLog };
 
-// The preview — the blast radius, visible before it is incurred. The run does not
-// begin until it is accepted.
+// The preview — the blast radius, visible before it is incurred. Printed on every run;
+// under `--pause` the run does not begin until it is accepted.
 console.log(formatPreview(plan));
 if (order.length === 0) {
   console.log("spec-loop: no ready tracer-bullets to build — nothing to do.");

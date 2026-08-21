@@ -1,6 +1,6 @@
 # Unattended by default for local spec runs
 
-ADR-0006 gave the attended spec loop two defaults that stop it: a dry run, and a checkpoint between every slice. Both were right for a loop nobody had watched yet. After a year of running it, the command that gets typed is `implement-spec <n> --execute --yes --no-pause` — every time, unchanged, on every spec. A default nobody uses is not a safety property; it is a prefix. So a bare `implement-spec <n>` now runs the whole spec unattended, and two flags — `--dry-run` and `--pause` — take that back.
+ADR-0006 gave the attended spec loop two defaults that stop it: a dry run, and a checkpoint between every slice. Both were right for a loop nobody had watched yet. The command actually typed is `implement-spec <n> --execute --yes --no-pause` — every time, unchanged, on every spec. A default nobody uses is not a safety property; it is a prefix. So a bare `implement-spec <n>` now runs the whole spec unattended, and two flags — `--dry-run` and `--pause` — take that back.
 
 ## Status
 
@@ -10,7 +10,9 @@ accepted (supersedes ADR-0006's "Stepwise by default" clause and its dry-run-on-
 
 ADR-0006 recorded both defaults deliberately, and its reasoning was sound at the time. The dry run came from surveying prior art: *"This is the only way to watch a full pass before trusting the loop with real merges into a spec branch, which is the highest blast-radius action in the feature and had no safety valve at all."* The checkpoint came from the finalize argument: *"The pause between slices is where the worktree gets inspected, which is what makes a parity finalize acceptable rather than a loss of control."*
 
-What has changed is not the blast radius. It is that the loop has been watched — many full passes of it — and the operator watching it is the person who wrote it. The dry run's purpose was to build trust that no longer needs building, and the checkpoint's purpose was inspection that, in practice, nobody performs: the accumulated spec branch is inspected at the end, from the final PR, because that is where a reviewable diff lives.
+What has changed is not the blast radius, and it is not the passage of time — the loop shipped on 2026-08-11, ten days before this decision. It is what the evidence of using it says. The operator is the person who wrote it, and every invocation carries all three opt-outs, which is the strongest signal available that neither default is being *chosen*: the dry run's purpose was to build trust, and the trust is either built or it is not being built by re-typing `--execute`. The checkpoint's purpose was inspection that, in practice, nobody performs — the accumulated spec branch gets inspected at the end, from the final PR, because that is where a reviewable diff lives.
+
+This is a decision taken on a short record, and that is worth stating plainly rather than dressing up: the defence is not that the loop has proven itself over a long period, but that the opt-outs are cheap, the guards on the *work* are untouched, and reverting is a one-line change to two flag reads.
 
 The cost of a default nobody wants is not just typing. Three flags on every invocation is three chances to forget one, and forgetting `--execute` on a 26-slice spec means watching a loop report what it would have done and then starting over. Worse, a prefix typed by rote stops being read: `--yes --no-pause` was supposed to be the developer *declaring* that nobody is at the terminal, and instead it became noise in front of the issue number. The declaration carried no information because it was never absent.
 
