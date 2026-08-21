@@ -8,6 +8,8 @@ version without editing their workflow on every release.
 
 ## Unreleased
 
+## v1.8.0 — 2026-08-21
+
 - **A Discord run surface for local spec runs (ADR-0012).** Set `DISCORD_WEBHOOK_URL` in
   `.sandcastle/.env` and every local `implement-spec <n>` run opens **one forum thread**
   carrying five events — *run started*, *slice building*, *slice merged*, and *halt* or
