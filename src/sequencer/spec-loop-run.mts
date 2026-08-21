@@ -57,6 +57,19 @@
 // Both are strictly best-effort: outside a Herdr pane nothing is emitted, and no
 // rename, notification, or log write ever fails or delays the run.
 //
+// ADR-0012 adds a THIRD, for reach rather than record: with `DISCORD_WEBHOOK_URL` set
+// in `.sandcastle/.env`, the run opens one forum thread and pushes five events into it
+// — run started, slice building, slice merged, halt, complete. It exists because the
+// run log and the Herdr notification both land on the machine the developer has walked
+// away from, and ADR-0011 made walking away the default. Same rules as Herdr's:
+// unconfigured it is silent, no emit may fail or delay the run, and the only new
+// dependency is a webhook URL. The one structural consequence is that `finish` is now
+// ASYNC — it ends in `process.exit`, which would kill an un-awaited terminal send
+// before it left the process. Reading `.sandcastle/.env` is new too: sandcastle
+// resolves that file into each AGENT's environment and never the caller's, so the
+// sequencer loads it itself — with sandcastle's parser and its file-wins precedence,
+// scoped to the one key it has a reason to want.
+//
 // A real run also holds the LOCAL-RUN MARKER (`agent:local`) on the spec issue for
 // its whole length. Merging a slice PR into the spec branch is precisely the event
 // unattended `advance` triggers on, so without the marker every local merge would
@@ -72,6 +85,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "../shared/config.mts";
+import { loadSandcastleEnv } from "../shared/sandcastle-env.mts";
 import { listIssues, remoteBranches, issueLabels, type RawIssue } from "../shared/spec-tracker.mts";
 import { tracerBullets } from "../shared/spec-graph.mts";
 import { DEPENDENCY_EDGES } from "../shared/spec-tree.mts";
@@ -110,6 +124,7 @@ import { acquireLock, lockPath, readLockOwner, releaseLock } from "./lock.mts";
 import { runLogPath, appendRunLine } from "./run-log.mts";
 import { parseSequenceState, type SequenceState } from "./sequence-state.mts";
 import { createHerdrSurface } from "./herdr.mts";
+import { createDiscordSurface } from "./discord.mts";
 import {
   resolveOrder,
   formatPreview,
@@ -240,6 +255,18 @@ function closedSet(issues: RawIssue[]): Set<number> {
   return new Set(issues.filter((i) => i.state === "CLOSED").map((i) => i.number));
 }
 
+// Merge `.sandcastle/.env` into this process's environment BEFORE anything reads it
+// (ADR-0012). Sandcastle resolves that file into each AGENT's environment inside
+// `run()` and never touches the caller, so the sequencer — which is what emits every
+// run-surface event and never enters an agent's environment — could not otherwise see
+// `DISCORD_WEBHOOK_URL`. The file wins over the shell, matching sandcastle's own
+// precedence, so one key cannot resolve two ways depending on which process reads it.
+// SCOPED to `SEQUENCER_ENV_KEYS`: `run()` spreads `process.env` into every child, so an
+// unscoped load would put the file above the shell for each `gh` call, the bootstrap
+// command and every slice's sequence — a reach sandcastle's agent-only merge does not
+// have. The agent still gets the whole file; sandcastle still merges it.
+loadSandcastleEnv();
+
 const config = resolveConfig();
 // `owner/name` for the hooks each slice runs (GH_REPO). Resolved once, from the env
 // or the checkout's origin remote.
@@ -288,6 +315,17 @@ function record(slice: number | null, action: string, outcome: string): void {
 const herdr = createHerdrSurface(process.env, (file, args) =>
   spawnSync(file, [...args], { stdio: "ignore" }),
 );
+
+// The optional Discord run surface (ADR-0012) — the SECOND run surface, and the only
+// one that reaches a developer who has left the machine. Herdr notifies a desktop
+// that is on screen; this pushes into a forum thread that is on a phone. Same three
+// rules: unconfigured it is a silent no-op, no emit may fail or delay the run, and
+// the only dependency is a webhook URL and `fetch`.
+const discord = createDiscordSurface(process.env, (url, init) => fetch(url, init));
+
+// The spec issue on GitHub — what a halt or completion embed links to, so the one tap
+// a phone affords lands on the tracker rather than on a path nobody can open.
+const issueUrl = `https://github.com/${repoSlug}/issues/${specNum}`;
 
 // `--stop` (issue #60): the graceful-stop control command. Run from a SECOND
 // terminal, it finds the live loop through the pid the lock records and delivers a
@@ -350,22 +388,11 @@ const issues0 = listIssues();
 const bullets0 = tracerBullets(specNum, issues0, DEPENDENCY_EDGES);
 const { order, deadlocked } = resolveOrder(bullets0);
 
-const plan: SpecPlan = { spec: specNum, specBranch, base, order, deadlocked, dryRun, runLog };
-
-// The preview — the blast radius, visible before it is incurred. Printed on every run;
-// under `--pause` the run does not begin until it is accepted.
-console.log(formatPreview(plan));
+// Nothing ready to build: print the plan and stop before the lock, the worktree root,
+// and the Discord thread. A no-op run takes nothing and leaves nothing behind.
 if (order.length === 0) {
+  console.log(formatPreview({ spec: specNum, specBranch, base, order, deadlocked, dryRun, runLog }));
   console.log("spec-loop: no ready tracer-bullets to build — nothing to do.");
-  process.exit(0);
-}
-// The preview is printed above either way — the unattended default (or `--yes` under
-// `--pause`) answers the prompt, it does not suppress the blast radius, and the notice
-// records what proceeded without asking, naming the flags that would have stopped it.
-const gate = previewGate({ pause, yes, dryRun });
-if (gate.notice) console.log(gate.notice);
-if (gate.prompt && !confirm(gate.prompt)) {
-  console.log("spec-loop: declined — nothing done.");
   process.exit(0);
 }
 
@@ -373,6 +400,13 @@ mkdirSync(root, { recursive: true });
 
 // The local lock (the mutex between two terminals) keyed by the spec, so two specs
 // never collide. `--force` takes over a live holder; a stale lock is cleared.
+//
+// Taken BEFORE the Discord thread is opened (ADR-0012). A second terminal colliding
+// here would otherwise have created its own `spec #94` thread first, posted `run
+// started` into it and then exited — leaving a phone watcher two threads for one spec,
+// one of them permanently silent, which is the very ambiguity the surface exists to
+// remove. The only cost is holding the lock across the preview gate's think-time, and
+// that think-time exists under `--pause` alone.
 const acquired = acquireLock(lock, process.pid, { force });
 if (!acquired.acquired) {
   console.error(
@@ -386,9 +420,61 @@ if (acquired.clearedStale) {
   console.log(`spec-loop: cleared a stale lock at ${lock} (its owner was gone).`);
 }
 
+// Open the run's Discord thread BEFORE the preview prints (ADR-0012). The ordering is
+// the whole point: a forum channel accepts no message outside a thread, so a failed
+// create silences the entire run — including the halt notification the surface exists
+// to deliver — and the preview is the last moment the developer is still looking.
+//
+// `repeat` is cosmetic and nothing decides anything from it: the thread id is the one
+// thing that does not survive the process (resume derives from the tracker and the
+// branches alone, ADR-0006), so a second local run of this spec opens a SECOND thread.
+// An existing run log is the cheapest honest signal that this spec has run here
+// before — which a resume satisfies, and so does a real run after a dry run, hence
+// `(re-run)` rather than `(resumed)`.
+const discordLine = await discord.openThread({
+  spec: specNum,
+  title: specTitle,
+  specBranch,
+  slices: order.length,
+  dryRun,
+  repeat: existsSync(runLog),
+});
+
+const plan: SpecPlan = {
+  spec: specNum,
+  specBranch,
+  base,
+  order,
+  deadlocked,
+  dryRun,
+  runLog,
+  discord: discordLine,
+};
+
+// The preview — the blast radius, visible before it is incurred. Printed on every run;
+// under `--pause` the run does not begin until it is accepted.
+console.log(formatPreview(plan));
+// The preview is printed above either way — the unattended default (or `--yes` under
+// `--pause`) answers the prompt, it does not suppress the blast radius, and the notice
+// records what proceeded without asking, naming the flags that would have stopped it.
+const gate = previewGate({ pause, yes, dryRun });
+if (gate.notice) console.log(gate.notice);
+if (gate.prompt && !confirm(gate.prompt)) {
+  console.log("spec-loop: declined — nothing done.");
+  // The lock is held from above now, so a decline hands it back rather than leaving
+  // one the next terminal would have to force.
+  releaseLock(lock);
+  process.exit(0);
+}
+
 // The end-of-run accounting the summary reports.
 const built: number[] = [];
-let halted: { slice: number; reason: string } | null = null;
+// `refused` records that the halt was a guard or a sequence standing the run DOWN
+// deliberately, rather than something breaking — a refusal is not a failure
+// (CONTEXT.md). It is carried as a fact because the Discord surface colours a refusal
+// amber and a failure red (ADR-0012), and a colour that had to be re-derived by
+// matching the reason's English would flip the first time somebody reworded a message.
+let halted: { slice: number; reason: string; refused?: boolean } | null = null;
 let finalPrOpened = false;
 // Run-ceiling accounting (issue #61). `runStart` clocks the run's wall-clock from
 // here — after the preview is accepted and the lock is held, so human think-time at
@@ -438,7 +524,7 @@ function readSpecLabels(): string[] | null {
 // marker) or died, so it is reclaimed rather than refused.
 // The claim is VERIFIED, unlike every other label edit in the fleet: an unapplied
 // marker means CI races every merge this run makes, so it halts before the first one.
-function acquireMarker(): void {
+async function acquireMarker(): Promise<void> {
   if (dryRun) return;
   ensureLabel(LOCAL_RUN_LABEL, LOCAL_RUN_LABEL_DESCRIPTION);
   const before = readSpecLabels();
@@ -452,7 +538,7 @@ function acquireMarker(): void {
       slice: specNum,
       reason: `\`${LOCAL_RUN_LABEL}\` could not be applied to the spec issue`,
     };
-    finish(1);
+    await finish(1);
   }
   markerHeld = true;
   console.log(markerAcquired({ spec: specNum, reclaimed }));
@@ -483,7 +569,12 @@ function settleMarker(outcome: RunOutcome): void {
 // graceful stop, a checkpoint decline, a dry run) it is RETAINED: it holds the
 // accumulated spec branch and is exactly what the developer inspects, and resume
 // reuses it as-is.
-function finish(code: number, opts: { removeWorktree?: boolean } = {}): never {
+// ASYNC because of the Discord run surface (ADR-0012): this is the single exit, and
+// it ends in `process.exit`, which kills an un-awaited request before it leaves the
+// process — dropping precisely the halt notification the surface exists to deliver.
+// Every caller therefore `await`s it. That await never resolves, because the exit
+// happens inside; the keyword is there to hold the process open, not to resume.
+async function finish(code: number, opts: { removeWorktree?: boolean } = {}): Promise<never> {
   // The lock goes back on every exit; the marker does NOT. Only a completed run
   // hands the spec back to CI, and it does so after the final PR is open, so an
   // advance fired by the last merge that lands here late finds that PR already open
@@ -501,9 +592,17 @@ function finish(code: number, opts: { removeWorktree?: boolean } = {}): never {
   if (halted) {
     record(halted.slice, "halt", halted.reason);
     herdr.notifyHalt({ spec: specNum, reason: halted.reason });
+    await discord.notifyHalt({
+      spec: specNum,
+      reason: halted.reason,
+      refused: halted.refused === true,
+      runLog,
+      issueUrl,
+    });
   } else if (finalPrOpened) {
     record(null, "complete", "final PR opened");
     herdr.notifyComplete({ spec: specNum });
+    await discord.notifyComplete({ spec: specNum, merged: built.length, issueUrl });
   }
   console.log("");
   console.log(
@@ -560,7 +659,7 @@ if (existsSync(tree)) {
   if (added.status !== 0) {
     console.error(`spec-loop: could not create the worktree (git exited ${added.status}).`);
     halted = { slice: specNum, reason: "the worktree could not be created" };
-    finish(1);
+    await finish(1);
   }
   record(null, "worktree", `created ${tree}`);
 }
@@ -571,14 +670,14 @@ if (config.bootstrap) {
   if (boot.status !== 0 || interrupted || boot.signal) {
     console.error("spec-loop: bootstrap did not succeed — not starting the loop.");
     halted = { slice: specNum, reason: "bootstrap did not succeed" };
-    finish(interrupted || boot.signal ? 130 : boot.status || 1);
+    await finish(interrupted || boot.signal ? 130 : boot.status || 1);
   }
 }
 
 // Claim the local-run marker before ANYTHING reaches the remote — well before the
 // first merge, which is the event that would otherwise start CI on the next slice.
 // A dry run skips this: it never merges, so it never fires advance.
-acquireMarker();
+await acquireMarker();
 
 // Cut and push the spec branch off the base if it does not exist yet — the same cut
 // the unattended kickoff does, so each slice's fetch-spec resolves it as the base to
@@ -632,7 +731,7 @@ function readSlicePr(sliceBranch: string): PrMergeView | null {
 // the shared tail of building a slice, resuming its gate, and picking up an
 // already-merged one. The PR's own merged state into the spec branch is the signal
 // (closing is failure-tolerant); a queued, blocked, or stale merge halts the run.
-function landSlice(slice: number, sliceBranch: string): void {
+async function landSlice(slice: number, sliceBranch: string): Promise<void> {
   const pr = readSlicePr(sliceBranch);
   if (!mergeConfirmed(pr, specBranch)) {
     const reason = mergeHaltReason(pr, slice, specBranch);
@@ -640,13 +739,17 @@ function landSlice(slice: number, sliceBranch: string): void {
     console.error(reason);
     halted = { slice, reason: "the merge was not confirmed on GitHub" };
     console.log(formatSliceFooter({ slice, outcome: "built" }));
-    finish(1);
+    await finish(1);
   }
   // The merge into a non-default base did not auto-close the tracer-bullet.
   closeTracerBullet(slice, specBranch);
   built.push(slice);
   console.log(formatSliceFooter({ slice, outcome: "merged" }));
   record(slice, "merge", `merged into ${specBranch}`);
+  // `slice merged` (ADR-0012), emitted where the run log records it. Awaited rather
+  // than fired off: it costs about 0.4s against a slice measured in minutes, and it
+  // keeps the thread in the order the run actually happened.
+  await discord.noteSliceMerged({ slice, position: built.length, total: order.length });
   lastMerged = slice;
   phase = "advance";
 }
@@ -655,7 +758,7 @@ async function drive(): Promise<never> {
   for (;;) {
     if (interrupted) {
       halted = { slice: lastMerged ?? specNum, reason: "interrupted (Ctrl-C)" };
-      finish(130);
+      await finish(130);
     }
 
     const issuesN = listIssues();
@@ -673,7 +776,7 @@ async function drive(): Promise<never> {
       if (action.type === "await-checks") {
         if (dryRun) {
           console.log(dryRunSuppressed(`gate the ${specBranch} tip CI before the next slice`));
-          finish(0);
+          await finish(0);
         }
         const passed = await awaitChecks(() => fetchSpecChecks(specBranch));
         action = specStep({ phase: "advance", bullets: bulletsN, closed: closedN, checksPassed: passed });
@@ -685,12 +788,12 @@ async function drive(): Promise<never> {
       comment("issue", specArg, reason);
       console.error(reason);
       halted = { slice: action.blocked ?? (lastMerged ?? specNum), reason: "the spec-branch tip CI did not pass" };
-      finish(1);
+      await finish(1);
     }
     if (action.type === "open-final-pr") {
       if (dryRun) {
         console.log(dryRunSuppressed(`open the final ${specBranch} → ${base || "default"} PR`));
-        finish(0);
+        await finish(0);
       }
       openFinalPr(specNum, specBranch);
       finalPrOpened = true;
@@ -703,7 +806,7 @@ async function drive(): Promise<never> {
       // The run is complete and the spec branch lives on the remote, so the worktree
       // is removed here (issue #60) — the only exit that removes it; every halt
       // retains it for inspection and resume.
-      finish(0, { removeWorktree: true });
+      await finish(0, { removeWorktree: true });
     }
     if (action.type === "done") {
       // No ready slice and not complete — the remainder deadlocked on a cycle. Not a
@@ -716,7 +819,7 @@ async function drive(): Promise<never> {
         slice: lastMerged ?? specNum,
         reason: "no ready slice — the remainder is deadlocked on a dependency cycle",
       };
-      finish(0);
+      await finish(0);
     }
 
     if (action.type !== "run-slice") {
@@ -724,7 +827,13 @@ async function drive(): Promise<never> {
       // kickoff/advance phases. Anything else is a contract break — halt loudly.
       console.error(`spec-loop: unexpected action "${action.type}" — halting.`);
       halted = { slice: lastMerged ?? specNum, reason: `unexpected action "${action.type}"` };
-      finish(1);
+      await finish(1);
+      // Unreachable — `finish` ends in `process.exit`. It is spelled out because
+      // TypeScript's control-flow analysis does not carry a `never` through an
+      // `await`, and the narrowing of `action` to `run-slice` below depends on this
+      // branch not completing. `finish` became async so the Discord run surface's
+      // terminal send can leave the process before it exits (ADR-0012).
+      throw new Error("unreachable");
     }
 
     // action.type === "run-slice": build (or resume) this slice.
@@ -751,7 +860,7 @@ async function drive(): Promise<never> {
     if (disposition === "already-merged" && existing) {
       console.log(formatAlreadyMerged({ slice, pr: existing.number, specBranch }));
       record(slice, "resume", "already merged — advancing without rebuilding");
-      landSlice(slice, sliceBranch);
+      await landSlice(slice, sliceBranch);
       continue;
     }
 
@@ -776,15 +885,15 @@ async function drive(): Promise<never> {
       if (ceilingReason) {
         console.log(ceilingReason);
         halted = { slice: lastMerged ?? slice, reason: ceilingReason };
-        finish(0);
+        await finish(0);
       }
       if (gracefulStop) {
         halted = { slice: lastMerged ?? slice, reason: gracefulStopHaltReason(lastMerged) };
-        finish(0);
+        await finish(0);
       }
       if (!runThrough && !confirm(checkpointPrompt(slice))) {
         halted = { slice, reason: "paused at a checkpoint — re-run to resume" };
-        finish(0);
+        await finish(0);
       }
     }
 
@@ -803,10 +912,10 @@ async function drive(): Promise<never> {
         console.error(reason);
         halted = { slice, reason: "the resumed slice PR CI did not pass" };
         console.log(formatSliceFooter({ slice, outcome: "built" }));
-        finish(1);
+        await finish(1);
       }
       mergeSlicePr(existing.number);
-      landSlice(slice, sliceBranch);
+      await landSlice(slice, sliceBranch);
       // A resumed gate merge is genuine work this run — it counts against the ceiling
       // (issue #61), unlike an already-merged catch-up above.
       slicesAttempted++;
@@ -871,6 +980,10 @@ async function drive(): Promise<never> {
     // this one — would otherwise leave the loop reading the PREVIOUS slice's outcome.
     rmSync(sliceStateFile, { force: true });
     record(slice, "build", "running the implement sequence");
+    // `slice building` (ADR-0012), emitted where the run log records it — the last
+    // thing that happens before a step measured in minutes, so a watcher on a phone
+    // knows what the run is inside of.
+    await discord.noteSliceBuilding({ slice, position, total: order.length });
     const build = run("yarn", ["sandcastle:implement-sequence"], tree, buildEnv);
 
     // Rely on the existing zero-commit exit-code check (implement.mts exits non-zero
@@ -883,7 +996,7 @@ async function drive(): Promise<never> {
         reason: `the implement run did not succeed (exit ${build.status ?? "signal"})`,
       };
       console.log(formatSliceFooter({ slice, outcome: "built" }));
-      finish(interrupted || build.signal ? 130 : build.status || 1);
+      await finish(interrupted || build.signal ? 130 : build.status || 1);
     }
 
     // A REFUSED sequence exited 0 having built nothing. Halt on the refusal itself,
@@ -892,10 +1005,14 @@ async function drive(): Promise<never> {
     if (sliceState.outcome === "refused") {
       const reason = sliceRefusedHaltReason({ slice, step: sliceState.step ?? "" });
       console.error(reason);
-      halted = { slice, reason: `the implement sequence refused at \`${sliceState.step ?? "?"}\`` };
+      halted = {
+        slice,
+        reason: `the implement sequence refused at \`${sliceState.step ?? "?"}\``,
+        refused: true,
+      };
       record(slice, "refused", `the sequence refused at ${sliceState.step ?? "?"}`);
       console.log(formatSliceFooter({ slice, outcome: "refused" }));
-      finish(1);
+      await finish(1);
     }
 
     if (dryRun) {
@@ -911,12 +1028,12 @@ async function drive(): Promise<never> {
       record(slice, "build", "built (dry run — merge suppressed)");
       built.push(slice);
       halted = { slice, reason: "dry run — stopped before the first real merge" };
-      finish(0);
+      await finish(0);
     }
 
     // Real run: the finalize opened the slice PR, gated its own CI, and merged it —
     // now CONFIRM that merge from GitHub, close the tracer-bullet, and advance.
-    landSlice(slice, sliceBranch);
+    await landSlice(slice, sliceBranch);
     // The slice was built and landed this run — it counts against the ceiling (issue
     // #61), evaluated at the next slice's checkpoint.
     slicesAttempted++;

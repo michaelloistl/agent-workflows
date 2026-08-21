@@ -554,13 +554,72 @@ worktree *root* (not inside the per-spec worktree, which is removed on completio
 so it survives both a halt and a completed run's cleanup. The log is **written, never
 consulted**: nothing reads it to decide what happens next, so resume still derives
 entirely from the tracker and the branches — it does not reintroduce local state.
-When the loop runs inside a **Herdr-managed pane** (detected by the `HERDR_PANE`
+When the loop runs inside a **Herdr-managed pane** (detected by the `HERDR_PANE_ID`
 environment variable Herdr sets), it also emits best-effort progress into the UI
 already on screen — it renames the pane to the slice being built and fires a
 notification on halt and on completion, via the `herdr` CLI. Outside a Herdr pane
 **nothing is emitted and no warning is printed**, and a failed rename, notification,
 or log write **never fails or delays the run** — the sequencer gains no required
 dependency and still runs unchanged in CI and a bare terminal.
+
+**Discord run surface (reach, for a run nobody is watching).** The run log and the
+Herdr notification both land on the machine the developer has walked away from, so a
+bare `implement-spec <n>` — which since [ADR-0011](docs/adr/0011-unattended-by-default-for-local-spec-runs.md)
+stops for nothing — can halt at 2am and say so to an empty room. Set
+**`DISCORD_WEBHOOK_URL`** in `.sandcastle/.env` (beside `CLAUDE_CODE_OAUTH_TOKEN`,
+gitignored, never in the committed `config.json` — it is a credential) and each local
+spec run opens **one forum thread** carrying five events: *run started*, *slice
+building*, *slice merged*, and then *halt* or *complete* as a coloured embed — **red**
+for a halt, **amber** where that halt's reason is a refusal, **green** for a
+completion. A halt sends its reason's **first line, truncated**, plus the run log's
+path and a link to the spec issue; the full text stays in the run log and the issue
+comment, because halt reasons are assembled from agent and CI output and Discord is a
+third party.
+
+Three things are worth knowing before you point it anywhere:
+
+- **The channel must be a forum channel** (or media channel) with `REQUIRE_TAG` off.
+  An incoming webhook can create a thread *only* there, and no API finds a thread by
+  name, so this is forced rather than preferred. Pointed at an ordinary text channel
+  the surface creates nothing and every preview reports `off`.
+- **The thread is created before the preview prints — and after the local lock is
+  taken — and the preview says so** —
+  `discord     : spec #94 thread created`, or `discord     : off (…)` when the create
+  failed. That line is loud on purpose: a forum channel accepts no message outside a
+  thread, so a failed create silences the whole run *including the halt notification*,
+  and the preview is the last moment anyone is looking. The lock comes first so that a
+  second terminal colliding on it leaves no orphan thread behind. A failed create never
+  halts the run. The create is the one send that may be tried twice — only when Discord
+  answers and refuses it — so kickoff can pause for a few seconds before the preview
+  appears. A create that simply goes unanswered is *not* retried: it may have created
+  the thread anyway, and a second attempt would leave a duplicate.
+- **Unconfigured it is completely silent** — no line in the preview, no warning,
+  nothing emitted. The only other thing that breaks silence is an HTTP `404`, meaning
+  the webhook was deleted or rotated: the surface prints one line to stderr and stands
+  down for the rest of the process, because a dead webhook otherwise fails silently
+  forever.
+
+Scope is deliberately **local spec runs only** — not CI, which already has reach
+through `agent:blocked` and the run URL, and not attended single-verb runs, which are
+minutes long and typed by hand. A **second local run of a spec** opens a second thread
+(`spec #94 (re-run)` — a resume after a halt, but equally a real run after a dry run):
+the thread id lives in memory for the length of the process and nothing persists it,
+so resume still derives entirely from the tracker and the branches. Every send is
+bounded by a 2s timeout and never retried, the initial thread create excepted, and no
+emit can fail or delay a run.
+See [ADR-0012](docs/adr/0012-a-discord-run-surface-for-unsupervised-local-runs.md).
+
+Reading `.sandcastle/.env` is itself new. Sandcastle merges that file into each
+**agent's** environment inside `run()` and never touches the calling process, so the
+sequencer — which is what emits every event — could not otherwise see the webhook. The
+sequencer now loads the file at startup using sandcastle's own parser and its own
+precedence: **the file wins over the shell** (an empty value in the file falls
+through). It takes **only `DISCORD_WEBHOOK_URL`** from the file — everything the agent
+needs, sandcastle still merges into the agent's own environment, and the narrow scope
+keeps a `GH_TOKEN` in that file from quietly beating one exported for a single run. Note this is the *opposite* of `.sandcastle/agent-workflows/config.json`,
+where an environment variable is the per-run override — `config.json` is committed repo
+policy a run may override, while `.env` is the machine's credential store the agent
+already treats as authoritative.
 
 **3. Create the trigger labels** listed in [Labels](#labels) for each verb you
 enable (the state labels are created on first use by the hooks).
@@ -901,7 +960,8 @@ Pass with `secrets: inherit`.
   sequential; 0004 no per-slice review; 0005 one sequencer, two entry points;
   0006 attended spec runs; 0007 the status view; 0008 `init` and `sync`; 0009 the
   local-run marker outlives a halt; 0010 an attended PR run's tooling is the
-  invoking checkout; 0011 unattended by default for local spec runs).
+  invoking checkout; 0011 unattended by default for local spec runs; 0012 a
+  Discord run surface for unsupervised local runs).
 
 ## Local checks
 
