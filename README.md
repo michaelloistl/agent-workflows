@@ -421,40 +421,52 @@ the spec branch and bootstrapped once — each slice branching inside it from th
 accumulated spec-branch HEAD (the stacked topology, setup paid once).
 
 ```sh
-agent-workflows implement-spec 48              # DRY RUN (the default): preview + one pass
-agent-workflows implement-spec 48 --execute    # real merges into the spec branch
-agent-workflows implement-spec 48 --execute --force      # also overrule the local lock
-agent-workflows implement-spec 48 --execute --no-pause   # run straight through, no checkpoints
-agent-workflows implement-spec 48 --execute --interactive # steer a live session per slice
-agent-workflows implement-spec 48 --execute --yes --no-pause # fully non-interactive
+agent-workflows implement-spec 48              # the whole spec, unattended: real merges, no stops
+agent-workflows implement-spec 48 --dry-run    # look without merging: preview + one suppressed pass
+agent-workflows implement-spec 48 --pause      # put both human gates back
+agent-workflows implement-spec 48 --force      # overrule the local lock and slice guards too
+agent-workflows implement-spec 48 --interactive # steer a live session per slice (implies --pause)
+agent-workflows implement-spec 48 --pause --yes # gated between slices, but startable by a script
 agent-workflows implement-spec 48 --stop       # from a SECOND terminal: graceful stop
 ```
 
+**The default is unattended** (ADR-0011): a bare `implement-spec 48` builds every
+slice, merges each one for real, and stops for nothing — which is what a 26-slice spec
+needs. Two flags take that back, one per axis. `--dry-run` governs what is
+**irreversible**: it runs the loop with every merge, issue close, and the final PR
+suppressed, reports what a real run would do, and halts where it would first merge.
+`--pause` governs what is **asked**: it restores both the one-time preview
+confirmation and the between-slices checkpoints. `--force` is in neither — it
+overrules a *refusal* rather than a prompt, so it is always explicit. Note what the
+bare command now does on the way in: it claims the `agent:local` marker before its
+first merge, and a halt anywhere leaves that marker on the spec issue (see below), so
+a mistyped spec number costs a spec branch, some slice PRs, and a label to remove.
+
 Before the first agent runs it prints a **preview** — the resolved slice list in
-topological order, the spec branch, the base branch, and whether this is a dry run
-— and does not begin until you accept it. A **dry run** (the safer default) runs the
-loop with every irreversible action suppressed, reports what a real run would do,
-and halts where it would first merge — leaving no merge, no closed issue, and no
-final PR behind; watch one pass before trusting it with real merges. An `--execute`
-run merges each slice into the spec branch exactly as CI does, then **reads the PR's
-merged state back from GitHub** before advancing — a queued, blocked, or stale merge
-halts the run rather than being mistaken for a landed slice. Both CI gates are kept
-(a slice cannot merge on red; the next slice cannot start on a red spec-branch tip),
-a failed slice halts the whole run with no skip and no retry, the spec issue's
-progress comment is posted each iteration, and the final spec→base PR opens — labelled
-`agent:review-pr` for an advisory review — when the last slice lands. A spec run this
-way produces the same git history and tracker state as the same spec run in CI,
-because both paths open (and label) the final PR through the same shared routine.
+topological order, the spec branch, the base branch, and the run log's path — on every
+run, including the default one it does not stop to ask about; the line after it names
+the default that accepted the run and both ways back, so a run nobody was asked about
+is never a run nobody was told about. A real run merges each slice into the spec branch
+exactly as CI does, then **reads the PR's merged state back from GitHub** before
+advancing — a queued, blocked, or stale merge halts the run rather than being mistaken
+for a landed slice. Both CI gates are kept (a slice cannot merge on red; the next
+slice cannot start on a red spec-branch tip), a failed slice halts the whole run with
+no skip and no retry, the spec issue's progress comment is posted each iteration, and
+the final spec→base PR opens — labelled `agent:review-pr` for an advisory review —
+when the last slice lands. A spec run this way produces the same git history and
+tracker state as the same spec run in CI, because both paths open (and label) the
+final PR through the same shared routine.
 
 **CI stands down while a local run owns the spec.** Merging a slice PR into the spec
 branch is exactly the event the unattended **advance** workflow triggers on — and
 advance responds by labelling the next tracer-bullet `agent:implement`, which would
-start CI building the very slice the loop is about to build itself. So an `--execute`
-run claims `agent:local` on the spec issue before its first merge, and the advance
-guard **refuses** (stands down; not a failure, nothing is dispatched) while that
-marker is present. The marker is released when the run **completes** — after the final
-PR is open. Every **halt** keeps it: a failed slice, a slice refusal, an unconfirmed
-merge, a declined checkpoint, a graceful stop, a reached ceiling, a Ctrl-C. That is
+start CI building the very slice the loop is about to build itself. So a real (non
+`--dry-run`) run claims `agent:local` on the spec issue before its first merge, and
+the advance guard **refuses** (stands down; not a failure, nothing is dispatched)
+while that marker is present. The marker is released when the run **completes** —
+after the final PR is open. Every **halt** keeps it: a failed slice, a slice refusal,
+an unconfirmed merge, a declined checkpoint, a graceful stop, a reached ceiling, a
+Ctrl-C. That is
 deliberate — a halt means the run is waiting for you, and the merge that would make CI
 build the slice you just stopped may still be in flight (ADR-0009). The loop says so on
 its way out, and names what it takes to hand the spec back to CI: **remove
@@ -468,23 +480,35 @@ when a run dies hard and leaves one behind (holding the local lock proves no liv
 run owns it). A **dry run** never merges, so it never fires advance and never takes the
 marker.
 
-**Checkpoints, stopping, and resume (a long run made controllable).** The loop
-**pauses at a checkpoint between slices by default** — the moment to inspect the
-accumulated spec branch before the next slice stacks on it — and continues on
-confirmation. `--no-pause` runs the whole spec straight through for a well-understood
-spec; `--interactive` instead hands *each* slice's build to a live agent session, and
-because that is per-slice it is rejected together with `--no-pause` (one stops at
-every slice, the other never stops).
+**Checkpoints, stopping, and resume (a long run made controllable).** `--pause` stops
+the loop at a checkpoint between slices — the moment to inspect the accumulated spec
+branch before the next slice stacks on it — and continues on confirmation. It restores
+the preview's confirmation too: they are one thing, *stop and ask*, and one flag covers
+both. `--interactive` instead hands *each* slice's build to a live agent session; that
+is per-slice attention by definition, so it **implies** `--pause`. Only the explicit
+pair `--interactive --no-pause` is refused (one stops at every slice, the other never
+stops).
 
-**Running without a human at the terminal.** Both the preview and the checkpoints are
-read from stdin, and a non-interactive stdin **declines** — the safe default, but it
-also means a launcher script, an unattended resume, or a command run from an agent
-prompt can never start a run. `--yes` pre-accepts the *preview*; `--no-pause` covers
-the *checkpoints*, so `--execute --yes --no-pause` is the fully non-interactive
-combination. `--yes` does not suppress the preview: the whole blast radius is still
-printed, followed by a line naming the flag that accepted it, so a run started this
-way says so in its own log. It also does not weaken any gate — both CI gates, the
-merge confirmation, the local lock, and the `agent:local` marker behave identically.
+**Putting a human back in the loop.** Both gates are read from stdin, and a
+non-interactive stdin **declines** — so under `--pause`, a launcher script, an
+unattended resume, or a command run from an agent prompt cannot start a run at all
+(unless `--yes` answers the start gate for it, below). Without it, nothing is read
+and the run proceeds. Proceeding is never *silent*: the whole blast radius is printed
+either way, followed by a line naming the default that accepted it and both ways back,
+so a run says in its own log that nobody was asked. It weakens no gate on the work —
+both CI gates, the merge confirmation, the local lock, and the `agent:local` marker
+behave identically.
+
+**`--yes` answers the start gate only**, which is the one combination `--pause` cannot
+express: `--pause --yes` starts without asking and still stops between every slice. It
+is what makes an `--interactive` run launchable from a script at all, since
+`--interactive` implies `--pause`. Under the default it has no gate to answer and
+changes nothing. `--execute` and `--no-pause` are the older spelling of the default
+itself and are accepted as silent no-ops, so existing scripts and habits keep working —
+though a no-op never overrules the flag that takes the default back, so `--execute
+--dry-run` is a dry run and `--no-pause --pause` pauses. Anything **not** on this list
+is refused with the flag list and a non-zero exit rather than dropped: a mistyped
+`--dryrun` must not quietly leave you with the real-merge run you were suppressing.
 
 There are **two ways to stop**, and they are different:
 
@@ -503,8 +527,9 @@ win per run). The ceiling is evaluated at each checkpoint, so a reached ceiling 
 **cleanly between slices, never mid-slice** — the same clean stop as a graceful stop,
 reported distinctly from a failure, with what the run consumed against the ceiling
 printed in the exit summary. A ceiling-halted spec **resumes** on re-run just like any
-other clean halt. Absent configuration there is no ceiling — today's unbounded
-behaviour.
+other clean halt. Absent configuration there is no ceiling, and that stays true under
+the unattended default — a 26-slice spec is exactly the run that must not stop halfway
+for a bound nobody chose (ADR-0011). Set one if you want a walk-away budget.
 
 **Resume derives entirely from the tracker and the branches — no local file is
 consulted.** Re-running the same command picks up where the run stopped: closed
@@ -523,7 +548,8 @@ surfaces make a run readable while it happens and after it ends — neither is a
 dependency and both are strictly best-effort. An **append-only run log** at
 `<worktreeRoot>/spec-<n>-run.log` records every transition the loop makes — slice,
 action, outcome, timestamp, tab-separated — so a spec that halts at 2am leaves
-something to read in the morning; the summary prints its path. It lives under the
+something to read in the morning; both the preview and the summary print its path, so
+you know where to look before you walk away as well as after. It lives under the
 worktree *root* (not inside the per-spec worktree, which is removed on completion),
 so it survives both a halt and a completed run's cleanup. The log is **written, never
 consulted**: nothing reads it to decide what happens next, so resume still derives
@@ -875,7 +901,7 @@ Pass with `secrets: inherit`.
   sequential; 0004 no per-slice review; 0005 one sequencer, two entry points;
   0006 attended spec runs; 0007 the status view; 0008 `init` and `sync`; 0009 the
   local-run marker outlives a halt; 0010 an attended PR run's tooling is the
-  invoking checkout).
+  invoking checkout; 0011 unattended by default for local spec runs).
 
 ## Local checks
 
